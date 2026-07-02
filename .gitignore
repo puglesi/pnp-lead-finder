@@ -1,0 +1,23 @@
+# Sistema / editor
+.DS_Store
+Thumbs.db
+.cursor/
+terminals/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Segredos — nunca commitar
+.env
+.env.local
+**/.env.local
+
+# Build e dependências (pasta web)
+web/node_modules/
+web/.next/
+web/out/
+web/.data/
+web/.logs/
+web/.vercel/

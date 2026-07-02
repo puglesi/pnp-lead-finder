@@ -1,0 +1,10 @@
+streamlit
+pandas
+requests
+beautifulsoup4
+playwright
+undetected-chromedriver
+googlemaps
+python-dotenv
+openpyxl
+validate-email

@@ -1,0 +1,236 @@
+@import "tailwindcss";
+
+:root {
+  --background: 222 47% 6%;
+  --foreground: 210 40% 98%;
+  --card: 222 47% 9%;
+  --card-foreground: 210 40% 98%;
+  --popover: 222 47% 9%;
+  --popover-foreground: 210 40% 98%;
+  --primary: 217 91% 60%;
+  --primary-foreground: 222 47% 6%;
+  --secondary: 217 33% 17%;
+  --secondary-foreground: 210 40% 98%;
+  --muted: 217 33% 14%;
+  --muted-foreground: 215 20% 55%;
+  --accent: 217 33% 17%;
+  --accent-foreground: 210 40% 98%;
+  --destructive: 0 84% 60%;
+  --border: 217 33% 17%;
+  --input: 217 33% 17%;
+  --ring: 217 91% 60%;
+  --radius: 0.625rem;
+}
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+* {
+  border-color: hsl(var(--border));
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -20%, hsl(217 91% 60% / 0.12), transparent),
+    radial-gradient(ellipse 60% 40% at 100% 100%, hsl(160 84% 39% / 0.08), transparent);
+  pointer-events: none;
+  z-index: -1;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: hsl(var(--muted));
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.5);
+}
+
+/* Email preview & editor canvas — real inbox look */
+.email-inbox-tray {
+  background: #f3f4f6;
+  border-radius: 12px;
+  padding: 1.25rem 1rem;
+}
+
+.email-frame {
+  margin-left: auto;
+  margin-right: auto;
+  width: 100%;
+  max-width: 680px;
+  overflow: hidden;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  box-shadow:
+    0 4px 6px -1px rgb(0 0 0 / 0.07),
+    0 10px 24px -4px rgb(0 0 0 / 0.08);
+}
+
+.email-frame--mobile {
+  max-width: 320px;
+}
+
+.email-meta-header {
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+  color: #374151;
+}
+
+.email-canvas {
+  background: #ffffff;
+  color: #1f2937;
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+  letter-spacing: 0.01em;
+}
+
+.email-canvas p {
+  margin-bottom: 1rem;
+}
+
+.email-canvas p:last-child {
+  margin-bottom: 0;
+}
+
+.email-canvas a {
+  color: #2563eb;
+  text-decoration: underline;
+}
+
+.email-canvas ul,
+.email-canvas ol {
+  margin: 0.75rem 0;
+  padding-left: 1.5rem;
+}
+
+.email-canvas li {
+  margin-bottom: 0.35rem;
+}
+
+.email-canvas strong,
+.email-canvas b {
+  font-weight: 600;
+  color: #111827;
+}
+
+.email-canvas blockquote {
+  margin: 0.75rem 0;
+  padding-left: 12px;
+  border-left: 3px solid #e5e7eb;
+  color: #4b5563;
+}
+
+.email-editor-canvas {
+  min-height: 480px;
+}
+
+.email-editor-canvas strong,
+.email-editor-canvas b {
+  font-weight: 600;
+}
+
+.email-editor-canvas em,
+.email-editor-canvas i {
+  font-style: italic;
+}
+
+.email-editor-canvas u {
+  text-decoration: underline;
+}
+
+.email-editor-canvas span[style*="font-size"] {
+  line-height: 1.5;
+}
+
+.email-editor-canvas span[style*="font-family"] {
+  letter-spacing: normal;
+}
+
+.email-canvas [data-email-signature="true"] table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 560px;
+}
+
+.email-canvas [data-email-signature="true"] a {
+  color: #1e3a5f;
+  text-decoration: none;
+}
+
+.email-canvas [data-email-signature="true"] a:hover {
+  text-decoration: underline;
+}
+
+.email-signature-preview {
+  max-width: 560px;
+}
+
+.email-var-chip {
+  display: inline-block;
+  border-radius: 4px;
+  border: 1px solid #bfdbfe;
+  background: #dbeafe;
+  padding: 1px 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  color: #1d4ed8;
+}
+
+.email-editor-canvas.empty::before {
+  color: #9ca3af;
+}
