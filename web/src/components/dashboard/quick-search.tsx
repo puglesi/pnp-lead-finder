@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -59,7 +59,30 @@ interface QuickSearchProps {
   defaultLocation?: string;
 }
 
-export function QuickSearch({ defaultLocation = "London" }: QuickSearchProps) {
+const subscribeToHydration = () => () => {};
+const getClientHydrationSnapshot = () => true;
+const getServerHydrationSnapshot = () => false;
+
+export function QuickSearch(props: QuickSearchProps) {
+  const hydrated = useSyncExternalStore(
+    subscribeToHydration,
+    getClientHydrationSnapshot,
+    getServerHydrationSnapshot
+  );
+
+  return (
+    <QuickSearchContent
+      key={hydrated ? "hydrated" : "server"}
+      {...props}
+      hydrated={hydrated}
+    />
+  );
+}
+
+function QuickSearchContent({
+  defaultLocation = "London",
+  hydrated,
+}: QuickSearchProps & { hydrated: boolean }) {
   const router = useRouter();
   const {
     performBulkSearch,
@@ -70,19 +93,12 @@ export function QuickSearch({ defaultLocation = "London" }: QuickSearchProps) {
   const settings = useSettingsStore();
   const remaining = useUsageStore((s) => s.getRemainingSerpApi());
   const creditExhausted = useUsageStore((s) => s.creditExhausted);
-  const [sectors, setSectors] = useState("");
-  const [location, setLocation] = useState(defaultLocation);
-  const [hydrated, setHydrated] = useState(false);
-
-  useEffect(() => {
-    setHydrated(true);
-  }, []);
-
-  useEffect(() => {
-    if (!hydrated) return;
-    setSectors(lastBulkSearchSectors);
-    setLocation(lastBulkSearchLocation || defaultLocation);
-  }, [hydrated, lastBulkSearchSectors, lastBulkSearchLocation, defaultLocation]);
+  const [sectors, setSectors] = useState(
+    hydrated ? lastBulkSearchSectors : ""
+  );
+  const [location, setLocation] = useState(
+    hydrated ? lastBulkSearchLocation || defaultLocation : defaultLocation
+  );
 
   const sectorList = parseSectors(sectors);
   const effectiveWorkers = settings.getEffectiveWorkers();

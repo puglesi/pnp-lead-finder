@@ -69,12 +69,12 @@ export function BulkSearchProgress() {
     generateMoreLeads,
   } = useLeadStore();
   const settings = useSettingsStore();
-  const [, setTick] = useState(0);
+  const [currentTime, setCurrentTime] = useState<number | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
 
   useEffect(() => {
     if (!isSearching) return;
-    const id = setInterval(() => setTick((t) => t + 1), 500);
+    const id = setInterval(() => setCurrentTime(Date.now()), 500);
     return () => clearInterval(id);
   }, [isSearching]);
 
@@ -92,8 +92,8 @@ export function BulkSearchProgress() {
       : 0;
 
   const elapsed =
-    bulkProgress.startedAt && isSearching
-      ? Date.now() - bulkProgress.startedAt
+    bulkProgress.startedAt && isSearching && currentTime !== null
+      ? Math.max(0, currentTime - bulkProgress.startedAt)
       : bulkProgress.elapsedMs;
 
   const leadsPerSec =

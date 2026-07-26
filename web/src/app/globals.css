@@ -20,6 +20,12 @@
   --input: 217 33% 17%;
   --ring: 217 91% 60%;
   --radius: 0.625rem;
+  --font-geist-sans:
+    "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial,
+    system-ui, sans-serif;
+  --font-geist-mono:
+    "Cascadia Mono", "Segoe UI Mono", "Roboto Mono", Consolas, "Courier New",
+    monospace;
 }
 
 @theme inline {

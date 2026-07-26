@@ -27,7 +27,7 @@ function scoreFromScrape(
   hasPhone: boolean,
   enriched: boolean
 ): number {
-  let base =
+  const base =
     engine === "google-maps"
       ? 78
       : engine === "yell"

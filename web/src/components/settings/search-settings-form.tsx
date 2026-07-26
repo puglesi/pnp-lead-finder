@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import {
   AlertCircle,
@@ -43,11 +43,14 @@ export function SearchSettingsForm() {
   const { configured, envKeyConfigured, isSerpActive, remaining, refresh } =
     useSerpApiStatus();
   const [showSerpKey, setShowSerpKey] = useState(false);
-  const [localSerpKey, setLocalSerpKey] = useState(settings.serpApiKey);
-
-  useEffect(() => {
-    setLocalSerpKey(settings.serpApiKey);
-  }, [settings.serpApiKey]);
+  const [serpKeyDraft, setSerpKeyDraft] = useState(() => ({
+    source: settings.serpApiKey,
+    value: settings.serpApiKey,
+  }));
+  const localSerpKey =
+    serpKeyDraft.source === settings.serpApiKey
+      ? serpKeyDraft.value
+      : settings.serpApiKey;
 
   const handleSave = () => {
     settings.setSerpApiKey(localSerpKey.trim());
@@ -109,7 +112,12 @@ export function SearchSettingsForm() {
                 id="serp-key"
                 type={showSerpKey ? "text" : "password"}
                 value={localSerpKey}
-                onChange={(e) => setLocalSerpKey(e.target.value)}
+                onChange={(e) =>
+                  setSerpKeyDraft({
+                    source: settings.serpApiKey,
+                    value: e.target.value,
+                  })
+                }
                 placeholder="Cole sua chave SerpAPI aqui..."
                 className="bg-background/50 pr-10 font-mono text-sm"
               />

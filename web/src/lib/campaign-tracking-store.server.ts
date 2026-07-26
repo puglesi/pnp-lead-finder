@@ -20,7 +20,7 @@ function getGlobalStore(): TrackingStore {
   return g.__pnpTrackingStore;
 }
 
-function useUpstash(): boolean {
+function hasUpstashConfig(): boolean {
   return Boolean(
     process.env.KV_REST_API_URL?.trim() && process.env.KV_REST_API_TOKEN?.trim()
   );
@@ -93,7 +93,7 @@ async function saveToFile(store: TrackingStore): Promise<boolean> {
 async function ensureStore(): Promise<TrackingStore> {
   if (memoryCache) return memoryCache;
 
-  if (useUpstash()) {
+  if (hasUpstashConfig()) {
     const remote = await loadFromUpstash();
     memoryCache = remote ?? { events: [] };
     return memoryCache;
@@ -112,7 +112,7 @@ async function ensureStore(): Promise<TrackingStore> {
 async function persist(store: TrackingStore) {
   memoryCache = store;
 
-  if (useUpstash()) {
+  if (hasUpstashConfig()) {
     await saveToUpstash(store);
     return;
   }

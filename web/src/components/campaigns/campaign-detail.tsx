@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -47,6 +47,7 @@ import { useLeadStore } from "@/store/lead-store";
 import { useCampaignStore } from "@/store/campaign-store";
 import {
   DEFAULT_SIGNATURE,
+  type Campaign,
   type CampaignFollowUp,
   type CampaignSignature,
 } from "@/types/campaign";
@@ -63,7 +64,61 @@ const TABS: { id: CampaignTab; label: string; icon: typeof BarChart3 }[] = [
   { id: "settings", label: "Settings", icon: Settings2 },
 ];
 
+function resolveInitialTab(
+  campaign: Campaign | undefined,
+  initialTab?: CampaignTab
+): CampaignTab {
+  if (initialTab) return initialTab;
+  if (campaign?.status === "draft") return "compose";
+  return "overview";
+}
+
+function buildCampaignDraft(campaign: Campaign | undefined) {
+  return {
+    subject: campaign?.subject ?? "",
+    body: campaign?.body ?? "",
+    fromName: campaign?.fromName ?? "",
+    fromEmail: campaign?.fromEmail ?? "",
+    replyTo: campaign?.replyTo ?? "",
+    unsubscribeLink: campaign?.unsubscribeLink ?? "",
+    followUp: campaign
+      ? { ...campaign.followUp }
+      : ({
+          enabled: false,
+          delayDays: 3,
+          subject: "",
+          body: "",
+        } as CampaignFollowUp),
+    signature: campaign?.signature
+      ? { ...campaign.signature }
+      : ({ ...DEFAULT_SIGNATURE } as CampaignSignature),
+  };
+}
+
 export function CampaignDetail({
+  campaignId,
+  initialTab,
+}: {
+  campaignId: string;
+  initialTab?: CampaignTab;
+}) {
+  const campaignStateKey = useCampaignStore((state) => {
+    const campaign = state.campaigns.find((item) => item.id === campaignId);
+    return campaign ? `${campaign.id}:${campaign.status}` : null;
+  });
+
+  if (!campaignStateKey) return null;
+
+  return (
+    <CampaignDetailContent
+      key={`${campaignStateKey}:${initialTab ?? ""}`}
+      campaignId={campaignId}
+      initialTab={initialTab}
+    />
+  );
+}
+
+function CampaignDetailContent({
   campaignId,
   initialTab,
 }: {
@@ -87,7 +142,9 @@ export function CampaignDetail({
     syncCampaignTracking,
   } = useCampaignStore();
 
-  const [tab, setTab] = useState<CampaignTab>(initialTab ?? "overview");
+  const [tab, setTab] = useState<CampaignTab>(() =>
+    resolveInitialTab(campaign, initialTab)
+  );
   const [trackingEvents, setTrackingEvents] = useState<CampaignTrackingEvent[]>([]);
   const [trackingRefreshing, setTrackingRefreshing] = useState(false);
 
@@ -104,7 +161,7 @@ export function CampaignDetail({
     tab === "overview" || tab === "report" || tab === "leads";
   useCampaignTrackingSync(campaignId, trackingEnabled, trackingPollMs);
 
-  const refreshTracking = async () => {
+  const refreshTracking = useCallback(async () => {
     setTrackingRefreshing(true);
     try {
       const events = await syncCampaignTracking(campaignId);
@@ -112,19 +169,10 @@ export function CampaignDetail({
     } finally {
       setTrackingRefreshing(false);
     }
-  };
+  }, [campaignId, syncCampaignTracking]);
   const [showPreview, setShowPreview] = useState(false);
   const [previewLeadId, setPreviewLeadId] = useState<string | null>(null);
-  const [draft, setDraft] = useState({
-    subject: "",
-    body: "",
-    fromName: "",
-    fromEmail: "",
-    replyTo: "",
-    unsubscribeLink: "",
-    followUp: { enabled: false, delayDays: 3, subject: "", body: "" } as CampaignFollowUp,
-    signature: { ...DEFAULT_SIGNATURE } as CampaignSignature,
-  });
+  const [draft, setDraft] = useState(() => buildCampaignDraft(campaign));
 
   const leads = useMemo(
     () =>
@@ -138,34 +186,15 @@ export function CampaignDetail({
         : [],
     [campaign, savedLeads, currentLeads, importedLeads]
   );
+  const campaignSentCount = campaign?.sentCount;
 
   useEffect(() => {
-    if (!campaign) return;
-    refreshTracking();
-  }, [campaign?.id, campaign?.sentCount]);
-
-  useEffect(() => {
-    if (!campaign) return;
-    setDraft({
-      subject: campaign.subject,
-      body: campaign.body,
-      fromName: campaign.fromName,
-      fromEmail: campaign.fromEmail,
-      replyTo: campaign.replyTo,
-      unsubscribeLink: campaign.unsubscribeLink,
-      followUp: { ...campaign.followUp },
-      signature: campaign.signature
-        ? { ...campaign.signature }
-        : { ...DEFAULT_SIGNATURE },
-    });
-    if (initialTab) {
-      setTab(initialTab);
-    } else if (campaign.status === "draft") {
-      setTab("compose");
-    } else if (campaign.sentCount > 0) {
-      setTab("overview");
-    }
-  }, [campaign?.id, campaign?.status, initialTab]);
+    if (campaignSentCount === undefined) return;
+    const timeoutId = window.setTimeout(() => {
+      void refreshTracking();
+    }, 0);
+    return () => window.clearTimeout(timeoutId);
+  }, [campaignSentCount, refreshTracking]);
 
   if (!campaign) return null;
 

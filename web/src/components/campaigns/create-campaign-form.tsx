@@ -48,6 +48,19 @@ export function CreateCampaignForm({
 }: {
   reuseFromId?: string | null;
 }) {
+  return (
+    <CreateCampaignFormContent
+      key={reuseFromId ?? "new-campaign"}
+      reuseFromId={reuseFromId}
+    />
+  );
+}
+
+function CreateCampaignFormContent({
+  reuseFromId,
+}: {
+  reuseFromId: string | null;
+}) {
   const router = useRouter();
   const {
     savedLeads,
@@ -70,21 +83,43 @@ export function CreateCampaignForm({
   const getCampaign = useCampaignStore((s) => s.getCampaign);
   const emailProvider = useSettingsStore((s) => s.emailProvider);
   const setEmailProvider = useSettingsStore((s) => s.setEmailProvider);
+  const reuseSource = reuseFromId ? getCampaign(reuseFromId) : undefined;
   const reuseLoaded = useRef<string | null>(null);
-  const [reuseSourceName, setReuseSourceName] = useState<string | null>(null);
+  const reuseSourceName = reuseSource?.name ?? null;
 
-  const [name, setName] = useState("");
-  const [subject, setSubject] = useState<string>(DEFAULT_SUBJECT);
-  const [body, setBody] = useState<string>(DEFAULT_BODY_HTML);
-  const [sendConfig, setSendConfig] = useState({ ...DEFAULT_CAMPAIGN_SEND_CONFIG });
-  const [followUp, setFollowUp] = useState<CampaignFollowUp>({ ...DEFAULT_FOLLOW_UP });
+  const [name, setName] = useState(() =>
+    reuseSource ? buildReuseCampaignName(reuseSource.name) : ""
+  );
+  const [subject, setSubject] = useState<string>(
+    reuseSource?.subject ?? DEFAULT_SUBJECT
+  );
+  const [body, setBody] = useState<string>(
+    reuseSource?.body ?? DEFAULT_BODY_HTML
+  );
+  const [sendConfig, setSendConfig] = useState(() =>
+    reuseSource
+      ? {
+          fromName: reuseSource.fromName,
+          fromEmail: reuseSource.fromEmail,
+          replyTo: reuseSource.replyTo,
+          unsubscribeLink: reuseSource.unsubscribeLink,
+        }
+      : { ...DEFAULT_CAMPAIGN_SEND_CONFIG }
+  );
+  const [followUp, setFollowUp] = useState<CampaignFollowUp>(() =>
+    reuseSource ? { ...reuseSource.followUp } : { ...DEFAULT_FOLLOW_UP }
+  );
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [previewLeadId, setPreviewLeadId] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(false);
-  const [attachment, setAttachment] = useState<CampaignAttachment | null>(null);
-  const [signature, setSignature] = useState<CampaignSignature>({ ...DEFAULT_SIGNATURE });
+  const [attachment, setAttachment] = useState<CampaignAttachment | null>(() =>
+    reuseSource?.attachment ? { ...reuseSource.attachment } : null
+  );
+  const [signature, setSignature] = useState<CampaignSignature>(() =>
+    reuseSource ? { ...reuseSource.signature } : { ...DEFAULT_SIGNATURE }
+  );
   const [batchSend, setBatchSend] = useState<CampaignBatchSendConfig>({
-    ...DEFAULT_BATCH_SEND_CONFIG,
+    ...(reuseSource?.batchSend ?? DEFAULT_BATCH_SEND_CONFIG),
   });
 
   const allLeads = useMemo(() => {
@@ -112,34 +147,17 @@ export function CreateCampaignForm({
 
   useEffect(() => {
     if (!reuseFromId || reuseLoaded.current === reuseFromId) return;
-    const source = getCampaign(reuseFromId);
-    if (!source) {
+    if (!reuseSource) {
       toast.error("Campanha de origem não encontrada.");
       return;
     }
 
     reuseLoaded.current = reuseFromId;
-    setReuseSourceName(source.name);
-    setName(buildReuseCampaignName(source.name));
-    setSubject(source.subject);
-    setBody(source.body);
-    setSendConfig({
-      fromName: source.fromName,
-      fromEmail: source.fromEmail,
-      replyTo: source.replyTo,
-      unsubscribeLink: source.unsubscribeLink,
-    });
-    setFollowUp({ ...source.followUp });
-    setSignature({ ...source.signature });
-    setAttachment(source.attachment ? { ...source.attachment } : null);
-    setBatchSend({ ...source.batchSend });
-    setEmailProvider(source.emailProvider);
-    setSelectedIds([]);
-    setPreviewLeadId(null);
+    setEmailProvider(reuseSource.emailProvider);
     toast.success("Template carregado — selecione a nova lista de leads", {
       icon: "📋",
     });
-  }, [reuseFromId, getCampaign, setEmailProvider]);
+  }, [reuseFromId, reuseSource, setEmailProvider]);
 
   const applyPreset = (presetId: string) => {
     const preset = EMAIL_TEMPLATE_PRESETS.find((p) => p.id === presetId);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -184,8 +184,12 @@ function OneClickFlow({
   } = useCampaignStore();
 
   const [phase, setPhase] = useState<FlowPhase>("config");
-  const [sectors, setSectors] = useState("");
-  const [location, setLocation] = useState("London");
+  const [sectors, setSectors] = useState(
+    open ? lastBulkSearchSectors : ""
+  );
+  const [location, setLocation] = useState(
+    open ? lastBulkSearchLocation || "London" : "London"
+  );
   const [reviewBeforeSend, setReviewBeforeSend] = useState(false);
   const [campaignChoice, setCampaignChoice] = useState<CampaignChoice>(() =>
     campaigns.length > 0
@@ -202,19 +206,6 @@ function OneClickFlow({
   const [createdCampaignId, setCreatedCampaignId] = useState<string | null>(
     null
   );
-  const [hydrated, setHydrated] = useState(false);
-
-  useEffect(() => {
-    setHydrated(true);
-  }, []);
-
-  useEffect(() => {
-    if (!hydrated || !open) return;
-    setSectors(lastBulkSearchSectors);
-    setLocation(lastBulkSearchLocation || "London");
-  }, [hydrated, open, lastBulkSearchSectors, lastBulkSearchLocation]);
-
-
 
   const sectorList = parseSectors(sectors);
   const activeCampaign = createdCampaignId
@@ -776,7 +767,11 @@ export function OneClickOutreach() {
           </Button>
         </CardContent>
       </Card>
-      <OneClickFlow open={open} onOpenChange={setOpen} />
+      <OneClickFlow
+        key={open ? "open" : "closed"}
+        open={open}
+        onOpenChange={setOpen}
+      />
     </>
   );
 }
