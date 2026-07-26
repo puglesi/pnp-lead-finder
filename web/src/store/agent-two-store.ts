@@ -4,6 +4,8 @@ import type { Lead } from "@/types/lead";
 import type { EmailValidationResult } from "@/types/email-validation";
 import {
   INITIAL_AGENT_TWO_SNAPSHOT,
+  appendAgentTwoQueue,
+  appendAllAgentTwoQueue,
   buildAgentTwoQueue,
   claimNextAgentTwoItem,
   completeAgentTwoItem,
@@ -16,12 +18,19 @@ import {
   selectPersistedAgentTwoSnapshot,
   startAgentTwo,
   stopAgentTwo,
+  type AgentTwoQueueAppendResult,
   type AgentTwoQueueItem,
   type AgentTwoSnapshot,
+  type ConfirmAgentTwoLoad,
 } from "@/lib/agent-two-queue";
 
 interface AgentTwoStore extends AgentTwoSnapshot {
   loadQueue: (leads: Lead[], revalidate?: boolean) => AgentTwoQueueItem[];
+  appendSample: (leads: Lead[], limit: number) => AgentTwoQueueAppendResult;
+  appendAll: (
+    leads: Lead[],
+    confirmLoad: ConfirmAgentTwoLoad
+  ) => AgentTwoQueueAppendResult;
   start: () => boolean;
   pause: () => void;
   resume: (currentValidationIsActive?: boolean) => void;
@@ -51,6 +60,39 @@ export const useAgentTwoStore = create<AgentTwoStore>()(
           errorMessage: null,
         });
         return queue;
+      },
+
+      appendSample: (leads, limit) => {
+        let result: AgentTwoQueueAppendResult = {
+          snapshot: INITIAL_AGENT_TWO_SNAPSHOT,
+          addedItems: [],
+          eligibleCount: 0,
+          confirmed: true,
+        };
+        set((state) => {
+          result = appendAgentTwoQueue(state, leads, limit, nowIso());
+          return result.snapshot;
+        });
+        return result;
+      },
+
+      appendAll: (leads, confirmLoad) => {
+        let result: AgentTwoQueueAppendResult = {
+          snapshot: INITIAL_AGENT_TWO_SNAPSHOT,
+          addedItems: [],
+          eligibleCount: 0,
+          confirmed: false,
+        };
+        set((state) => {
+          result = appendAllAgentTwoQueue(
+            state,
+            leads,
+            nowIso(),
+            confirmLoad
+          );
+          return result.snapshot;
+        });
+        return result;
       },
 
       start: () => {

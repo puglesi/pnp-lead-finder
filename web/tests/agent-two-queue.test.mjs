@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   INITIAL_AGENT_TWO_SNAPSHOT,
+  appendAgentTwoQueue,
+  appendAllAgentTwoQueue,
   buildAgentTwoQueue,
   claimNextAgentTwoItem,
   completeAgentTwoItem,
   failAgentTwoItem,
   normalizeAgentTwoSnapshot,
+  parseAgentTwoLoadQuantity,
   pauseAgentTwo,
   resumeAgentTwo,
   startAgentTwo,
@@ -167,4 +170,123 @@ test("leads antigos sem campos de validação continuam compatíveis", () => {
   const queue = buildAgentTwoQueue([legacyLead], now);
   assert.equal(queue.length, 1);
   assert.equal(queue[0].status, "pending");
+});
+
+function numberedLeads(count) {
+  return Array.from({ length: count }, (_, index) =>
+    lead("lead-" + index, "person-" + index + "@example.test")
+  );
+}
+
+test("limite 10 carrega no máximo 10 itens", () => {
+  const result = appendAgentTwoQueue(
+    INITIAL_AGENT_TWO_SNAPSHOT,
+    numberedLeads(25),
+    10,
+    now
+  );
+  assert.equal(result.addedItems.length, 10);
+  assert.equal(result.snapshot.queue.length, 10);
+});
+
+test("limite maior que os elegíveis carrega somente os disponíveis", () => {
+  const result = appendAgentTwoQueue(
+    INITIAL_AGENT_TWO_SNAPSHOT,
+    numberedLeads(3),
+    100,
+    now
+  );
+  assert.equal(result.eligibleCount, 3);
+  assert.equal(result.addedItems.length, 3);
+});
+
+test("itens já presentes não são duplicados em cargas seguintes", () => {
+  const leads = numberedLeads(5);
+  const first = appendAgentTwoQueue(
+    INITIAL_AGENT_TWO_SNAPSHOT,
+    leads,
+    2,
+    now
+  );
+  const second = appendAgentTwoQueue(first.snapshot, leads, 10, later);
+  assert.equal(second.addedItems.length, 3);
+  assert.equal(second.snapshot.queue.length, 5);
+  assert.equal(new Set(second.snapshot.queue.map((item) => item.leadId)).size, 5);
+});
+
+test("carregar amostra não inicia o agente", () => {
+  const result = appendAgentTwoQueue(
+    INITIAL_AGENT_TWO_SNAPSHOT,
+    numberedLeads(10),
+    10,
+    now
+  );
+  assert.equal(result.snapshot.status, "idle");
+  assert.equal(result.snapshot.currentItemId, null);
+});
+
+test("carregar todos exige confirmação com a quantidade elegível", () => {
+  let confirmationCount = 0;
+  let informedQuantity = 0;
+  appendAllAgentTwoQueue(
+    INITIAL_AGENT_TWO_SNAPSHOT,
+    numberedLeads(12),
+    now,
+    (quantity) => {
+      confirmationCount += 1;
+      informedQuantity = quantity;
+      return false;
+    }
+  );
+  assert.equal(confirmationCount, 1);
+  assert.equal(informedQuantity, 12);
+});
+
+test("cancelar a confirmação não altera a fila", () => {
+  const initial = appendAgentTwoQueue(
+    INITIAL_AGENT_TWO_SNAPSHOT,
+    numberedLeads(4),
+    1,
+    now
+  ).snapshot;
+  const result = appendAllAgentTwoQueue(
+    initial,
+    numberedLeads(4),
+    later,
+    () => false
+  );
+  assert.equal(result.confirmed, false);
+  assert.equal(result.snapshot, initial);
+  assert.equal(result.addedItems.length, 0);
+  assert.equal(result.snapshot.queue.length, 1);
+});
+
+test("confirmar carrega todos os elegíveis ausentes", () => {
+  const leads = numberedLeads(7);
+  const initial = appendAgentTwoQueue(
+    INITIAL_AGENT_TWO_SNAPSHOT,
+    leads,
+    2,
+    now
+  ).snapshot;
+  const result = appendAllAgentTwoQueue(initial, leads, later, () => true);
+  assert.equal(result.confirmed, true);
+  assert.equal(result.eligibleCount, 5);
+  assert.equal(result.addedItems.length, 5);
+  assert.equal(result.snapshot.queue.length, 7);
+});
+
+test("quantidade zero, negativa, decimal ou inválida é rejeitada", () => {
+  for (const value of ["0", "-1", "1.5", "abc", ""]) {
+    const result = parseAgentTwoLoadQuantity(value, 10);
+    assert.equal(result.quantity, null, value);
+    assert.ok(result.error, value);
+  }
+  const aboveMaximum = parseAgentTwoLoadQuantity("11", 10);
+  assert.equal(aboveMaximum.quantity, null);
+  assert.ok(aboveMaximum.error);
+  assert.deepEqual(parseAgentTwoLoadQuantity("10", 10), {
+    quantity: 10,
+    error: null,
+  });
 });

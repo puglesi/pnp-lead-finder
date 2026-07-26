@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 import {
   AlertCircle,
   ListRestart,
@@ -14,6 +14,7 @@ import {
 import toast from "react-hot-toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
@@ -21,7 +22,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { getAgentTwoStats, type AgentTwoQueueItem } from "@/lib/agent-two-queue";
+import {
+  getAgentTwoEligibleLeadCount,
+  getAgentTwoStats,
+  parseAgentTwoLoadQuantity,
+  type AgentTwoQueueItem,
+} from "@/lib/agent-two-queue";
 import {
   persistImmediateAgentTwoResults,
   useAgentTwoRunner,
@@ -102,11 +108,15 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
   const persistedError = useAgentTwoStore((state) => state.errorMessage);
   const savedLeads = useLeadStore((state) => state.savedLeads);
   const loadQueue = useAgentTwoStore((state) => state.loadQueue);
+  const appendSample = useAgentTwoStore((state) => state.appendSample);
+  const appendAll = useAgentTwoStore((state) => state.appendAll);
   const start = useAgentTwoStore((state) => state.start);
   const pause = useAgentTwoStore((state) => state.pause);
   const resume = useAgentTwoStore((state) => state.resume);
   const stop = useAgentTwoStore((state) => state.stop);
   const { runQueue, isExecutionActive } = useAgentTwoRunner();
+  const [loadQuantity, setLoadQuantity] = useState("10");
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const status = hydrated ? persistedStatus : "idle";
   const queue = hydrated ? persistedQueue : [];
@@ -115,6 +125,7 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
   const leads = hydrated ? savedLeads : [];
   const stats = getAgentTwoStats(queue);
   const leadsWithEmail = leads.filter((lead) => Boolean(lead.email?.trim())).length;
+  const eligibleCount = getAgentTwoEligibleLeadCount(leads, queue);
   const currentItem =
     queue.find((item) => item.id === currentItemId) ??
     queue.find((item) => item.status === "validating") ??
@@ -122,14 +133,58 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
   const isActive = status === "running" || status === "paused";
   const hasPending = queue.some((item) => item.status === "pending");
 
-  function handleLoad(revalidate: boolean) {
+  function reportAddedItems(addedCount: number) {
+    persistImmediateAgentTwoResults();
+    toast.success(
+      addedCount === 0
+        ? "Nenhum novo item elegível foi adicionado."
+        : addedCount + " item(ns) adicionado(s) à fila."
+    );
+  }
+
+  function handleLoadSample() {
     if (isActive) return;
-    const nextQueue = loadQueue(leads, revalidate);
+    if (eligibleCount === 0) {
+      setLoadError("Não existem e-mails pendentes disponíveis.");
+      return;
+    }
+    const parsed = parseAgentTwoLoadQuantity(loadQuantity, eligibleCount);
+    if (parsed.error || parsed.quantity === null) {
+      setLoadError(parsed.error);
+      return;
+    }
+    setLoadError(null);
+    const result = appendSample(leads, parsed.quantity);
+    reportAddedItems(result.addedItems.length);
+  }
+
+  function handleLoadAll() {
+    if (isActive) return;
+    if (eligibleCount === 0) {
+      setLoadError("Não existem e-mails pendentes disponíveis.");
+      return;
+    }
+    setLoadError(null);
+    const result = appendAll(leads, (count) =>
+      window.confirm(
+        "Adicionar " + count.toLocaleString("pt-BR") + " e-mails à fila?"
+      )
+    );
+    if (!result.confirmed) {
+      toast("Carregamento cancelado; a fila não foi alterada.");
+      return;
+    }
+    reportAddedItems(result.addedItems.length);
+  }
+
+  function handleRevalidateAll() {
+    if (isActive) return;
+    const nextQueue = loadQueue(leads, true);
     persistImmediateAgentTwoResults();
     toast.success(
       nextQueue.length === 0
-        ? "Nenhum lead pendente para validar."
-        : nextQueue.length + " lead(s) carregado(s) na fila."
+        ? "Nenhum lead disponível para revalidar."
+        : nextQueue.length + " lead(s) preparado(s) para revalidação."
     );
   }
 
@@ -183,11 +238,11 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" onClick={() => handleLoad(false)} disabled={isActive}>
-              <ListRestart className="size-4" />
-              Carregar pendentes
-            </Button>
-            <Button variant="outline" onClick={() => handleLoad(true)} disabled={isActive || leads.length === 0}>
+            <Button
+              variant="outline"
+              onClick={handleRevalidateAll}
+              disabled={isActive || leads.length === 0}
+            >
               <RotateCcw className="size-4" />
               Revalidar todos
             </Button>
@@ -210,6 +265,52 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
           </div>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="rounded-lg border border-border bg-background/30 p-4">
+            <div className="grid gap-3 md:grid-cols-[minmax(180px,240px)_auto_auto] md:items-end">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium" htmlFor="agent-two-load-quantity">
+                  Quantidade para carregar
+                </label>
+                <Input
+                  id="agent-two-load-quantity"
+                  type="number"
+                  min={1}
+                  max={Math.max(1, eligibleCount)}
+                  step={1}
+                  value={loadQuantity}
+                  disabled={isActive || eligibleCount === 0}
+                  onChange={(event) => {
+                    setLoadQuantity(event.target.value);
+                    setLoadError(null);
+                  }}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {eligibleCount.toLocaleString("pt-BR")} e-mail(s) pendente(s) elegível(is).
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={handleLoadSample}
+                disabled={isActive || eligibleCount === 0}
+              >
+                <ListRestart className="size-4" />
+                Carregar amostra
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleLoadAll}
+                disabled={isActive || eligibleCount === 0}
+              >
+                <MailCheck className="size-4" />
+                Carregar todos
+              </Button>
+            </div>
+            {loadError && (
+              <p role="alert" className="mt-3 text-sm text-red-400">
+                {loadError}
+              </p>
+            )}
+          </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
             <SummaryCard label="Total na fila" value={stats.total} />
             <SummaryCard label="Pendentes" value={stats.pending} />

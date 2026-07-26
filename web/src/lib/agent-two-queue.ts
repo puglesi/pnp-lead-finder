@@ -55,6 +55,15 @@ export interface AgentTwoStats {
   noEmail: number;
 }
 
+export interface AgentTwoQueueAppendResult {
+  snapshot: AgentTwoSnapshot;
+  addedItems: AgentTwoQueueItem[];
+  eligibleCount: number;
+  confirmed: boolean;
+}
+
+export type ConfirmAgentTwoLoad = (eligibleCount: number) => boolean;
+
 export const INITIAL_AGENT_TWO_SNAPSHOT: AgentTwoSnapshot = {
   status: "idle",
   queue: [],
@@ -175,6 +184,154 @@ export function buildAgentTwoQueue(
   });
 
   return queue;
+}
+
+function collectAgentTwoEligibleLeads(
+  leads: Lead[],
+  existingQueue: AgentTwoQueueItem[],
+  limit: number,
+  createdAt: string
+): { items: AgentTwoQueueItem[]; eligibleCount: number } {
+  const existingLeadIds = new Set(existingQueue.map((item) => item.leadId));
+  const firstLeadByEmail = new Map<string, string>();
+  for (const item of existingQueue) {
+    if (item.normalizedEmail && !firstLeadByEmail.has(item.normalizedEmail)) {
+      firstLeadByEmail.set(item.normalizedEmail, item.leadId);
+    }
+  }
+
+  const eligible: Array<{
+    lead: Lead;
+    index: number;
+    normalizedEmail: string;
+    duplicateOf?: string;
+  }> = [];
+
+  leads.forEach((lead, index) => {
+    const normalizedEmail = normalizeEmail(lead.email);
+    const duplicateOf = normalizedEmail
+      ? firstLeadByEmail.get(normalizedEmail)
+      : undefined;
+    if (normalizedEmail && !duplicateOf) {
+      firstLeadByEmail.set(normalizedEmail, lead.id);
+    }
+    if (
+      !normalizedEmail ||
+      hasCompletedValidation(lead) ||
+      existingLeadIds.has(lead.id)
+    ) {
+      return;
+    }
+    eligible.push({ lead, index, normalizedEmail, duplicateOf });
+  });
+
+  const safeLimit = Number.isFinite(limit)
+    ? Math.max(0, Math.floor(limit))
+    : eligible.length;
+  const items = eligible.slice(0, safeLimit).map(
+    ({ lead, index, normalizedEmail, duplicateOf }): AgentTwoQueueItem => ({
+      id:
+        "agent-two-" +
+        createdAt +
+        "-" +
+        (existingQueue.length + index) +
+        "-" +
+        lead.id,
+      leadId: lead.id,
+      company: lead.company,
+      email: lead.email,
+      normalizedEmail,
+      status: duplicateOf ? "duplicate" : "pending",
+      reason: duplicateOf ? "duplicate_of:" + duplicateOf : "pending",
+      createdAt,
+      completedAt: duplicateOf ? createdAt : undefined,
+      isRoleBasedEmail: false,
+      emailValidationProvider: "local_dns",
+    })
+  );
+
+  return { items, eligibleCount: eligible.length };
+}
+
+export function getAgentTwoEligibleLeadCount(
+  leads: Lead[],
+  existingQueue: AgentTwoQueueItem[]
+): number {
+  return collectAgentTwoEligibleLeads(
+    leads,
+    existingQueue,
+    Number.POSITIVE_INFINITY,
+    "count"
+  ).eligibleCount;
+}
+
+export function appendAgentTwoQueue(
+  snapshot: AgentTwoSnapshot,
+  leads: Lead[],
+  limit: number,
+  createdAt: string
+): AgentTwoQueueAppendResult {
+  const { items, eligibleCount } = collectAgentTwoEligibleLeads(
+    leads,
+    snapshot.queue,
+    limit,
+    createdAt
+  );
+  const canResetStatus =
+    snapshot.status !== "running" && snapshot.status !== "paused";
+  return {
+    snapshot:
+      items.length === 0
+        ? snapshot
+        : {
+            ...snapshot,
+            status: canResetStatus ? "idle" : snapshot.status,
+            queue: [...snapshot.queue, ...items],
+            errorMessage: null,
+          },
+    addedItems: items,
+    eligibleCount,
+    confirmed: true,
+  };
+}
+
+export function appendAllAgentTwoQueue(
+  snapshot: AgentTwoSnapshot,
+  leads: Lead[],
+  createdAt: string,
+  confirmLoad: ConfirmAgentTwoLoad
+): AgentTwoQueueAppendResult {
+  const eligibleCount = getAgentTwoEligibleLeadCount(leads, snapshot.queue);
+  if (eligibleCount === 0 || !confirmLoad(eligibleCount)) {
+    return {
+      snapshot,
+      addedItems: [],
+      eligibleCount,
+      confirmed: false,
+    };
+  }
+  return appendAgentTwoQueue(snapshot, leads, eligibleCount, createdAt);
+}
+
+export function parseAgentTwoLoadQuantity(
+  value: string,
+  maximum: number
+): { quantity: number | null; error: string | null } {
+  const trimmed = value.trim();
+  const quantity = Number(trimmed);
+  if (!trimmed || !Number.isInteger(quantity) || quantity < 1) {
+    return {
+      quantity: null,
+      error: "Informe uma quantidade inteira maior ou igual a 1.",
+    };
+  }
+  if (quantity > maximum) {
+    return {
+      quantity: null,
+      error: "A quantidade não pode superar os e-mails pendentes disponíveis.",
+    };
+  }
+  return { quantity, error: null };
 }
 
 export function startAgentTwo(snapshot: AgentTwoSnapshot): AgentTwoSnapshot {
