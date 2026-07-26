@@ -21,6 +21,7 @@ export interface SearchParams {
   autonomousSourceStrategy?: AutonomousSourceStrategy;
   autonomousSingleSource?: AutonomousSourceId;
   autonomousEnrichWebsites?: boolean;
+  allowArtificialResults?: boolean;
 }
 
 export interface SearchProviderResult {

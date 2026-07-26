@@ -61,10 +61,12 @@ function mapScrapedToLead(
   },
   keyword: string,
   location: string,
-  index: number
+  index: number,
+  allowGuessedEmail: boolean
 ): Lead {
   const email =
-    item.enrichedEmail ?? guessEmail(item.url);
+    item.enrichedEmail ??
+    (allowGuessedEmail ? guessEmail(item.url) : null);
   const phone = item.enrichedPhone ?? item.phone ?? "—";
   const enriched = Boolean(item.enrichedEmail || item.enrichedPhone);
 
@@ -136,6 +138,7 @@ export const autonomousProvider: SearchProvider = {
     autonomousSingleSource,
     autonomousEnrichWebsites,
     useMaxLeads,
+    allowArtificialResults,
   }) {
     if (delayMs > 0) {
       await new Promise((r) => setTimeout(r, delayMs));
@@ -171,7 +174,7 @@ export const autonomousProvider: SearchProvider = {
     }
 
     const leads: Lead[] = working.map((item, i) =>
-      mapScrapedToLead(item, keyword, location, i)
+      mapScrapedToLead(item, keyword, location, i, allowArtificialResults !== false)
     );
 
     const sourceTag =
@@ -179,7 +182,10 @@ export const autonomousProvider: SearchProvider = {
         ? `autonomous-${primarySource}+${sourcesUsed.join("+")}${deepSearch ? "+deep" : ""}${autonomousEnrichWebsites !== false ? "+enriched" : ""}`
         : "autonomous-offline-fallback";
 
-    if (leads.length >= maxResults * 0.6) {
+    if (
+      allowArtificialResults === false ||
+      leads.length >= maxResults * 0.6
+    ) {
       return {
         leads: leads.slice(0, maxResults),
         source: sourceTag,

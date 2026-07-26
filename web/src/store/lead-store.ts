@@ -30,6 +30,11 @@ const INITIAL_BULK: BulkSearchProgress = {
   estimatedRemainingMs: 0,
 };
 
+interface BulkSearchOptions {
+  allowArtificialResults?: boolean;
+  autoSaveResults?: boolean;
+}
+
 interface LeadStore {
   sidebarCollapsed: boolean;
   userName: string;
@@ -50,7 +55,11 @@ interface LeadStore {
   selectedLeadIds: string[];
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
-  performBulkSearch: (keywordsInput: string, location: string) => Promise<void>;
+  performBulkSearch: (
+    keywordsInput: string,
+    location: string,
+    options?: BulkSearchOptions
+  ) => Promise<void>;
   generateMoreLeads: (batchSize?: number) => number;
   loadSearchResults: (keyword: string, location: string) => void;
   loadSearchFromHistory: (recordId: string) => boolean;
@@ -85,7 +94,8 @@ function mergeSectorHistory(existing: string[], newSectors: string[]): string[] 
 async function fetchSector(
   sector: string,
   location: string,
-  sectorIndex: number
+  sectorIndex: number,
+  options: BulkSearchOptions
 ): Promise<SearchApiResponse> {
   const settings = useSettingsStore.getState();
   const config = settings.getSearchConfig();
@@ -98,6 +108,7 @@ async function fetchSector(
       sectorIndex,
       maxResults: settings.maxResults,
       useMaxLeads: settings.useMaxLeads,
+      allowArtificialResults: options.allowArtificialResults !== false,
       delayMs: config.delayMs,
       provider: config.provider,
       searchProfile: settings.searchProfile,
@@ -222,7 +233,7 @@ export const useLeadStore = create<LeadStore>()(
         return deduped.length - before;
       },
 
-      performBulkSearch: async (keywordsInput, location) => {
+      performBulkSearch: async (keywordsInput, location, options = {}) => {
         const sectors = parseSectors(keywordsInput);
         if (sectors.length === 0 || !location.trim()) {
           throw new Error("Setores e localização são obrigatórios");
@@ -308,7 +319,8 @@ export const useLeadStore = create<LeadStore>()(
                 const data = await fetchSector(
                   sector,
                   location.trim(),
-                  index
+                  index,
+                  options
                 );
                 return {
                   sector,
@@ -403,6 +415,7 @@ export const useLeadStore = create<LeadStore>()(
           config.provider === "autonomous";
         let autoSavedCount = 0;
         if (
+          options.autoSaveResults !== false &&
           (settings.autoSaveLeads || isAutonomousRun) &&
           finalLeads.length > 0
         ) {

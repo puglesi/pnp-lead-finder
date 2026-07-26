@@ -298,9 +298,12 @@ export function completeAgentOneSector(
         ? {
             ...item,
             status: "completed",
-            foundLeadCount: Math.max(
-              item.foundLeadCount,
-              Math.max(0, Math.floor(foundLeadCount))
+            foundLeadCount: Math.min(
+              item.targetLeadCount,
+              Math.max(
+                item.foundLeadCount,
+                Math.max(0, Math.floor(foundLeadCount))
+              )
             ),
             errorMessage: undefined,
             completedAt,
@@ -379,6 +382,12 @@ export function selectPersistedAgentOneSnapshot(
   };
 }
 
+export function getAgentOneFoundLeadTotal(
+  queue: AgentOneSectorItem[]
+): number {
+  return queue.reduce((total, item) => total + item.foundLeadCount, 0);
+}
+
 export function normalizeAgentOneSnapshot(
   persisted: unknown
 ): AgentOneSnapshot {
@@ -391,11 +400,20 @@ export function normalizeAgentOneSnapshot(
     ? persisted.status
     : "idle";
   const interrupted = persistedStatus === "running";
-  const normalizedQueue = queue.map((item) =>
-    interrupted && item.status === "running"
-      ? { ...item, status: "paused" as const }
-      : item
-  );
+  const normalizedQueue = queue.map((item) => {
+    const normalizedItem: AgentOneSectorItem = {
+      ...item,
+      targetLeadCount: Math.max(1, Math.floor(item.targetLeadCount)),
+      foundLeadCount: Math.min(
+        Math.max(1, Math.floor(item.targetLeadCount)),
+        Math.max(0, Math.floor(item.foundLeadCount))
+      ),
+    };
+
+    return interrupted && normalizedItem.status === "running"
+      ? { ...normalizedItem, status: "paused" as const }
+      : normalizedItem;
+  });
   const currentSectorId =
     typeof persisted.currentSectorId === "string" &&
     normalizedQueue.some((item) => item.id === persisted.currentSectorId)

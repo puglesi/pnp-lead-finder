@@ -25,10 +25,11 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useAgentOneRunner } from "@/hooks/use-agent-one-runner";
-import type {
-  AgentOneSectorItem,
-  AgentOneSectorStatus,
-  AgentOneStatus,
+import {
+  getAgentOneFoundLeadTotal,
+  type AgentOneSectorItem,
+  type AgentOneSectorStatus,
+  type AgentOneStatus,
 } from "@/lib/agent-one-queue";
 import { useAgentOneStore } from "@/store/agent-one-store";
 import { useLeadStore } from "@/store/lead-store";
@@ -134,10 +135,7 @@ export function AgentOneGarimpeiro() {
   const completedCount = queue.filter(
     (item) => item.status === "completed" || item.status === "error"
   ).length;
-  const totalFound = queue.reduce(
-    (total, item) => total + item.foundLeadCount,
-    0
-  );
+  const totalFound = getAgentOneFoundLeadTotal(queue);
   const hasIncomplete = queue.some(
     (item) => item.status === "pending" || item.status === "paused"
   );

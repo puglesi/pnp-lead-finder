@@ -2,6 +2,7 @@
 
 import { useCallback, useRef } from "react";
 import toast from "react-hot-toast";
+import { saveAgentOneLeads } from "@/lib/agent-one-leads";
 import { useAgentOneStore } from "@/store/agent-one-store";
 import { useLeadStore } from "@/store/lead-store";
 
@@ -28,7 +29,10 @@ export function useAgentOneRunner() {
         try {
           await useLeadStore
             .getState()
-            .performBulkSearch(sector.sector, sector.location);
+            .performBulkSearch(sector.sector, sector.location, {
+              allowArtificialResults: false,
+              autoSaveResults: false,
+            });
 
           const leadState = useLeadStore.getState();
           const searchProgress = leadState.bulkProgress.sectors.find(
@@ -41,22 +45,24 @@ export function useAgentOneRunner() {
             );
           }
 
-          const foundLeads = leadState.currentLeads;
-          let savedLeadCount = 0;
-          for (const lead of foundLeads) {
-            if (leadState.saveLead(lead)) savedLeadCount++;
-          }
+          const saveResult = saveAgentOneLeads({
+            results: leadState.currentLeads,
+            existingSavedLeads: leadState.savedLeads,
+            targetLeadCount: sector.targetLeadCount,
+            source: leadState.lastSearchSource,
+            saveLead: leadState.saveLead,
+          });
 
           useAgentOneStore
             .getState()
-            .completeSector(sector.id, foundLeads.length);
+            .completeSector(sector.id, saveResult.savedLeadCount);
           toast.success(
             sector.sector +
               ": " +
-              foundLeads.length +
-              " encontrado(s), " +
-              savedLeadCount +
-              " novo(s) salvo(s)."
+              saveResult.savedLeadCount +
+              "/" +
+              sector.targetLeadCount +
+              " lead(s) novo(s) salvo(s)."
           );
         } catch (error) {
           const message = errorMessage(error);
