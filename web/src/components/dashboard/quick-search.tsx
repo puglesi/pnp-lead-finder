@@ -101,7 +101,11 @@ function QuickSearchContent({
   );
 
   const sectorList = parseSectors(sectors);
-  const effectiveWorkers = settings.getEffectiveWorkers();
+  const effectiveWorkers = hydrated
+    ? settings.getEffectiveWorkers()
+    : settings.queueMode === "sequential"
+      ? 1
+      : settings.workers;
   const effectiveMax = settings.getEffectiveMaxResults();
   const isAutonomous = settings.searchProfile === "autonomous-24h";
   const leadsLabel = formatLeadsLabel(
