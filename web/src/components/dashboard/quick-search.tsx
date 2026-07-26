@@ -299,7 +299,7 @@ function QuickSearchContent({
                   : ` · meta ${AUTONOMOUS_REALISTIC_EXECUTION_MIN}–${AUTONOMOUS_REALISTIC_EXECUTION_MAX}`}
               </p>
               {activeAutonomousSources.length > 0 && (
-                <p className="flex flex-wrap items-center gap-1.5 text-xs">
+                <div className="flex flex-wrap items-center gap-1.5 text-xs">
                   <span className="text-muted-foreground">Fontes:</span>
                   {activeAutonomousSources.map((id) => (
                     <Badge
@@ -316,7 +316,7 @@ function QuickSearchContent({
                         ? "rotação"
                         : "única"}
                   </span>
-                </p>
+                </div>
               )}
               {autonomousVolume && (
                 <p className="flex items-center gap-1 text-xs font-medium text-amber-300/90">
