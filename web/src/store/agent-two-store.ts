@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Lead } from "@/types/lead";
 import type { EmailValidationResult } from "@/types/email-validation";
+import { useLeadStore } from "@/store/lead-store";
 import {
   INITIAL_AGENT_TWO_SNAPSHOT,
   appendAgentTwoQueue,
@@ -14,7 +15,10 @@ import {
   finishAgentTwo,
   normalizeAgentTwoSnapshot,
   pauseAgentTwo,
+  queueItemToLeadUpdate,
   resumeAgentTwo,
+  retryAgentTwoDnsErrors,
+  retryAgentTwoItem,
   selectPersistedAgentTwoSnapshot,
   startAgentTwo,
   stopAgentTwo,
@@ -38,12 +42,23 @@ interface AgentTwoStore extends AgentTwoSnapshot {
   claimNextItem: () => AgentTwoQueueItem | null;
   completeItem: (id: string, result: EmailValidationResult) => void;
   failItem: (id: string, errorMessage: string) => void;
+  retryItem: (id: string) => boolean;
+  retryDnsErrors: () => number;
   finish: () => void;
   fail: (errorMessage: string) => void;
 }
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function syncMigratedDnsErrorsWithLeads(queue: AgentTwoQueueItem[]): void {
+  const leadStore = useLeadStore.getState();
+  for (const item of queue) {
+    if (item.status !== "unknown" || item.reason !== "dns_error") continue;
+    const update = queueItemToLeadUpdate(item);
+    if (update) leadStore.updateLeadEmailValidation(item.leadId, update);
+  }
 }
 
 export const useAgentTwoStore = create<AgentTwoStore>()(
@@ -66,6 +81,8 @@ export const useAgentTwoStore = create<AgentTwoStore>()(
         let result: AgentTwoQueueAppendResult = {
           snapshot: INITIAL_AGENT_TWO_SNAPSHOT,
           addedItems: [],
+          addedPendingCount: 0,
+          addedDuplicateCount: 0,
           eligibleCount: 0,
           confirmed: true,
         };
@@ -80,6 +97,8 @@ export const useAgentTwoStore = create<AgentTwoStore>()(
         let result: AgentTwoQueueAppendResult = {
           snapshot: INITIAL_AGENT_TWO_SNAPSHOT,
           addedItems: [],
+          addedPendingCount: 0,
+          addedDuplicateCount: 0,
           eligibleCount: 0,
           confirmed: false,
         };
@@ -130,6 +149,26 @@ export const useAgentTwoStore = create<AgentTwoStore>()(
           failAgentTwoItem(state, id, errorMessage, nowIso())
         ),
 
+      retryItem: (id) => {
+        let retried = false;
+        set((state) => {
+          const next = retryAgentTwoItem(state, id);
+          retried = next !== state;
+          return next;
+        });
+        return retried;
+      },
+
+      retryDnsErrors: () => {
+        let retriedCount = 0;
+        set((state) => {
+          const result = retryAgentTwoDnsErrors(state);
+          retriedCount = result.retriedCount;
+          return result.snapshot;
+        });
+        return retriedCount;
+      },
+
       finish: () => set((state) => finishAgentTwo(state)),
 
       fail: (errorMessage) =>
@@ -143,6 +182,9 @@ export const useAgentTwoStore = create<AgentTwoStore>()(
         ...current,
         ...normalizeAgentTwoSnapshot(persisted),
       }),
+      onRehydrateStorage: () => (state) => {
+        if (state) syncMigratedDnsErrorsWithLeads(state.queue);
+      },
     }
   )
 );

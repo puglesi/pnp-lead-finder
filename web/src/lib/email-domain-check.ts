@@ -1,18 +1,12 @@
-import {
-  resolve4,
-  resolve6,
-  resolveMx,
-} from "node:dns/promises";
+import { resolveMx } from "node:dns/promises";
 import type { MxRecord } from "node:dns";
 import type { EmailDomainCheckResult } from "../types/email-validation.ts";
 
 export interface EmailDnsResolver {
   resolveMx(domain: string): Promise<MxRecord[]>;
-  resolve4(domain: string): Promise<string[]>;
-  resolve6(domain: string): Promise<string[]>;
 }
 
-const nativeResolver: EmailDnsResolver = { resolveMx, resolve4, resolve6 };
+const nativeResolver: EmailDnsResolver = { resolveMx };
 
 class DnsTimeoutError extends Error {}
 
@@ -21,37 +15,25 @@ function errorCode(error: unknown): string | null {
     return null;
   }
   const code = (error as { code: unknown }).code;
-  return typeof code === "string" ? code : null;
+  return typeof code === "string" ? code.toUpperCase() : null;
 }
 
-function isMissingRecordError(error: unknown): boolean {
-  const code = errorCode(error);
-  return code === "ENODATA" || code === "ENOTFOUND" || code === "NXDOMAIN";
-}
-
-async function domainHasAddress(
-  domain: string,
-  resolver: EmailDnsResolver
-): Promise<boolean> {
-  const results = await Promise.allSettled([
-    resolver.resolve4(domain),
-    resolver.resolve6(domain),
-  ]);
-  if (
-    results.some(
-      (result) => result.status === "fulfilled" && result.value.length > 0
-    )
-  ) {
-    return true;
+function technicalDnsErrorMessage(error: unknown): string {
+  if (error instanceof DnsTimeoutError || errorCode(error) === "ETIMEOUT") {
+    return "Tempo limite excedido na consulta DNS. Tente novamente.";
   }
 
-  const failures = results.filter(
-    (result): result is PromiseRejectedResult => result.status === "rejected"
-  );
-  if (failures.every((result) => isMissingRecordError(result.reason))) {
-    return false;
+  switch (errorCode(error)) {
+    case "EAI_AGAIN":
+      return "O serviço DNS está temporariamente indisponível. Tente novamente.";
+    case "SERVFAIL":
+    case "ESERVFAIL":
+      return "O servidor DNS não conseguiu concluir a consulta. Tente novamente.";
+    case "ECONNRESET":
+      return "A conexão com o serviço DNS foi interrompida. Tente novamente.";
+    default:
+      return "Falha técnica na resolução DNS. Tente novamente.";
   }
-  throw failures[0]?.reason ?? new Error("DNS lookup failed");
 }
 
 async function checkWithoutTimeout(
@@ -70,14 +52,24 @@ async function checkWithoutTimeout(
       reason: hasMxRecords ? null : "no_mx_records",
     };
   } catch (error) {
-    if (!isMissingRecordError(error)) throw error;
-    const exists = await domainHasAddress(domain, resolver);
-    return {
-      domain,
-      exists,
-      hasMxRecords: false,
-      reason: exists ? "no_mx_records" : "domain_not_found",
-    };
+    const code = errorCode(error);
+    if (code === "ENOTFOUND" || code === "NXDOMAIN") {
+      return {
+        domain,
+        exists: false,
+        hasMxRecords: false,
+        reason: "domain_not_found",
+      };
+    }
+    if (code === "ENODATA") {
+      return {
+        domain,
+        exists: true,
+        hasMxRecords: false,
+        reason: "no_mx_records",
+      };
+    }
+    throw error;
   }
 }
 
@@ -103,7 +95,8 @@ export async function checkEmailDomain(
       domain: cleanDomain,
       exists: false,
       hasMxRecords: false,
-      reason: error instanceof DnsTimeoutError ? "dns_error" : "dns_error",
+      reason: "dns_error",
+      errorMessage: technicalDnsErrorMessage(error),
     };
   } finally {
     if (timeoutId !== undefined) clearTimeout(timeoutId);

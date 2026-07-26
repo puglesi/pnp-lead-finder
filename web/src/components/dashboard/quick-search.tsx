@@ -20,9 +20,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useLeadStore } from "@/store/lead-store";
-import { useSettingsStore } from "@/store/settings-store";
+import {
+  AUTONOMOUS_24H_DEFAULTS,
+  useSettingsStore,
+} from "@/store/settings-store";
 import { useUsageStore } from "@/store/usage-store";
 import { parseSectors } from "@/lib/worker-pool";
+import { selectQuickSearchHydrationSnapshot } from "@/lib/quick-search-hydration";
 import {
   estimateSerpApiCalls,
   estimateTotalLeadsRange,
@@ -101,37 +105,67 @@ function QuickSearchContent({
   );
 
   const sectorList = parseSectors(sectors);
+  const renderSettings = selectQuickSearchHydrationSnapshot(
+    hydrated,
+    {
+      workers: settings.workers,
+      delayMs: settings.delayMs,
+      maxResults: settings.maxResults,
+      useMaxLeads: settings.useMaxLeads,
+      queueMode: settings.queueMode,
+      provider: settings.provider,
+      searchProfile: settings.searchProfile,
+      mode24h: settings.mode24h,
+      serpapiDeepPagination: settings.serpapiDeepPagination,
+      autonomousSourceStrategy: settings.autonomousSourceStrategy,
+    },
+    {
+      workers: AUTONOMOUS_24H_DEFAULTS.workers,
+      delayMs: AUTONOMOUS_24H_DEFAULTS.delayMs,
+      maxResults: AUTONOMOUS_24H_DEFAULTS.maxResults,
+      useMaxLeads: AUTONOMOUS_24H_DEFAULTS.useMaxLeads,
+      queueMode: AUTONOMOUS_24H_DEFAULTS.queueMode,
+      provider: AUTONOMOUS_24H_DEFAULTS.provider,
+      searchProfile: AUTONOMOUS_24H_DEFAULTS.searchProfile,
+      mode24h: AUTONOMOUS_24H_DEFAULTS.mode24h,
+      serpapiDeepPagination: AUTONOMOUS_24H_DEFAULTS.serpapiDeepPagination,
+      autonomousSourceStrategy:
+        AUTONOMOUS_24H_DEFAULTS.autonomousSourceStrategy,
+    }
+  );
   const effectiveWorkers = hydrated
     ? settings.getEffectiveWorkers()
-    : settings.queueMode === "sequential"
+    : renderSettings.queueMode === "sequential"
       ? 1
-      : settings.workers;
-  const effectiveMax = settings.getEffectiveMaxResults();
-  const isAutonomous = settings.searchProfile === "autonomous-24h";
+      : renderSettings.workers;
+  const effectiveMax = hydrated
+    ? settings.getEffectiveMaxResults()
+    : renderSettings.maxResults;
+  const isAutonomous = renderSettings.searchProfile === "autonomous-24h";
   const leadsLabel = formatLeadsLabel(
-    settings.maxResults,
-    settings.useMaxLeads,
-    settings.provider,
-    settings.searchProfile
+    renderSettings.maxResults,
+    renderSettings.useMaxLeads,
+    renderSettings.provider,
+    renderSettings.searchProfile
   );
   const serpPagination = {
-    useMaxLeads: settings.useMaxLeads,
-    deepPagination: settings.serpapiDeepPagination,
+    useMaxLeads: renderSettings.useMaxLeads,
+    deepPagination: renderSettings.serpapiDeepPagination,
   };
   const volumeMode = isSerpApiVolumeMode(
-    settings.useMaxLeads,
-    settings.searchProfile,
-    settings.provider
+    renderSettings.useMaxLeads,
+    renderSettings.searchProfile,
+    renderSettings.provider
   );
   const autonomousVolume = isAutonomousVolumeMode(
-    settings.useMaxLeads,
-    settings.searchProfile,
-    settings.provider
+    renderSettings.useMaxLeads,
+    renderSettings.searchProfile,
+    renderSettings.provider
   );
   const equilibriumMode = isSerpApiEquilibriumMode(
-    settings.useMaxLeads,
-    settings.searchProfile,
-    settings.provider
+    renderSettings.useMaxLeads,
+    renderSettings.searchProfile,
+    renderSettings.provider
   );
   const pagesPerSector = getSerpApiPagesPerSector({
     ...serpPagination,
@@ -139,8 +173,8 @@ function QuickSearchContent({
   });
   const estimatedCalls = estimateSerpApiCalls(
     sectorList.length,
-    settings.provider,
-    settings.searchProfile,
+    renderSettings.provider,
+    renderSettings.searchProfile,
     effectiveMax,
     serpPagination
   );
@@ -148,16 +182,18 @@ function QuickSearchContent({
     sectorList.length,
     effectiveMax,
     {
-      useMaxLeads: settings.useMaxLeads,
-      searchProfile: settings.searchProfile,
-      provider: settings.provider,
+      useMaxLeads: renderSettings.useMaxLeads,
+      searchProfile: renderSettings.searchProfile,
+      provider: renderSettings.provider,
     }
   );
   const serpForecast = formatSerpApiForecast(sectorList.length, pagesPerSector);
   const afterCalls = Math.max(0, remaining - estimatedCalls);
   const recommended = isRecommendedLeadCount(effectiveMax);
   const activeAutonomousSources = isAutonomous
-    ? settings.getActiveAutonomousSources()
+    ? hydrated
+      ? settings.getActiveAutonomousSources()
+      : [...AUTONOMOUS_24H_DEFAULTS.autonomousSources]
     : [];
 
   const handleSearch = async () => {
@@ -232,7 +268,7 @@ function QuickSearchContent({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <ActiveModeBadge />
+            <ActiveModeBadge hydrated={hydrated} />
             <Button variant="outline" size="sm" asChild>
               <Link href="/configuracoes/avancadas">
                 <Settings2 className="size-3.5" />
@@ -253,7 +289,7 @@ function QuickSearchContent({
           >
             {leadsLabel}/setor
           </Badge>
-          <Badge variant="outline">{settings.delayMs}ms</Badge>
+          <Badge variant="outline">{renderSettings.delayMs}ms</Badge>
           {equilibriumMode && (
             <Badge className="border-emerald-500/40 bg-emerald-500/15 text-emerald-300">
               Equilíbrio
@@ -269,7 +305,7 @@ function QuickSearchContent({
               Volume Máximo
             </Badge>
           )}
-          {settings.mode24h && (
+          {renderSettings.mode24h && (
             <Badge className="border-amber-500/40 bg-amber-500/15 text-amber-300">
               24h
             </Badge>
@@ -296,7 +332,7 @@ function QuickSearchContent({
               </p>
               <p className="flex items-center gap-1 text-xs">
                 <Infinity className="size-3" />
-                Delay {settings.delayMs}ms · Maps + Yell + CH · ~
+                Delay {renderSettings.delayMs}ms · Maps + Yell + CH · ~
                 {effectiveMax} leads/setor
                 {autonomousVolume
                   ? ` · alvo ${AUTONOMOUS_REALISTIC_EXECUTION_MIN}–${AUTONOMOUS_REALISTIC_EXECUTION_MAX}`
@@ -314,9 +350,9 @@ function QuickSearchContent({
                     </Badge>
                   ))}
                   <span className="text-muted-foreground">
-                    · {settings.autonomousSourceStrategy === "parallel"
+                    · {renderSettings.autonomousSourceStrategy === "parallel"
                       ? "paralelo"
-                      : settings.autonomousSourceStrategy === "rotate"
+                      : renderSettings.autonomousSourceStrategy === "rotate"
                         ? "rotação"
                         : "única"}
                   </span>
@@ -407,11 +443,11 @@ function QuickSearchContent({
           </div>
         )}
 
-        <QuickConfigBar />
+        <QuickConfigBar hydrated={hydrated} />
         <div className="space-y-2">
           <label className="text-sm font-medium text-muted-foreground">
             Fila de setores (vírgula ou →)
-            {lastBulkSearchSectors && (
+            {hydrated && lastBulkSearchSectors && (
               <span className="ml-2 text-xs font-normal text-emerald-400/80">
                 · última pesquisa restaurada
               </span>

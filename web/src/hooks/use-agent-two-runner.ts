@@ -2,6 +2,7 @@
 
 import { useCallback, useRef } from "react";
 import toast from "react-hot-toast";
+import { createAgentTwoExecutionGuard } from "@/lib/agent-two-execution";
 import {
   createLocalEmailValidationProvider,
   type EmailDomainChecker,
@@ -34,7 +35,8 @@ function isDomainCheckResult(value: unknown): value is EmailDomainCheckResult {
     (value.reason === null ||
       value.reason === "domain_not_found" ||
       value.reason === "no_mx_records" ||
-      value.reason === "dns_error")
+      value.reason === "dns_error") &&
+    (!("errorMessage" in value) || typeof value.errorMessage === "string")
   );
 }
 
@@ -64,11 +66,10 @@ export function persistImmediateAgentTwoResults() {
 }
 
 export function useAgentTwoRunner() {
-  const executionActiveRef = useRef(false);
+  const executionGuardRef = useRef(createAgentTwoExecutionGuard());
 
   const runQueue = useCallback(async () => {
-    if (executionActiveRef.current) return;
-    executionActiveRef.current = true;
+    if (!executionGuardRef.current.begin()) return;
 
     try {
       while (useAgentTwoStore.getState().status === "running") {
@@ -108,12 +109,12 @@ export function useAgentTwoRunner() {
       useAgentTwoStore.getState().fail(message);
       toast.error("Agente 2: " + message);
     } finally {
-      executionActiveRef.current = false;
+      executionGuardRef.current.end();
     }
   }, []);
 
   return {
     runQueue,
-    isExecutionActive: () => executionActiveRef.current,
+    isExecutionActive: () => executionGuardRef.current.isActive(),
   };
 }

@@ -58,6 +58,8 @@ export interface AgentTwoStats {
 export interface AgentTwoQueueAppendResult {
   snapshot: AgentTwoSnapshot;
   addedItems: AgentTwoQueueItem[];
+  addedPendingCount: number;
+  addedDuplicateCount: number;
   eligibleCount: number;
   confirmed: boolean;
 }
@@ -142,9 +144,12 @@ export function buildAgentTwoQueue(
   revalidate = false
 ): AgentTwoQueueItem[] {
   const firstLeadByEmail = new Map<string, string>();
+  const seenLeadIds = new Set<string>();
   const queue: AgentTwoQueueItem[] = [];
 
   leads.forEach((lead, index) => {
+    if (seenLeadIds.has(lead.id)) return;
+    seenLeadIds.add(lead.id);
     const normalizedEmail = normalizeEmail(lead.email);
     const duplicateOf = normalizedEmail
       ? firstLeadByEmail.get(normalizedEmail)
@@ -186,83 +191,164 @@ export function buildAgentTwoQueue(
   return queue;
 }
 
+interface AgentTwoCandidate {
+  lead: Lead;
+  index: number;
+  normalizedEmail: string;
+  duplicateOf?: string;
+}
+
+interface AgentTwoCandidateSelection {
+  items: AgentTwoQueueItem[];
+  eligibleCount: number;
+  addedPendingCount: number;
+  addedDuplicateCount: number;
+}
+
+function canonicalLeadId(reason: string | undefined, fallbackLeadId: string): string {
+  const prefix = "duplicate_of:";
+  return reason?.startsWith(prefix) ? reason.slice(prefix.length) : fallbackLeadId;
+}
+
+function prepareAgentTwoCandidates(
+  leads: Lead[],
+  existingQueue: AgentTwoQueueItem[]
+): { candidates: AgentTwoCandidate[]; eligibleCount: number } {
+  const existingLeadIds = new Set(existingQueue.map((item) => item.leadId));
+  const seenLeadIds = new Set(existingLeadIds);
+  const canonicalLeadByEmail = new Map<string, string>();
+
+  for (const item of existingQueue) {
+    if (item.normalizedEmail && !canonicalLeadByEmail.has(item.normalizedEmail)) {
+      canonicalLeadByEmail.set(
+        item.normalizedEmail,
+        canonicalLeadId(item.reason, item.leadId)
+      );
+    }
+  }
+
+  for (const lead of leads) {
+    if (!hasCompletedValidation(lead)) continue;
+    const normalizedEmail = normalizeEmail(lead.email);
+    if (normalizedEmail && !canonicalLeadByEmail.has(normalizedEmail)) {
+      canonicalLeadByEmail.set(
+        normalizedEmail,
+        canonicalLeadId(lead.emailValidationReason, lead.id)
+      );
+    }
+  }
+
+  let eligibleCount = 0;
+  const candidates: AgentTwoCandidate[] = [];
+  leads.forEach((lead, index) => {
+    if (seenLeadIds.has(lead.id)) return;
+    seenLeadIds.add(lead.id);
+    if (hasCompletedValidation(lead)) return;
+
+    const normalizedEmail = normalizeEmail(lead.email);
+    if (!normalizedEmail) return;
+
+    const duplicateOf = canonicalLeadByEmail.get(normalizedEmail);
+    if (!duplicateOf) {
+      canonicalLeadByEmail.set(normalizedEmail, lead.id);
+      eligibleCount += 1;
+    }
+    candidates.push({ lead, index, normalizedEmail, duplicateOf });
+  });
+
+  return { candidates, eligibleCount };
+}
+
+function candidateToQueueItem(
+  candidate: AgentTwoCandidate,
+  existingQueueLength: number,
+  createdAt: string
+): AgentTwoQueueItem {
+  const { lead, index, normalizedEmail, duplicateOf } = candidate;
+  return {
+    id:
+      "agent-two-" +
+      createdAt +
+      "-" +
+      (existingQueueLength + index) +
+      "-" +
+      lead.id,
+    leadId: lead.id,
+    company: lead.company,
+    email: lead.email,
+    normalizedEmail,
+    status: duplicateOf ? "duplicate" : "pending",
+    reason: duplicateOf ? "duplicate_of:" + duplicateOf : "pending",
+    createdAt,
+    completedAt: duplicateOf ? createdAt : undefined,
+    isRoleBasedEmail: false,
+    emailValidationProvider: "local_dns",
+  };
+}
+
 function collectAgentTwoEligibleLeads(
   leads: Lead[],
   existingQueue: AgentTwoQueueItem[],
   limit: number,
-  createdAt: string
-): { items: AgentTwoQueueItem[]; eligibleCount: number } {
-  const existingLeadIds = new Set(existingQueue.map((item) => item.leadId));
-  const firstLeadByEmail = new Map<string, string>();
-  for (const item of existingQueue) {
-    if (item.normalizedEmail && !firstLeadByEmail.has(item.normalizedEmail)) {
-      firstLeadByEmail.set(item.normalizedEmail, item.leadId);
-    }
-  }
-
-  const eligible: Array<{
-    lead: Lead;
-    index: number;
-    normalizedEmail: string;
-    duplicateOf?: string;
-  }> = [];
-
-  leads.forEach((lead, index) => {
-    const normalizedEmail = normalizeEmail(lead.email);
-    const duplicateOf = normalizedEmail
-      ? firstLeadByEmail.get(normalizedEmail)
-      : undefined;
-    if (normalizedEmail && !duplicateOf) {
-      firstLeadByEmail.set(normalizedEmail, lead.id);
-    }
-    if (
-      !normalizedEmail ||
-      hasCompletedValidation(lead) ||
-      existingLeadIds.has(lead.id)
-    ) {
-      return;
-    }
-    eligible.push({ lead, index, normalizedEmail, duplicateOf });
-  });
-
+  createdAt: string,
+  includeAllCandidates = false
+): AgentTwoCandidateSelection {
+  const { candidates, eligibleCount } = prepareAgentTwoCandidates(
+    leads,
+    existingQueue
+  );
   const safeLimit = Number.isFinite(limit)
     ? Math.max(0, Math.floor(limit))
-    : eligible.length;
-  const items = eligible.slice(0, safeLimit).map(
-    ({ lead, index, normalizedEmail, duplicateOf }): AgentTwoQueueItem => ({
-      id:
-        "agent-two-" +
-        createdAt +
-        "-" +
-        (existingQueue.length + index) +
-        "-" +
-        lead.id,
-      leadId: lead.id,
-      company: lead.company,
-      email: lead.email,
-      normalizedEmail,
-      status: duplicateOf ? "duplicate" : "pending",
-      reason: duplicateOf ? "duplicate_of:" + duplicateOf : "pending",
-      createdAt,
-      completedAt: duplicateOf ? createdAt : undefined,
-      isRoleBasedEmail: false,
-      emailValidationProvider: "local_dns",
-    })
-  );
+    : eligibleCount;
+  const selected: AgentTwoCandidate[] = [];
+  let addedPendingCount = 0;
 
-  return { items, eligibleCount: eligible.length };
+  for (const candidate of candidates) {
+    if (!includeAllCandidates && addedPendingCount >= safeLimit) break;
+    selected.push(candidate);
+    if (!candidate.duplicateOf) addedPendingCount += 1;
+  }
+
+  const items = selected.map((candidate) =>
+    candidateToQueueItem(candidate, existingQueue.length, createdAt)
+  );
+  return {
+    items,
+    eligibleCount,
+    addedPendingCount,
+    addedDuplicateCount: items.length - addedPendingCount,
+  };
 }
 
 export function getAgentTwoEligibleLeadCount(
   leads: Lead[],
   existingQueue: AgentTwoQueueItem[]
 ): number {
-  return collectAgentTwoEligibleLeads(
-    leads,
-    existingQueue,
-    Number.POSITIVE_INFINITY,
-    "count"
-  ).eligibleCount;
+  return prepareAgentTwoCandidates(leads, existingQueue).eligibleCount;
+}
+
+function appendSelectionToAgentTwoQueue(
+  snapshot: AgentTwoSnapshot,
+  selection: AgentTwoCandidateSelection
+): AgentTwoQueueAppendResult {
+  const canResetStatus =
+    snapshot.status !== "running" && snapshot.status !== "paused";
+  return {
+    snapshot:
+      selection.items.length === 0
+        ? snapshot
+        : {
+            ...snapshot,
+            status: canResetStatus ? "idle" : snapshot.status,
+            queue: [...snapshot.queue, ...selection.items],
+            errorMessage: null,
+          },
+    addedItems: selection.items,
+    addedPendingCount: selection.addedPendingCount,
+    addedDuplicateCount: selection.addedDuplicateCount,
+    eligibleCount: selection.eligibleCount,
+    confirmed: true,
+  };
 }
 
 export function appendAgentTwoQueue(
@@ -271,28 +357,15 @@ export function appendAgentTwoQueue(
   limit: number,
   createdAt: string
 ): AgentTwoQueueAppendResult {
-  const { items, eligibleCount } = collectAgentTwoEligibleLeads(
-    leads,
-    snapshot.queue,
-    limit,
-    createdAt
+  return appendSelectionToAgentTwoQueue(
+    snapshot,
+    collectAgentTwoEligibleLeads(
+      leads,
+      snapshot.queue,
+      limit,
+      createdAt
+    )
   );
-  const canResetStatus =
-    snapshot.status !== "running" && snapshot.status !== "paused";
-  return {
-    snapshot:
-      items.length === 0
-        ? snapshot
-        : {
-            ...snapshot,
-            status: canResetStatus ? "idle" : snapshot.status,
-            queue: [...snapshot.queue, ...items],
-            errorMessage: null,
-          },
-    addedItems: items,
-    eligibleCount,
-    confirmed: true,
-  };
 }
 
 export function appendAllAgentTwoQueue(
@@ -301,16 +374,24 @@ export function appendAllAgentTwoQueue(
   createdAt: string,
   confirmLoad: ConfirmAgentTwoLoad
 ): AgentTwoQueueAppendResult {
-  const eligibleCount = getAgentTwoEligibleLeadCount(leads, snapshot.queue);
-  if (eligibleCount === 0 || !confirmLoad(eligibleCount)) {
+  const selection = collectAgentTwoEligibleLeads(
+    leads,
+    snapshot.queue,
+    Number.POSITIVE_INFINITY,
+    createdAt,
+    true
+  );
+  if (selection.items.length === 0 || !confirmLoad(selection.items.length)) {
     return {
       snapshot,
       addedItems: [],
-      eligibleCount,
+      addedPendingCount: 0,
+      addedDuplicateCount: 0,
+      eligibleCount: selection.eligibleCount,
       confirmed: false,
     };
   }
-  return appendAgentTwoQueue(snapshot, leads, eligibleCount, createdAt);
+  return appendSelectionToAgentTwoQueue(snapshot, selection);
 }
 
 export function parseAgentTwoLoadQuantity(
@@ -335,6 +416,9 @@ export function parseAgentTwoLoadQuantity(
 }
 
 export function startAgentTwo(snapshot: AgentTwoSnapshot): AgentTwoSnapshot {
+  if (snapshot.status === "running" || snapshot.status === "paused") {
+    return snapshot;
+  }
   const hasWork = snapshot.queue.some((item) => item.status === "pending");
   if (!hasWork) return snapshot;
   return {
@@ -360,7 +444,9 @@ export function resumeAgentTwo(
   snapshot: AgentTwoSnapshot,
   currentValidationIsActive = false
 ): AgentTwoSnapshot {
-  if (snapshot.status !== "paused") return snapshot;
+  if (snapshot.status !== "paused" && snapshot.status !== "stopped") {
+    return snapshot;
+  }
   if (currentValidationIsActive && snapshot.currentItemId) {
     return { ...snapshot, status: "running" };
   }
@@ -440,7 +526,7 @@ export function completeAgentTwoItem(
             status: result.status,
             reason: result.reason,
             completedAt: result.validatedAt,
-            errorMessage: undefined,
+            errorMessage: result.errorMessage,
             emailDomain: result.domain ?? undefined,
             hasMxRecords: result.hasMxRecords ?? undefined,
             isRoleBasedEmail: result.isRoleBasedEmail,
@@ -472,6 +558,42 @@ export function failAgentTwoItem(
         : item
     ),
   };
+}
+
+export function retryAgentTwoItem(
+  snapshot: AgentTwoSnapshot,
+  id: string
+): AgentTwoSnapshot {
+  if (snapshot.status === "running" || snapshot.status === "paused") {
+    return snapshot;
+  }
+  let retried = false;
+  const queue = snapshot.queue.map((item) => {
+    if (
+      item.id !== id ||
+      item.reason !== "validation_error" ||
+      !item.errorMessage
+    ) {
+      return item;
+    }
+    retried = true;
+    return {
+      ...item,
+      status: "pending" as const,
+      reason: "pending",
+      completedAt: undefined,
+      errorMessage: undefined,
+    };
+  });
+  return retried
+    ? {
+        ...snapshot,
+        status: "idle",
+        currentItemId: null,
+        errorMessage: null,
+        queue,
+      }
+    : snapshot;
 }
 
 export function finishAgentTwo(snapshot: AgentTwoSnapshot): AgentTwoSnapshot {
@@ -512,6 +634,63 @@ export function selectPersistedAgentTwoSnapshot(
   };
 }
 
+export const DNS_ERROR_RETRY_MESSAGE =
+  "Falha técnica na resolução DNS. Tente novamente.";
+
+export function migrateAgentTwoDnsErrors(
+  snapshot: AgentTwoSnapshot
+): AgentTwoSnapshot {
+  let migrated = false;
+  const queue = snapshot.queue.map((item) => {
+    if (item.status !== "invalid" || item.reason !== "dns_error") return item;
+    migrated = true;
+    return {
+      ...item,
+      status: "unknown" as const,
+      completedAt: item.completedAt ?? item.createdAt,
+      errorMessage: item.errorMessage ?? DNS_ERROR_RETRY_MESSAGE,
+    };
+  });
+  return migrated ? { ...snapshot, queue } : snapshot;
+}
+
+export function retryAgentTwoDnsErrors(snapshot: AgentTwoSnapshot): {
+  snapshot: AgentTwoSnapshot;
+  retriedCount: number;
+} {
+  if (snapshot.status === "running" || snapshot.status === "paused") {
+    return { snapshot, retriedCount: 0 };
+  }
+
+  let retriedCount = 0;
+  const queue = snapshot.queue.map((item) => {
+    if (item.reason !== "dns_error") return item;
+    retriedCount += 1;
+    return {
+      ...item,
+      status: "pending" as const,
+      reason: "pending",
+      completedAt: undefined,
+      errorMessage: undefined,
+      hasMxRecords: undefined,
+    };
+  });
+
+  return {
+    snapshot:
+      retriedCount === 0
+        ? snapshot
+        : {
+            ...snapshot,
+            status: "idle",
+            currentItemId: null,
+            errorMessage: null,
+            queue,
+          },
+    retriedCount,
+  };
+}
+
 export function normalizeAgentTwoSnapshot(persisted: unknown): AgentTwoSnapshot {
   if (!isRecord(persisted)) return INITIAL_AGENT_TWO_SNAPSHOT;
   const queue = Array.isArray(persisted.queue)
@@ -522,26 +701,37 @@ export function normalizeAgentTwoSnapshot(persisted: unknown): AgentTwoSnapshot 
     AGENT_STATUSES.has(persisted.status as AgentTwoStatus)
       ? (persisted.status as AgentTwoStatus)
       : "idle";
-  const interrupted = persistedStatus === "running";
-  const normalizedQueue = queue.map((item) =>
+  const migrated = migrateAgentTwoDnsErrors({
+    status: persistedStatus,
+    queue,
+    currentItemId:
+      typeof persisted.currentItemId === "string"
+        ? persisted.currentItemId
+        : null,
+    errorMessage:
+      typeof persisted.errorMessage === "string"
+        ? persisted.errorMessage
+        : null,
+  });
+  const interrupted =
+    migrated.status === "running" ||
+    migrated.queue.some((item) => item.status === "validating");
+  const normalizedQueue = migrated.queue.map((item) =>
     interrupted && item.status === "validating"
       ? { ...item, status: "pending" as const, reason: "pending" }
       : item
   );
   const currentItemId =
     !interrupted &&
-    typeof persisted.currentItemId === "string" &&
-    normalizedQueue.some((item) => item.id === persisted.currentItemId)
-      ? persisted.currentItemId
+    typeof migrated.currentItemId === "string" &&
+    normalizedQueue.some((item) => item.id === migrated.currentItemId)
+      ? migrated.currentItemId
       : null;
   return {
-    status: interrupted ? "paused" : persistedStatus,
+    status: migrated.status === "running" ? "paused" : migrated.status,
     queue: normalizedQueue,
     currentItemId,
-    errorMessage:
-      typeof persisted.errorMessage === "string"
-        ? persisted.errorMessage
-        : null,
+    errorMessage: migrated.errorMessage,
   };
 }
 

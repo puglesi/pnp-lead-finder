@@ -21,6 +21,7 @@ export interface EmailDomainCheckResult {
   exists: boolean;
   hasMxRecords: boolean;
   reason: EmailDomainCheckReason | null;
+  errorMessage?: string;
 }
 
 export interface EmailValidationResult {
@@ -32,6 +33,7 @@ export interface EmailValidationResult {
   isRoleBasedEmail: boolean;
   provider: EmailValidationProviderId;
   validatedAt: string;
+  errorMessage?: string;
 }
 
 export interface LeadEmailValidationUpdate {

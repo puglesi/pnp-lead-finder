@@ -8,9 +8,12 @@ import {
   claimNextAgentTwoItem,
   completeAgentTwoItem,
   failAgentTwoItem,
+  getAgentTwoEligibleLeadCount,
+  getAgentTwoStats,
   normalizeAgentTwoSnapshot,
   parseAgentTwoLoadQuantity,
   pauseAgentTwo,
+  queueItemToLeadUpdate,
   resumeAgentTwo,
   startAgentTwo,
   stopAgentTwo,
@@ -19,7 +22,7 @@ import {
 const now = "2026-07-26T10:00:00.000Z";
 const later = "2026-07-26T10:01:00.000Z";
 
-function lead(id, email) {
+function lead(id, email, validation = {}) {
   return {
     id,
     company: "Company " + id,
@@ -29,6 +32,7 @@ function lead(id, email) {
     address: "London",
     category: "Test",
     aiScore: 0,
+    ...validation,
   };
 }
 
@@ -289,4 +293,178 @@ test("quantidade zero, negativa, decimal ou inválida é rejeitada", () => {
     quantity: 10,
     error: null,
   });
+});
+
+
+function completedLead(id, email) {
+  return lead(id, email, {
+    emailValidationStatus: "unknown",
+    emailValidationReason: "mailbox_not_verified",
+    normalizedEmail: email.toLowerCase(),
+    emailValidatedAt: later,
+    emailValidationProvider: "local_dns",
+    emailDomain: email.split("@")[1],
+    hasMxRecords: true,
+    isRoleBasedEmail: false,
+  });
+}
+
+function queueWithCanonicalEmails(count) {
+  return {
+    ...INITIAL_AGENT_TWO_SNAPSHOT,
+    queue: buildAgentTwoQueue(
+      Array.from({ length: count }, (_, index) =>
+        lead("canonical-" + index, "shared-" + index + "@example.test")
+      ),
+      now
+    ),
+  };
+}
+
+test("amostra 20 atravessa os primeiros 20 duplicados até obter 20 pending únicos", () => {
+  const duplicates = Array.from({ length: 20 }, (_, index) =>
+    lead("duplicate-" + index, "SHARED-" + index + "@example.test")
+  );
+  const unique = Array.from({ length: 20 }, (_, index) =>
+    lead("unique-" + index, "unique-" + index + "@example.test")
+  );
+  const result = appendAgentTwoQueue(
+    queueWithCanonicalEmails(20),
+    [...duplicates, ...unique],
+    20,
+    later
+  );
+  assert.equal(result.addedPendingCount, 20);
+  assert.equal(result.addedDuplicateCount, 20);
+  assert.equal(result.addedItems.length, 40);
+});
+
+test("duplicados não consomem a quantidade solicitada e continuam registrados", () => {
+  const result = appendAgentTwoQueue(
+    queueWithCanonicalEmails(2),
+    [
+      lead("dup-one", "shared-0@example.test"),
+      lead("dup-two", "shared-1@example.test"),
+      lead("new-one", "new-one@example.test"),
+      lead("new-two", "new-two@example.test"),
+    ],
+    2,
+    later
+  );
+  const duplicates = result.addedItems.filter((item) => item.status === "duplicate");
+  assert.equal(result.addedPendingCount, 2);
+  assert.equal(duplicates.length, 2);
+  assert.equal(duplicates[0].reason, "duplicate_of:canonical-0");
+  assert.equal(queueItemToLeadUpdate(duplicates[0]).emailValidationStatus, "duplicate");
+});
+
+test("normalizedEmail repetido na mesma carga entra uma vez como pending", () => {
+  const result = appendAgentTwoQueue(
+    INITIAL_AGENT_TWO_SNAPSHOT,
+    [
+      lead("first", "Person@Example.test"),
+      lead("repeat", " person@example.test "),
+      lead("other", "other@example.test"),
+    ],
+    2,
+    now
+  );
+  assert.equal(result.addedPendingCount, 2);
+  assert.equal(
+    result.addedItems.filter(
+      (item) => item.normalizedEmail === "person@example.test" && item.status === "pending"
+    ).length,
+    1
+  );
+  assert.equal(result.addedDuplicateCount, 1);
+});
+
+test("normalizedEmail existente na fila nunca entra novamente como pending", () => {
+  const result = appendAgentTwoQueue(
+    queueWithCanonicalEmails(1),
+    [
+      lead("repeat", "shared-0@example.test"),
+      lead("fresh", "fresh@example.test"),
+    ],
+    1,
+    later
+  );
+  assert.equal(result.addedItems[0].status, "duplicate");
+  assert.equal(result.addedItems[1].status, "pending");
+  assert.equal(result.addedPendingCount, 1);
+});
+
+test("amostra 20 adiciona somente 7 pending quando existem 7 únicos", () => {
+  const leads = Array.from({ length: 7 }, (_, index) =>
+    lead("only-" + index, "only-" + index + "@example.test")
+  );
+  const result = appendAgentTwoQueue(
+    INITIAL_AGENT_TWO_SNAPSHOT,
+    leads,
+    20,
+    now
+  );
+  assert.equal(result.eligibleCount, 7);
+  assert.equal(result.addedPendingCount, 7);
+  assert.equal(result.snapshot.queue.length, 7);
+});
+
+test("carregar amostra única não inicia runner e preserva resultados anteriores", () => {
+  const previous = {
+    ...buildAgentTwoQueue([lead("previous", "previous@example.test")], now)[0],
+    status: "unknown",
+    reason: "mailbox_not_verified",
+    completedAt: later,
+  };
+  const initial = {
+    ...INITIAL_AGENT_TWO_SNAPSHOT,
+    status: "completed",
+    queue: [previous],
+  };
+  const result = appendAgentTwoQueue(
+    initial,
+    [lead("new", "new@example.test")],
+    1,
+    later
+  );
+  assert.equal(result.snapshot.status, "idle");
+  assert.equal(result.snapshot.currentItemId, null);
+  assert.equal(result.snapshot.queue[0], previous);
+  assert.equal(result.snapshot.queue[0].reason, "mailbox_not_verified");
+});
+
+test("contadores permanecem consistentes após amostra com duplicados", () => {
+  const result = appendAgentTwoQueue(
+    queueWithCanonicalEmails(1),
+    [
+      lead("duplicate", "shared-0@example.test"),
+      lead("unique", "unique@example.test"),
+    ],
+    1,
+    later
+  );
+  const stats = getAgentTwoStats(result.snapshot.queue);
+  const counted =
+    stats.pending +
+    stats.valid +
+    stats.invalid +
+    stats.duplicate +
+    stats.risky +
+    stats.unknown +
+    stats.noEmail;
+  assert.equal(counted, stats.total);
+  assert.equal(stats.duplicate, 1);
+});
+
+test("texto de elegíveis usa somente e-mails únicos realmente validáveis", () => {
+  const existing = queueWithCanonicalEmails(1).queue;
+  const leads = [
+    lead("existing-duplicate", "shared-0@example.test"),
+    lead("unique-one", "unique@example.test"),
+    lead("same-operation-duplicate", " UNIQUE@example.test "),
+    completedLead("validated", "validated@example.test"),
+    lead("validated-duplicate", "VALIDATED@example.test"),
+    lead("unique-two", "second@example.test"),
+  ];
+  assert.equal(getAgentTwoEligibleLeadCount(leads, existing), 2);
 });

@@ -100,7 +100,7 @@ export async function validateEmailLocally(
     domainResult = await checkDomain(domain);
   } catch {
     return {
-      status: "invalid",
+      status: "unknown",
       reason: "dns_error",
       normalizedEmail,
       domain,
@@ -108,12 +108,13 @@ export async function validateEmailLocally(
       isRoleBasedEmail: roleBased,
       provider: "local_dns",
       validatedAt,
+      errorMessage: "Falha técnica na resolução DNS. Tente novamente.",
     };
   }
 
   if (domainResult.reason === "dns_error") {
     return {
-      status: "invalid",
+      status: "unknown",
       reason: "dns_error",
       normalizedEmail,
       domain,
@@ -121,6 +122,9 @@ export async function validateEmailLocally(
       isRoleBasedEmail: roleBased,
       provider: "local_dns",
       validatedAt,
+      errorMessage:
+        domainResult.errorMessage ??
+        "Falha técnica na resolução DNS. Tente novamente.",
     };
   }
 

@@ -2,7 +2,10 @@
 
 import { Check, Globe, Layers } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { useSettingsStore } from "@/store/settings-store";
+import {
+  AUTONOMOUS_24H_DEFAULTS,
+  useSettingsStore,
+} from "@/store/settings-store";
 import {
   AUTONOMOUS_SOURCE_CATALOG,
   getSourceShortLabel,
@@ -33,11 +36,34 @@ const STRATEGIES: {
   },
 ];
 
-export function AutonomousSourcesPicker({ compact }: { compact?: boolean }) {
+export function AutonomousSourcesPicker({
+  compact,
+  hydrated = true,
+}: {
+  compact?: boolean;
+  hydrated?: boolean;
+}) {
   const settings = useSettingsStore();
-  const activeSources = settings.getActiveAutonomousSources();
+  const selectedSources = hydrated
+    ? settings.autonomousSources
+    : [...AUTONOMOUS_24H_DEFAULTS.autonomousSources];
+  const sourceStrategy = hydrated
+    ? settings.autonomousSourceStrategy
+    : AUTONOMOUS_24H_DEFAULTS.autonomousSourceStrategy;
+  const singleSource = hydrated
+    ? settings.autonomousSingleSource
+    : AUTONOMOUS_24H_DEFAULTS.autonomousSingleSource;
+  const enrichWebsites = hydrated
+    ? settings.autonomousEnrichWebsites
+    : AUTONOMOUS_24H_DEFAULTS.autonomousEnrichWebsites;
+  const activeSources = hydrated
+    ? settings.getActiveAutonomousSources()
+    : [...AUTONOMOUS_24H_DEFAULTS.autonomousSources];
+  const searchProfile = hydrated
+    ? settings.searchProfile
+    : AUTONOMOUS_24H_DEFAULTS.searchProfile;
 
-  if (settings.searchProfile !== "autonomous-24h") return null;
+  if (searchProfile !== "autonomous-24h") return null;
 
   return (
     <div
@@ -65,7 +91,7 @@ export function AutonomousSourcesPicker({ compact }: { compact?: boolean }) {
 
       <div className="flex flex-wrap gap-2">
         {AUTONOMOUS_SOURCE_CATALOG.map((source) => {
-          const checked = settings.autonomousSources.includes(source.id);
+          const checked = selectedSources.includes(source.id);
           return (
             <button
               key={source.id}
@@ -108,7 +134,7 @@ export function AutonomousSourcesPicker({ compact }: { compact?: boolean }) {
         </p>
         <div className="grid gap-2 sm:grid-cols-3">
           {STRATEGIES.map((strategy) => {
-            const active = settings.autonomousSourceStrategy === strategy.id;
+            const active = sourceStrategy === strategy.id;
             return (
               <button
                 key={strategy.id}
@@ -135,16 +161,16 @@ export function AutonomousSourcesPicker({ compact }: { compact?: boolean }) {
         </div>
       </div>
 
-      {settings.autonomousSourceStrategy === "single" && (
+      {sourceStrategy === "single" && (
         <div className="flex flex-wrap gap-2">
-          {settings.autonomousSources.map((id) => (
+          {selectedSources.map((id) => (
             <button
               key={id}
               type="button"
               onClick={() => settings.setAutonomousSingleSource(id)}
               className={cn(
                 "rounded-full border px-3 py-1 text-xs transition-all",
-                settings.autonomousSingleSource === id
+                singleSource === id
                   ? "border-indigo-400/60 bg-indigo-500/20 text-indigo-100"
                   : "border-border/60 text-muted-foreground"
               )}
@@ -166,7 +192,7 @@ export function AutonomousSourcesPicker({ compact }: { compact?: boolean }) {
             {getSourceShortLabel(id)}
           </Badge>
         ))}
-        {settings.autonomousEnrichWebsites && (
+        {enrichWebsites && (
           <Badge variant="outline" className="text-[10px]">
             + enrich sites
           </Badge>

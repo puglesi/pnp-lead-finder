@@ -26,6 +26,7 @@ import {
   getAgentTwoEligibleLeadCount,
   getAgentTwoStats,
   parseAgentTwoLoadQuantity,
+  type AgentTwoQueueAppendResult,
   type AgentTwoQueueItem,
 } from "@/lib/agent-two-queue";
 import {
@@ -114,6 +115,8 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
   const pause = useAgentTwoStore((state) => state.pause);
   const resume = useAgentTwoStore((state) => state.resume);
   const stop = useAgentTwoStore((state) => state.stop);
+  const retryItem = useAgentTwoStore((state) => state.retryItem);
+  const retryDnsErrors = useAgentTwoStore((state) => state.retryDnsErrors);
   const { runQueue, isExecutionActive } = useAgentTwoRunner();
   const [loadQuantity, setLoadQuantity] = useState("10");
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -132,13 +135,19 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
     null;
   const isActive = status === "running" || status === "paused";
   const hasPending = queue.some((item) => item.status === "pending");
+  const dnsErrorCount = queue.filter((item) => item.reason === "dns_error").length;
 
-  function reportAddedItems(addedCount: number) {
+  function reportAddedItems(result: AgentTwoQueueAppendResult) {
     persistImmediateAgentTwoResults();
+    if (result.addedItems.length === 0) {
+      toast.success("Nenhum novo item elegível foi adicionado.");
+      return;
+    }
     toast.success(
-      addedCount === 0
-        ? "Nenhum novo item elegível foi adicionado."
-        : addedCount + " item(ns) adicionado(s) à fila."
+      result.addedPendingCount +
+        " e-mail(s) adicionado(s) para validação e " +
+        result.addedDuplicateCount +
+        " duplicado(s) identificado(s)."
     );
   }
 
@@ -155,7 +164,7 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
     }
     setLoadError(null);
     const result = appendSample(leads, parsed.quantity);
-    reportAddedItems(result.addedItems.length);
+    reportAddedItems(result);
   }
 
   function handleLoadAll() {
@@ -174,7 +183,7 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
       toast("Carregamento cancelado; a fila não foi alterada.");
       return;
     }
-    reportAddedItems(result.addedItems.length);
+    reportAddedItems(result);
   }
 
   function handleRevalidateAll() {
@@ -205,6 +214,22 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
   function handleStop() {
     stop();
     toast("Validação interrompida; o progresso foi preservado.");
+  }
+
+  function handleRetry(item: AgentTwoQueueItem) {
+    if (retryItem(item.id)) {
+      toast.success(item.company + ": item preparado para nova tentativa.");
+    }
+  }
+
+  function handleRetryDnsErrors() {
+    const retriedCount = retryDnsErrors();
+    if (retriedCount > 0) {
+      toast.success(
+        retriedCount +
+          " item(ns) com erro DNS preparado(s). Use Start para tentar novamente."
+      );
+    }
   }
 
   return (
@@ -246,6 +271,14 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
               <RotateCcw className="size-4" />
               Revalidar todos
             </Button>
+            <Button
+              variant="outline"
+              onClick={handleRetryDnsErrors}
+              disabled={isActive || dnsErrorCount === 0}
+            >
+              <RotateCcw className="size-4" />
+              Tentar novamente erros DNS
+            </Button>
             <Button onClick={handleStart} disabled={!hasPending || isActive}>
               <Play className="size-4" />
               Start
@@ -285,7 +318,7 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
                   }}
                 />
                 <p className="text-xs text-muted-foreground">
-                  {eligibleCount.toLocaleString("pt-BR")} e-mail(s) pendente(s) elegível(is).
+                  {eligibleCount.toLocaleString("pt-BR")} e-mail(s) único(s) realmente validável(is).
                 </p>
               </div>
               <Button
@@ -363,7 +396,12 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
                 </thead>
                 <tbody className="divide-y divide-border">
                   {queue.map((item) => (
-                    <QueueRow key={item.id} item={item} />
+                    <QueueRow
+                      key={item.id}
+                      item={item}
+                      retryDisabled={isActive}
+                      onRetry={handleRetry}
+                    />
                   ))}
                 </tbody>
               </table>
@@ -375,16 +413,41 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
   );
 }
 
-function QueueRow({ item }: { item: AgentTwoQueueItem }) {
+function QueueRow({
+  item,
+  retryDisabled,
+  onRetry,
+}: {
+  item: AgentTwoQueueItem;
+  retryDisabled: boolean;
+  onRetry: (item: AgentTwoQueueItem) => void;
+}) {
   return (
     <tr className="bg-background/20 align-top">
       <td className="px-4 py-3 font-medium">{item.company}</td>
       <td className="px-4 py-3 text-muted-foreground">{item.email || "—"}</td>
       <td className="px-4 py-3"><ValidationBadge status={item.status} /></td>
       <td className="px-4 py-3">
-        <span className={item.errorMessage ? "text-red-400" : "text-muted-foreground"}>
-          {item.errorMessage ?? item.reason}
-        </span>
+        <div className="space-y-2">
+          <span
+            className={
+              item.errorMessage ? "text-red-400" : "text-muted-foreground"
+            }
+          >
+            {item.errorMessage ?? item.reason}
+          </span>
+          {item.errorMessage && item.reason === "validation_error" && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={retryDisabled}
+              onClick={() => onRetry(item)}
+            >
+              <RotateCcw className="size-3.5" />
+              Tentar novamente
+            </Button>
+          )}
+        </div>
       </td>
       <td className="px-4 py-3 text-muted-foreground">{formatValidationDate(item.completedAt)}</td>
     </tr>

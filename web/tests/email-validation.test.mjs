@@ -98,3 +98,71 @@ test("endereço role-based é sinalizado sem virar inválido", async () => {
   assert.equal(result.status, "unknown");
   assert.equal(result.reason, "mailbox_not_verified");
 });
+
+
+test("NXDOMAIN resulta em invalid/domain_not_found", async () => {
+  const resolver = {
+    async resolveMx() {
+      throw dnsError("NXDOMAIN");
+    },
+  };
+  const domain = await checkEmailDomain("missing.example", resolver, 100);
+  assert.equal(domain.reason, "domain_not_found");
+  const result = await validateEmailLocally("person@missing.example", async () => domain);
+  assert.equal(result.status, "invalid");
+  assert.equal(result.reason, "domain_not_found");
+});
+
+test("timeout resulta em unknown/dns_error", async () => {
+  const resolver = {
+    resolveMx() {
+      return new Promise(() => {});
+    },
+  };
+  const domain = await checkEmailDomain("slow.example", resolver, 5);
+  const result = await validateEmailLocally("person@slow.example", async () => domain);
+  assert.equal(result.status, "unknown");
+  assert.equal(result.reason, "dns_error");
+  assert.match(result.errorMessage, /Tempo limite/);
+});
+
+test("EAI_AGAIN resulta em unknown/dns_error", async () => {
+  const resolver = {
+    async resolveMx() {
+      throw dnsError("EAI_AGAIN");
+    },
+  };
+  const domain = await checkEmailDomain("temporary.example", resolver, 100);
+  const result = await validateEmailLocally("person@temporary.example", async () => domain);
+  assert.equal(result.status, "unknown");
+  assert.equal(result.reason, "dns_error");
+  assert.match(result.errorMessage, /temporariamente indisponível/);
+});
+
+test("SERVFAIL resulta em unknown/dns_error", async () => {
+  const resolver = {
+    async resolveMx() {
+      throw dnsError("SERVFAIL");
+    },
+  };
+  const domain = await checkEmailDomain("servfail.example", resolver, 100);
+  const result = await validateEmailLocally("person@servfail.example", async () => domain);
+  assert.equal(result.status, "unknown");
+  assert.equal(result.reason, "dns_error");
+  assert.match(result.errorMessage, /não conseguiu concluir/);
+});
+
+test("ECONNRESET e erro inesperado permanecem recuperáveis", async () => {
+  for (const failure of [dnsError("ECONNRESET"), new Error("private resolver detail")]) {
+    const resolver = {
+      async resolveMx() {
+        throw failure;
+      },
+    };
+    const domain = await checkEmailDomain("transient.example", resolver, 100);
+    const result = await validateEmailLocally("person@transient.example", async () => domain);
+    assert.equal(result.status, "unknown");
+    assert.equal(result.reason, "dns_error");
+    assert.doesNotMatch(result.errorMessage, /private resolver detail/);
+  }
+});
