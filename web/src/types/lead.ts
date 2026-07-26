@@ -1,3 +1,5 @@
+import type { EmailValidationProviderId, EmailValidationStatus } from "./email-validation";
+
 export interface Lead {
   id: string;
   company: string;
@@ -8,6 +10,14 @@ export interface Lead {
   category: string;
   aiScore: number;
   savedAt?: string;
+  emailValidationStatus?: EmailValidationStatus;
+  emailValidationReason?: string;
+  normalizedEmail?: string;
+  emailValidatedAt?: string;
+  emailValidationProvider?: EmailValidationProviderId;
+  emailDomain?: string;
+  hasMxRecords?: boolean;
+  isRoleBasedEmail?: boolean;
 }
 
 export interface SearchRecord {

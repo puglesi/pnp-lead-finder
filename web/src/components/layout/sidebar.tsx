@@ -13,6 +13,7 @@ import {
   Building2,
   History,
   Pickaxe,
+  ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLeadStore } from "@/store/lead-store";
@@ -25,6 +26,7 @@ const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/busca", label: "Nova Busca", icon: Search },
   { href: "/agente-1", label: "Agente 1 — Garimpeiro", icon: Pickaxe },
+  { href: "/agente-2", label: "Agente 2 — Validador", icon: ShieldCheck },
   { href: "/historico", label: "Histórico de Buscas", icon: History },
   { href: "/leads", label: "Meus Leads", icon: Users },
   { href: "/campanhas", label: "Campanhas", icon: Megaphone },

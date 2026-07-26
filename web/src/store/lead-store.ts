@@ -14,6 +14,7 @@ import { RECENT_SEARCHES_LIMIT } from "@/lib/mode-labels";
 import { exportLeadsToCSV } from "@/lib/csv-export";
 import { leadFingerprint, type Lead, type SearchRecord } from "@/types/lead";
 import type { BulkSearchProgress, SearchApiResponse } from "@/types/search";
+import type { LeadEmailValidationUpdate } from "@/types/email-validation";
 
 const FULL_HISTORY_LIMIT = 200;
 
@@ -71,6 +72,10 @@ interface LeadStore {
   clearSelection: () => void;
   getSelectedLeads: () => Lead[];
   saveLead: (lead: Lead) => boolean;
+  updateLeadEmailValidation: (
+    leadId: string,
+    validation: LeadEmailValidationUpdate
+  ) => boolean;
   removeSavedLead: (id: string) => void;
   clearAllSavedLeads: () => void;
   isLeadSaved: (lead: Lead) => boolean;
@@ -633,6 +638,16 @@ export const useLeadStore = create<LeadStore>()(
           savedAt: new Date().toISOString(),
         };
         set((state) => ({ savedLeads: [saved, ...state.savedLeads] }));
+        return true;
+      },
+
+      updateLeadEmailValidation: (leadId, validation) => {
+        if (!get().savedLeads.some((lead) => lead.id === leadId)) return false;
+        set((state) => ({
+          savedLeads: state.savedLeads.map((lead) =>
+            lead.id === leadId ? { ...lead, ...validation } : lead
+          ),
+        }));
         return true;
       },
 
