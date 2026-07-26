@@ -12,6 +12,7 @@ import {
   ChevronRight,
   Building2,
   History,
+  Pickaxe,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLeadStore } from "@/store/lead-store";
@@ -23,6 +24,7 @@ import { Separator } from "@/components/ui/separator";
 const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/busca", label: "Nova Busca", icon: Search },
+  { href: "/agente-1", label: "Agente 1 — Garimpeiro", icon: Pickaxe },
   { href: "/historico", label: "Histórico de Buscas", icon: History },
   { href: "/leads", label: "Meus Leads", icon: Users },
   { href: "/campanhas", label: "Campanhas", icon: Megaphone },
