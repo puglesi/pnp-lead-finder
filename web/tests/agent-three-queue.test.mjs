@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   NO_SENDING_PROVIDER_MESSAGE,
   claimNextAgentThreeItem,
   completeAgentThreeItem,
+  configureAgentThreeIntervals,
+  configureAgentThreeLimit,
   createInitialAgentThreeSnapshot,
   failAgentThreeItem,
+  finishAgentThree,
   getAgentThreeCampaignDeliverySummary,
   getAgentThreeMetrics,
   hasEmailReceivedCampaign,
@@ -19,6 +23,10 @@ import {
   startAgentThree,
   stopAgentThree,
 } from "../src/lib/agent-three-queue.ts";
+import {
+  selectAgentThreeIntervalSeconds,
+  waitForAgentThreeInterval,
+} from "../src/lib/agent-three-execution.ts";
 
 const now = "2026-07-28T10:00:00.000Z";
 const later = "2026-07-28T10:01:00.000Z";
@@ -80,6 +88,60 @@ function claimReady(snapshot, profileId = "panek-puglesi") {
   const claimed = claimNextAgentThreeItem(started.snapshot, profileId, later);
   assert.ok(claimed.item);
   return claimed;
+}
+
+function numberedLeads(count, prefix) {
+  return Array.from({ length: count }, (_, index) =>
+    lead(
+      prefix + "-" + index,
+      prefix + "-" + index + "@example.test"
+    )
+  );
+}
+
+function profileSnapshot(
+  snapshot,
+  profileId,
+  campaignId,
+  count,
+  prefix
+) {
+  const selected = selectAgentThreeCampaign(
+    snapshot,
+    profileId,
+    campaignId,
+    now
+  );
+  return load(
+    selected,
+    profileId,
+    campaignId,
+    numberedLeads(count, prefix)
+  ).snapshot;
+}
+
+function drainRunningQueue(snapshot, profileId) {
+  let state = snapshot;
+  while (state.operations[profileId].status === "running") {
+    const claimed = claimNextAgentThreeItem(state, profileId, later);
+    if (!claimed.item) {
+      state = finishAgentThree(state, profileId, finalTime);
+      break;
+    }
+    state = completeAgentThreeItem(
+      claimed.snapshot,
+      profileId,
+      claimed.item.id,
+      finalTime
+    );
+  }
+  return state;
+}
+
+function runConfiguredQueue(snapshot, profileId) {
+  const started = startAgentThree(snapshot, profileId, true, later);
+  assert.equal(started.started, true);
+  return drainRunningQueue(started.snapshot, profileId);
 }
 
 test("1. filas P&P e Modeclean são independentes", () => {
@@ -399,4 +461,496 @@ test("20. fluxo puro não chama internet nem envia e-mail", () => {
   assert.equal(stopped.operations["panek-puglesi"].status, "stopped");
   assert.equal(stopped.operations["panek-puglesi"].queue[0].queueStatus, "ready");
   assert.equal(stopped.operations["panek-puglesi"].sentIndex.length, 0);
+});
+
+test("limites 1. aceita limite numérico personalizado acima de 100", () => {
+  const loaded = profileSnapshot(
+    createInitialAgentThreeSnapshot(),
+    "panek-puglesi",
+    "campaign-custom-limit",
+    130,
+    "custom"
+  );
+  const configured = configureAgentThreeLimit(
+    loaded,
+    "panek-puglesi",
+    125,
+    false,
+    later
+  );
+  const finished = runConfiguredQueue(configured, "panek-puglesi");
+  const operation = finished.operations["panek-puglesi"];
+  assert.equal(operation.numericLimit, 125);
+  assert.equal(operation.processedCount, 125);
+  assert.equal(operation.queue.filter((item) => item.queueStatus === "sent").length, 125);
+  assert.equal(operation.queue.filter((item) => item.queueStatus === "ready").length, 5);
+});
+
+test("limites 2. P&P ilimitado e Modeclean limitado", () => {
+  let snapshot = profileSnapshot(
+    createInitialAgentThreeSnapshot(),
+    "panek-puglesi",
+    "campaign-pnp-unlimited",
+    4,
+    "pnp-unlimited"
+  );
+  snapshot = profileSnapshot(
+    snapshot,
+    "modeclean",
+    "campaign-modeclean-limited",
+    4,
+    "modeclean-limited"
+  );
+  snapshot = configureAgentThreeLimit(
+    snapshot,
+    "panek-puglesi",
+    2,
+    true,
+    later
+  );
+  snapshot = configureAgentThreeLimit(
+    snapshot,
+    "modeclean",
+    2,
+    false,
+    later
+  );
+  snapshot = runConfiguredQueue(snapshot, "panek-puglesi");
+  snapshot = runConfiguredQueue(snapshot, "modeclean");
+  assert.equal(snapshot.operations["panek-puglesi"].sentIndex.length, 4);
+  assert.equal(snapshot.operations.modeclean.sentIndex.length, 2);
+  assert.equal(snapshot.operations["panek-puglesi"].untilQueueEnds, true);
+  assert.equal(snapshot.operations.modeclean.untilQueueEnds, false);
+});
+
+test("limites 3. P&P limitado e Modeclean ilimitado", () => {
+  let snapshot = profileSnapshot(
+    createInitialAgentThreeSnapshot(),
+    "panek-puglesi",
+    "campaign-pnp-limited",
+    4,
+    "pnp-limited"
+  );
+  snapshot = profileSnapshot(
+    snapshot,
+    "modeclean",
+    "campaign-modeclean-unlimited",
+    4,
+    "modeclean-unlimited"
+  );
+  snapshot = configureAgentThreeLimit(
+    snapshot,
+    "panek-puglesi",
+    2,
+    false,
+    later
+  );
+  snapshot = configureAgentThreeLimit(
+    snapshot,
+    "modeclean",
+    2,
+    true,
+    later
+  );
+  snapshot = runConfiguredQueue(snapshot, "panek-puglesi");
+  snapshot = runConfiguredQueue(snapshot, "modeclean");
+  assert.equal(snapshot.operations["panek-puglesi"].sentIndex.length, 2);
+  assert.equal(snapshot.operations.modeclean.sentIndex.length, 4);
+  assert.equal(snapshot.operations["panek-puglesi"].untilQueueEnds, false);
+  assert.equal(snapshot.operations.modeclean.untilQueueEnds, true);
+});
+
+test("limites 4. ambas ilimitadas processam 500 itens cada", () => {
+  let snapshot = profileSnapshot(
+    createInitialAgentThreeSnapshot(),
+    "panek-puglesi",
+    "campaign-pnp-500",
+    500,
+    "pnp-500"
+  );
+  snapshot = profileSnapshot(
+    snapshot,
+    "modeclean",
+    "campaign-modeclean-500",
+    500,
+    "modeclean-500"
+  );
+  snapshot = configureAgentThreeLimit(
+    snapshot,
+    "panek-puglesi",
+    1,
+    true,
+    later
+  );
+  snapshot = configureAgentThreeLimit(
+    snapshot,
+    "modeclean",
+    1,
+    true,
+    later
+  );
+  snapshot = runConfiguredQueue(snapshot, "panek-puglesi");
+  snapshot = runConfiguredQueue(snapshot, "modeclean");
+  const pnpSent = snapshot.operations["panek-puglesi"].sentIndex.length;
+  const modecleanSent = snapshot.operations.modeclean.sentIndex.length;
+  assert.equal(pnpSent, 500);
+  assert.equal(modecleanSent, 500);
+  assert.equal(pnpSent + modecleanSent, 1_000);
+});
+
+test("limites 5. modo ilimitado termina quando a fila acaba", () => {
+  const loaded = profileSnapshot(
+    createInitialAgentThreeSnapshot(),
+    "panek-puglesi",
+    "campaign-until-end",
+    3,
+    "until-end"
+  );
+  const configured = configureAgentThreeLimit(
+    loaded,
+    "panek-puglesi",
+    1,
+    true,
+    later
+  );
+  const finished = runConfiguredQueue(configured, "panek-puglesi");
+  const operation = finished.operations["panek-puglesi"];
+  assert.equal(operation.status, "completed");
+  assert.equal(operation.processedCount, 3);
+  assert.equal(operation.queue.every((item) => item.queueStatus === "sent"), true);
+});
+
+test("limites 6. pausa e retomada preservam o modo ilimitado", () => {
+  const loaded = profileSnapshot(
+    createInitialAgentThreeSnapshot(),
+    "panek-puglesi",
+    "campaign-pause-unlimited",
+    3,
+    "pause-unlimited"
+  );
+  const configured = configureAgentThreeLimit(
+    loaded,
+    "panek-puglesi",
+    1,
+    true,
+    later
+  );
+  const started = startAgentThree(configured, "panek-puglesi", true, later);
+  const first = claimNextAgentThreeItem(
+    started.snapshot,
+    "panek-puglesi",
+    later
+  );
+  const completed = completeAgentThreeItem(
+    first.snapshot,
+    "panek-puglesi",
+    first.item.id,
+    finalTime
+  );
+  const paused = pauseAgentThree(
+    completed,
+    "panek-puglesi",
+    finalTime
+  );
+  const restored = normalizeAgentThreeSnapshot(structuredClone(paused));
+  const resumed = resumeAgentThree(
+    restored,
+    "panek-puglesi",
+    true,
+    finalTime
+  );
+  assert.equal(paused.operations["panek-puglesi"].untilQueueEnds, true);
+  assert.equal(paused.operations["panek-puglesi"].processedCount, 1);
+  assert.equal(resumed.snapshot.operations["panek-puglesi"].untilQueueEnds, true);
+  assert.equal(resumed.snapshot.operations["panek-puglesi"].processedCount, 1);
+  const finished = drainRunningQueue(resumed.snapshot, "panek-puglesi");
+  assert.equal(finished.operations["panek-puglesi"].processedCount, 3);
+  assert.equal(finished.operations["panek-puglesi"].status, "completed");
+});
+
+test("limites 7. limite e contador de uma operação não afetam a outra", () => {
+  let snapshot = profileSnapshot(
+    createInitialAgentThreeSnapshot(),
+    "panek-puglesi",
+    "campaign-independent-pnp",
+    3,
+    "independent-pnp"
+  );
+  snapshot = profileSnapshot(
+    snapshot,
+    "modeclean",
+    "campaign-independent-modeclean",
+    3,
+    "independent-modeclean"
+  );
+  snapshot = configureAgentThreeLimit(
+    snapshot,
+    "panek-puglesi",
+    2,
+    false,
+    later
+  );
+  snapshot = configureAgentThreeLimit(
+    snapshot,
+    "modeclean",
+    7,
+    true,
+    later
+  );
+  snapshot = normalizeAgentThreeSnapshot(structuredClone(snapshot));
+  const pnpStarted = startAgentThree(
+    snapshot,
+    "panek-puglesi",
+    true,
+    later
+  );
+  const pnpClaimed = claimNextAgentThreeItem(
+    pnpStarted.snapshot,
+    "panek-puglesi",
+    later
+  );
+  assert.equal(pnpClaimed.snapshot.operations["panek-puglesi"].processedCount, 1);
+  assert.equal(pnpClaimed.snapshot.operations.modeclean.processedCount, 0);
+  assert.equal(pnpClaimed.snapshot.operations["panek-puglesi"].numericLimit, 2);
+  assert.equal(pnpClaimed.snapshot.operations.modeclean.numericLimit, 7);
+  assert.equal(pnpClaimed.snapshot.operations["panek-puglesi"].untilQueueEnds, false);
+  assert.equal(pnpClaimed.snapshot.operations.modeclean.untilQueueEnds, true);
+});
+
+test("intervalos 1. mínimo e máximo persistem separadamente", () => {
+  let snapshot = configureAgentThreeIntervals(
+    createInitialAgentThreeSnapshot(),
+    "panek-puglesi",
+    2,
+    8,
+    now
+  );
+  snapshot = configureAgentThreeIntervals(
+    snapshot,
+    "modeclean",
+    10,
+    20,
+    now
+  );
+  const restored = normalizeAgentThreeSnapshot(structuredClone(snapshot));
+  assert.equal(restored.operations["panek-puglesi"].minIntervalSeconds, 2);
+  assert.equal(restored.operations["panek-puglesi"].maxIntervalSeconds, 8);
+  assert.equal(restored.operations.modeclean.minIntervalSeconds, 10);
+  assert.equal(restored.operations.modeclean.maxIntervalSeconds, 20);
+});
+
+test("intervalos 2. valor aleatório permanece dentro da faixa", () => {
+  assert.equal(selectAgentThreeIntervalSeconds(2, 6, () => 0), 2);
+  assert.equal(selectAgentThreeIntervalSeconds(2, 6, () => 0.5), 4);
+  assert.equal(selectAgentThreeIntervalSeconds(2, 6, () => 1), 6);
+});
+
+test("intervalos 3. máximo menor que mínimo é rejeitado ou corrigido", () => {
+  const configured = configureAgentThreeIntervals(
+    createInitialAgentThreeSnapshot(),
+    "panek-puglesi",
+    5,
+    10,
+    now
+  );
+  const rejected = configureAgentThreeIntervals(
+    configured,
+    "panek-puglesi",
+    5,
+    4,
+    later
+  );
+  assert.equal(rejected, configured);
+
+  const corrupted = structuredClone(configured);
+  corrupted.operations["panek-puglesi"].maxIntervalSeconds = 4;
+  const corrected = normalizeAgentThreeSnapshot(corrupted);
+  assert.equal(corrected.operations["panek-puglesi"].minIntervalSeconds, 5);
+  assert.equal(corrected.operations["panek-puglesi"].maxIntervalSeconds, 5);
+});
+
+function createAbortableDelay() {
+  let observedMilliseconds = null;
+  return {
+    get observedMilliseconds() {
+      return observedMilliseconds;
+    },
+    delay(milliseconds, signal) {
+      observedMilliseconds = milliseconds;
+      return new Promise((resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => reject(new Error("interrupted")),
+          { once: true }
+        );
+      });
+    },
+  };
+}
+
+test("intervalos 4. Pause interrompe a espera injetada", async () => {
+  let snapshot = readySnapshot();
+  snapshot = configureAgentThreeIntervals(
+    snapshot,
+    "panek-puglesi",
+    3,
+    7,
+    now
+  );
+  const started = startAgentThree(snapshot, "panek-puglesi", true, later);
+  const controller = new AbortController();
+  const controlledDelay = createAbortableDelay();
+  const waiting = waitForAgentThreeInterval(
+    started.snapshot.operations["panek-puglesi"],
+    { delay: controlledDelay.delay, random: () => 0.5 },
+    controller.signal
+  );
+  const paused = pauseAgentThree(
+    started.snapshot,
+    "panek-puglesi",
+    finalTime,
+    () => controller.abort()
+  );
+  const result = await waiting;
+  assert.equal(controlledDelay.observedMilliseconds, 5_000);
+  assert.equal(result.interrupted, true);
+  assert.equal(paused.operations["panek-puglesi"].status, "paused");
+});
+
+test("intervalos 5. Stop interrompe a espera injetada", async () => {
+  let snapshot = readySnapshot();
+  snapshot = configureAgentThreeIntervals(
+    snapshot,
+    "panek-puglesi",
+    4,
+    8,
+    now
+  );
+  const started = startAgentThree(snapshot, "panek-puglesi", true, later);
+  const controller = new AbortController();
+  const controlledDelay = createAbortableDelay();
+  const waiting = waitForAgentThreeInterval(
+    started.snapshot.operations["panek-puglesi"],
+    { delay: controlledDelay.delay, random: () => 0.25 },
+    controller.signal
+  );
+  const stopped = stopAgentThree(
+    started.snapshot,
+    "panek-puglesi",
+    finalTime,
+    () => controller.abort()
+  );
+  const result = await waiting;
+  assert.equal(controlledDelay.observedMilliseconds, 5_000);
+  assert.equal(result.interrupted, true);
+  assert.equal(stopped.operations["panek-puglesi"].status, "stopped");
+});
+
+test("intervalos 6. Start sem provedor não consome contadores", () => {
+  const snapshot = readySnapshot();
+  const before = snapshot.operations["panek-puglesi"];
+  const result = startAgentThree(
+    snapshot,
+    "panek-puglesi",
+    false,
+    later
+  );
+  const after = result.snapshot.operations["panek-puglesi"];
+  assert.equal(result.message, NO_SENDING_PROVIDER_MESSAGE);
+  assert.equal(after.processedCount, before.processedCount);
+  assert.equal(after.queue[0].attemptCount, before.queue[0].attemptCount);
+  assert.equal(after.queue[0].queueStatus, "ready");
+  assert.equal(after.sentIndex.length, 0);
+});
+
+test("intervalos 7. interface principal não mostra bloqueados ou ignorados", () => {
+  const source = readFileSync(
+    new URL(
+      "../src/components/agents/agent-three-sender.tsx",
+      import.meta.url
+    ),
+    "utf8"
+  );
+  assert.equal(source.includes('label="Bloqueados"'), false);
+  assert.equal(source.includes('label="Ignorados"'), false);
+});
+
+test("intervalos 8. configurações P&P e Modeclean continuam separadas", () => {
+  let snapshot = configureAgentThreeLimit(
+    createInitialAgentThreeSnapshot(),
+    "panek-puglesi",
+    25,
+    false,
+    now
+  );
+  snapshot = configureAgentThreeIntervals(
+    snapshot,
+    "panek-puglesi",
+    1,
+    3,
+    now
+  );
+  snapshot = configureAgentThreeLimit(
+    snapshot,
+    "modeclean",
+    75,
+    true,
+    now
+  );
+  snapshot = configureAgentThreeIntervals(
+    snapshot,
+    "modeclean",
+    9,
+    12,
+    now
+  );
+  assert.equal(snapshot.operations["panek-puglesi"].numericLimit, 25);
+  assert.equal(snapshot.operations["panek-puglesi"].untilQueueEnds, false);
+  assert.equal(snapshot.operations["panek-puglesi"].minIntervalSeconds, 1);
+  assert.equal(snapshot.operations["panek-puglesi"].maxIntervalSeconds, 3);
+  assert.equal(snapshot.operations.modeclean.numericLimit, 75);
+  assert.equal(snapshot.operations.modeclean.untilQueueEnds, true);
+  assert.equal(snapshot.operations.modeclean.minIntervalSeconds, 9);
+  assert.equal(snapshot.operations.modeclean.maxIntervalSeconds, 12);
+});
+
+test("intervalos 9. Até acabar a lista continua processando toda a fila", () => {
+  const loaded = profileSnapshot(
+    createInitialAgentThreeSnapshot(),
+    "panek-puglesi",
+    "campaign-unlimited-with-interval",
+    6,
+    "unlimited-with-interval"
+  );
+  let configured = configureAgentThreeLimit(
+    loaded,
+    "panek-puglesi",
+    1,
+    true,
+    later
+  );
+  configured = configureAgentThreeIntervals(
+    configured,
+    "panek-puglesi",
+    2,
+    4,
+    later
+  );
+  const finished = runConfiguredQueue(configured, "panek-puglesi");
+  assert.equal(finished.operations["panek-puglesi"].processedCount, 6);
+  assert.equal(finished.operations["panek-puglesi"].sentIndex.length, 6);
+  assert.equal(finished.operations["panek-puglesi"].status, "completed");
+});
+
+test("intervalos 10. migração do estado anterior continua válida", () => {
+  const previous = readySnapshot();
+  delete previous.operations["panek-puglesi"].minIntervalSeconds;
+  delete previous.operations["panek-puglesi"].maxIntervalSeconds;
+  const restored = normalizeAgentThreeSnapshot(previous);
+  const operation = restored.operations["panek-puglesi"];
+  assert.equal(operation.minIntervalSeconds, 0);
+  assert.equal(operation.maxIntervalSeconds, 0);
+  assert.equal(operation.numericLimit, 50);
+  assert.equal(operation.queue.length, 1);
+  assert.equal(operation.queue[0].queueStatus, "ready");
 });

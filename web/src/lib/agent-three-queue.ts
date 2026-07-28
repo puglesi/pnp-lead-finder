@@ -26,6 +26,8 @@ export type AgentThreeStatus =
 
 export type AgentThreeHistoryAction =
   | "campaign_selected"
+  | "limit_updated"
+  | "interval_updated"
   | "leads_loaded"
   | "started"
   | "start_blocked"
@@ -92,6 +94,11 @@ export interface AgentThreeOperationState {
   currentCampaignId: string | null;
   selectedLeadIds: string[];
   ignoredCount: number;
+  numericLimit: number;
+  untilQueueEnds: boolean;
+  processedCount: number;
+  minIntervalSeconds: number;
+  maxIntervalSeconds: number;
   senderConfig: AgentThreeSenderConfig;
   sentIndex: AgentThreeSentRecord[];
   history: AgentThreeHistoryEntry[];
@@ -134,6 +141,12 @@ export interface AgentThreeMetrics {
   failed: number;
   blocked: number;
   skipped: number;
+  numericLimit: number;
+  untilQueueEnds: boolean;
+  processedCount: number;
+  remainingCapacity: number | null;
+  removed: number;
+  invalidRemoved: number;
   currentCampaignId: string | null;
   currentSector: string | null;
   lastActivityAt: string | null;
@@ -187,6 +200,8 @@ const EMPTY_SENDER_CONFIG: AgentThreeSenderConfig = {
   replyTo: null,
 };
 
+export const DEFAULT_AGENT_THREE_NUMERIC_LIMIT = 50;
+
 function createInitialOperation(
   profileId: CampaignProfileId
 ): AgentThreeOperationState {
@@ -198,6 +213,11 @@ function createInitialOperation(
     currentCampaignId: null,
     selectedLeadIds: [],
     ignoredCount: 0,
+    numericLimit: DEFAULT_AGENT_THREE_NUMERIC_LIMIT,
+    untilQueueEnds: false,
+    processedCount: 0,
+    minIntervalSeconds: 0,
+    maxIntervalSeconds: 0,
     senderConfig: { ...EMPTY_SENDER_CONFIG },
     sentIndex: [],
     history: [],
@@ -310,6 +330,103 @@ export function selectAgentThreeCampaign(
     campaignId ? "Campanha selecionada." : "Campanha removida da seleção."
   );
   return updateOperation(snapshot, profileId, next);
+}
+
+export function configureAgentThreeLimit(
+  snapshot: AgentThreeSnapshot,
+  profileId: CampaignProfileId,
+  numericLimit: number,
+  untilQueueEnds: boolean,
+  occurredAt: string
+): AgentThreeSnapshot {
+  if (!Number.isInteger(numericLimit) || numericLimit < 1) return snapshot;
+  const operation = snapshot.operations[profileId];
+  if (operation.status === "running" || operation.status === "paused") {
+    return snapshot;
+  }
+  if (
+    operation.numericLimit === numericLimit &&
+    operation.untilQueueEnds === untilQueueEnds
+  ) {
+    return snapshot;
+  }
+  const detail = untilQueueEnds
+    ? "Limite alterado para Até acabar a lista."
+    : "Limite numérico alterado para " + numericLimit + ".";
+  return updateOperation(
+    snapshot,
+    profileId,
+    withHistory(
+      {
+        ...operation,
+        numericLimit,
+        untilQueueEnds,
+      },
+      "limit_updated",
+      occurredAt,
+      detail
+    )
+  );
+}
+
+export function getAgentThreeRemainingCapacity(
+  operation: AgentThreeOperationState
+): number | null {
+  return operation.untilQueueEnds
+    ? null
+    : Math.max(0, operation.numericLimit - operation.processedCount);
+}
+
+export function hasAgentThreeExecutionCapacity(
+  operation: AgentThreeOperationState
+): boolean {
+  const remainingCapacity = getAgentThreeRemainingCapacity(operation);
+  return remainingCapacity === null || remainingCapacity > 0;
+}
+
+export function configureAgentThreeIntervals(
+  snapshot: AgentThreeSnapshot,
+  profileId: CampaignProfileId,
+  minIntervalSeconds: number,
+  maxIntervalSeconds: number,
+  occurredAt: string
+): AgentThreeSnapshot {
+  if (
+    !Number.isFinite(minIntervalSeconds) ||
+    !Number.isFinite(maxIntervalSeconds) ||
+    minIntervalSeconds < 0 ||
+    maxIntervalSeconds < minIntervalSeconds
+  ) {
+    return snapshot;
+  }
+  const operation = snapshot.operations[profileId];
+  if (operation.status === "running" || operation.status === "paused") {
+    return snapshot;
+  }
+  if (
+    operation.minIntervalSeconds === minIntervalSeconds &&
+    operation.maxIntervalSeconds === maxIntervalSeconds
+  ) {
+    return snapshot;
+  }
+  return updateOperation(
+    snapshot,
+    profileId,
+    withHistory(
+      {
+        ...operation,
+        minIntervalSeconds,
+        maxIntervalSeconds,
+      },
+      "interval_updated",
+      occurredAt,
+      "Intervalo alterado para " +
+        minIntervalSeconds +
+        "–" +
+        maxIntervalSeconds +
+        " segundo(s)."
+    )
+  );
 }
 
 function classifyLead(lead: Lead): {
@@ -544,6 +661,7 @@ export function startAgentThree(
       ...operation,
       status: "running",
       currentItemId: null,
+      processedCount: 0,
       errorMessage: null,
     },
     "started",
@@ -560,10 +678,12 @@ export function startAgentThree(
 export function pauseAgentThree(
   snapshot: AgentThreeSnapshot,
   profileId: CampaignProfileId,
-  occurredAt: string
+  occurredAt: string,
+  interruptWait: () => void = () => {}
 ): AgentThreeSnapshot {
   const operation = snapshot.operations[profileId];
   if (operation.status !== "running") return snapshot;
+  interruptWait();
   return updateOperation(
     snapshot,
     profileId,
@@ -618,12 +738,14 @@ export function resumeAgentThree(
 export function stopAgentThree(
   snapshot: AgentThreeSnapshot,
   profileId: CampaignProfileId,
-  occurredAt: string
+  occurredAt: string,
+  interruptWait: () => void = () => {}
 ): AgentThreeSnapshot {
   const operation = snapshot.operations[profileId];
   if (operation.status !== "running" && operation.status !== "paused") {
     return snapshot;
   }
+  interruptWait();
   const next = withHistory(
     {
       ...operation,
@@ -651,7 +773,8 @@ export function claimNextAgentThreeItem(
   if (
     operation.status !== "running" ||
     operation.currentItemId !== null ||
-    operation.queue.some((item) => item.queueStatus === "sending")
+    operation.queue.some((item) => item.queueStatus === "sending") ||
+    !hasAgentThreeExecutionCapacity(operation)
   ) {
     return { snapshot, item: null };
   }
@@ -673,6 +796,7 @@ export function claimNextAgentThreeItem(
     snapshot: updateOperation(snapshot, profileId, {
       ...operation,
       currentItemId: claimed.id,
+      processedCount: operation.processedCount + 1,
       lastActivityAt: startedAt,
       queue: operation.queue.map((item) =>
         item.id === claimed.id ? claimed : item
@@ -847,12 +971,18 @@ export function finishAgentThree(
 ): AgentThreeSnapshot {
   const operation = snapshot.operations[profileId];
   if (operation.status !== "running") return snapshot;
-  const hasWork = operation.queue.some(
+  const hasSending = operation.queue.some(
     (item) =>
       item.campaignId === operation.currentCampaignId &&
-      (item.queueStatus === "ready" || item.queueStatus === "sending")
+      item.queueStatus === "sending"
   );
-  return hasWork
+  const hasReady = operation.queue.some(
+    (item) =>
+      item.campaignId === operation.currentCampaignId &&
+      item.queueStatus === "ready"
+  );
+  return hasSending ||
+    (hasReady && hasAgentThreeExecutionCapacity(operation))
     ? snapshot
     : updateOperation(snapshot, profileId, {
         ...operation,
@@ -942,6 +1072,15 @@ export function getAgentThreeMetrics(
           item.queueStatus === "pending" ||
           item.queueStatus === "sending")
     );
+  const blockedItems = operation.queue.filter(
+    (item) => item.queueStatus === "blocked"
+  );
+  const invalidRemoved = blockedItems.filter(
+    (item) =>
+      item.validationStatus === "invalid" ||
+      item.validationStatus === "duplicate" ||
+      item.validationStatus === "no_email"
+  ).length;
   return {
     total: operation.queue.length,
     sent: count("sent"),
@@ -950,6 +1089,13 @@ export function getAgentThreeMetrics(
     failed: count("failed"),
     blocked: count("blocked"),
     skipped: count("skipped") + operation.ignoredCount,
+    numericLimit: operation.numericLimit,
+    untilQueueEnds: operation.untilQueueEnds,
+    processedCount: operation.processedCount,
+    remainingCapacity: getAgentThreeRemainingCapacity(operation),
+    removed:
+      count("skipped") + blockedItems.length + operation.ignoredCount,
+    invalidRemoved,
     currentCampaignId: operation.currentCampaignId,
     currentSector: currentItem?.sector || null,
     lastActivityAt: operation.lastActivityAt,
@@ -1136,6 +1282,41 @@ function normalizeOperation(
       value.ignoredCount >= 0
         ? Math.floor(value.ignoredCount)
         : 0,
+    numericLimit:
+      typeof value.numericLimit === "number" &&
+      Number.isInteger(value.numericLimit) &&
+      value.numericLimit >= 1
+        ? value.numericLimit
+        : DEFAULT_AGENT_THREE_NUMERIC_LIMIT,
+    untilQueueEnds: value.untilQueueEnds === true,
+    processedCount:
+      typeof value.processedCount === "number" &&
+      Number.isFinite(value.processedCount) &&
+      value.processedCount >= 0
+        ? Math.floor(value.processedCount)
+        : 0,
+    minIntervalSeconds:
+      typeof value.minIntervalSeconds === "number" &&
+      Number.isFinite(value.minIntervalSeconds) &&
+      value.minIntervalSeconds >= 0
+        ? value.minIntervalSeconds
+        : 0,
+    maxIntervalSeconds:
+      typeof value.maxIntervalSeconds === "number" &&
+      Number.isFinite(value.maxIntervalSeconds) &&
+      value.maxIntervalSeconds >= 0 &&
+      value.maxIntervalSeconds >=
+        (typeof value.minIntervalSeconds === "number" &&
+        Number.isFinite(value.minIntervalSeconds) &&
+        value.minIntervalSeconds >= 0
+          ? value.minIntervalSeconds
+          : 0)
+        ? value.maxIntervalSeconds
+        : typeof value.minIntervalSeconds === "number" &&
+            Number.isFinite(value.minIntervalSeconds) &&
+            value.minIntervalSeconds >= 0
+          ? value.minIntervalSeconds
+          : 0,
     senderConfig: {
       providerId: nullableString(senderConfig.providerId),
       fromName: nullableString(senderConfig.fromName),

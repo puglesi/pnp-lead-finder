@@ -3,6 +3,8 @@ import { persist } from "zustand/middleware";
 import type { Lead } from "@/types/lead";
 import type { CampaignProfileId } from "@/types/campaign-profile";
 import {
+  configureAgentThreeIntervals,
+  configureAgentThreeLimit,
   createInitialAgentThreeSnapshot,
   loadAgentThreeLeads,
   normalizeAgentThreeSnapshot,
@@ -23,6 +25,16 @@ interface AgentThreeStore extends AgentThreeSnapshot {
   selectCampaign: (
     profileId: CampaignProfileId,
     campaignId: string | null
+  ) => void;
+  configureLimit: (
+    profileId: CampaignProfileId,
+    numericLimit: number,
+    untilQueueEnds: boolean
+  ) => void;
+  configureIntervals: (
+    profileId: CampaignProfileId,
+    minIntervalSeconds: number,
+    maxIntervalSeconds: number
   ) => void;
   loadLeads: (
     profileId: CampaignProfileId,
@@ -51,6 +63,32 @@ export const useAgentThreeStore = create<AgentThreeStore>()(
       selectCampaign: (profileId, campaignId) =>
         set((state) =>
           selectAgentThreeCampaign(state, profileId, campaignId, nowIso())
+        ),
+
+      configureLimit: (profileId, numericLimit, untilQueueEnds) =>
+        set((state) =>
+          configureAgentThreeLimit(
+            state,
+            profileId,
+            numericLimit,
+            untilQueueEnds,
+            nowIso()
+          )
+        ),
+
+      configureIntervals: (
+        profileId,
+        minIntervalSeconds,
+        maxIntervalSeconds
+      ) =>
+        set((state) =>
+          configureAgentThreeIntervals(
+            state,
+            profileId,
+            minIntervalSeconds,
+            maxIntervalSeconds,
+            nowIso()
+          )
         ),
 
       loadLeads: (profileId, campaignId, leads, quantity) => {
