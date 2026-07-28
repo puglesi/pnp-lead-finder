@@ -14,6 +14,7 @@ import { RECENT_SEARCHES_LIMIT } from "@/lib/mode-labels";
 import { exportLeadsToCSV } from "@/lib/csv-export";
 import { leadFingerprint, type Lead, type SearchRecord } from "@/types/lead";
 import type { BulkSearchProgress, SearchApiResponse } from "@/types/search";
+import type { LeadEmailValidationUpdate } from "@/types/email-validation";
 
 const FULL_HISTORY_LIMIT = 200;
 
@@ -29,6 +30,11 @@ const INITIAL_BULK: BulkSearchProgress = {
   elapsedMs: 0,
   estimatedRemainingMs: 0,
 };
+
+interface BulkSearchOptions {
+  allowArtificialResults?: boolean;
+  autoSaveResults?: boolean;
+}
 
 interface LeadStore {
   sidebarCollapsed: boolean;
@@ -50,7 +56,11 @@ interface LeadStore {
   selectedLeadIds: string[];
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
-  performBulkSearch: (keywordsInput: string, location: string) => Promise<void>;
+  performBulkSearch: (
+    keywordsInput: string,
+    location: string,
+    options?: BulkSearchOptions
+  ) => Promise<void>;
   generateMoreLeads: (batchSize?: number) => number;
   loadSearchResults: (keyword: string, location: string) => void;
   loadSearchFromHistory: (recordId: string) => boolean;
@@ -62,6 +72,10 @@ interface LeadStore {
   clearSelection: () => void;
   getSelectedLeads: () => Lead[];
   saveLead: (lead: Lead) => boolean;
+  updateLeadEmailValidation: (
+    leadId: string,
+    validation: LeadEmailValidationUpdate
+  ) => boolean;
   removeSavedLead: (id: string) => void;
   clearAllSavedLeads: () => void;
   isLeadSaved: (lead: Lead) => boolean;
@@ -85,7 +99,8 @@ function mergeSectorHistory(existing: string[], newSectors: string[]): string[] 
 async function fetchSector(
   sector: string,
   location: string,
-  sectorIndex: number
+  sectorIndex: number,
+  options: BulkSearchOptions
 ): Promise<SearchApiResponse> {
   const settings = useSettingsStore.getState();
   const config = settings.getSearchConfig();
@@ -98,6 +113,7 @@ async function fetchSector(
       sectorIndex,
       maxResults: settings.maxResults,
       useMaxLeads: settings.useMaxLeads,
+      allowArtificialResults: options.allowArtificialResults !== false,
       delayMs: config.delayMs,
       provider: config.provider,
       searchProfile: settings.searchProfile,
@@ -222,7 +238,7 @@ export const useLeadStore = create<LeadStore>()(
         return deduped.length - before;
       },
 
-      performBulkSearch: async (keywordsInput, location) => {
+      performBulkSearch: async (keywordsInput, location, options = {}) => {
         const sectors = parseSectors(keywordsInput);
         if (sectors.length === 0 || !location.trim()) {
           throw new Error("Setores e localização são obrigatórios");
@@ -308,7 +324,8 @@ export const useLeadStore = create<LeadStore>()(
                 const data = await fetchSector(
                   sector,
                   location.trim(),
-                  index
+                  index,
+                  options
                 );
                 return {
                   sector,
@@ -403,6 +420,7 @@ export const useLeadStore = create<LeadStore>()(
           config.provider === "autonomous";
         let autoSavedCount = 0;
         if (
+          options.autoSaveResults !== false &&
           (settings.autoSaveLeads || isAutonomousRun) &&
           finalLeads.length > 0
         ) {
@@ -620,6 +638,16 @@ export const useLeadStore = create<LeadStore>()(
           savedAt: new Date().toISOString(),
         };
         set((state) => ({ savedLeads: [saved, ...state.savedLeads] }));
+        return true;
+      },
+
+      updateLeadEmailValidation: (leadId, validation) => {
+        if (!get().savedLeads.some((lead) => lead.id === leadId)) return false;
+        set((state) => ({
+          savedLeads: state.savedLeads.map((lead) =>
+            lead.id === leadId ? { ...lead, ...validation } : lead
+          ),
+        }));
         return true;
       },
 

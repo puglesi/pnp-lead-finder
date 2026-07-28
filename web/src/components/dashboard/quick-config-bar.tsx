@@ -3,8 +3,13 @@
 import { useState } from "react";
 import { Cpu, Server, Timer } from "lucide-react";
 import { Slider } from "@/components/ui/slider";
-import { useSettingsStore } from "@/store/settings-store";
 import {
+  AUTONOMOUS_24H_DEFAULTS,
+  useSettingsStore,
+} from "@/store/settings-store";
+import {
+  AUTONOMOUS_DELAY_MAX,
+  AUTONOMOUS_DELAY_MIN,
   AUTONOMOUS_STANDARD_MAX,
   AUTONOMOUS_MIN_LEADS,
   AUTONOMOUS_WORKERS_MAX,
@@ -29,25 +34,33 @@ const CONFIG_ITEMS: {
   { key: "leads", label: "Leads/setor", icon: Server, unit: "" },
 ];
 
-export function QuickConfigBar() {
+export function QuickConfigBar({ hydrated = true }: { hydrated?: boolean }) {
   const settings = useSettingsStore();
   const [open, setOpen] = useState<ConfigKey | null>(null);
-  const isAutonomous = settings.searchProfile === "autonomous-24h";
-  const delayBounds = settings.getDelayBounds();
+  const searchProfile = hydrated
+    ? settings.searchProfile
+    : AUTONOMOUS_24H_DEFAULTS.searchProfile;
+  const useMaxLeads = hydrated
+    ? settings.useMaxLeads
+    : AUTONOMOUS_24H_DEFAULTS.useMaxLeads;
+  const isAutonomous = searchProfile === "autonomous-24h";
+  const delayBounds = hydrated
+    ? settings.getDelayBounds()
+    : { min: AUTONOMOUS_DELAY_MIN, max: AUTONOMOUS_DELAY_MAX };
   const workerMin = isAutonomous ? AUTONOMOUS_WORKERS_MIN : 1;
   const workerMax = isAutonomous ? AUTONOMOUS_WORKERS_MAX : 10;
   const leadsMin = isAutonomous ? AUTONOMOUS_MIN_LEADS : RECOMMENDED_LEADS_MIN;
   const leadsMax = isAutonomous
     ? AUTONOMOUS_STANDARD_MAX
-    : settings.useMaxLeads
+    : useMaxLeads
       ? SERPAPI_MAX_LEADS
       : RECOMMENDED_LEADS_MAX;
-  const leadsDisabled = settings.useMaxLeads && !isAutonomous;
+  const leadsDisabled = useMaxLeads && !isAutonomous;
 
   const values: Record<ConfigKey, number> = {
-    workers: settings.workers,
-    delay: settings.delayMs,
-    leads: settings.maxResults,
+    workers: hydrated ? settings.workers : AUTONOMOUS_24H_DEFAULTS.workers,
+    delay: hydrated ? settings.delayMs : AUTONOMOUS_24H_DEFAULTS.delayMs,
+    leads: hydrated ? settings.maxResults : AUTONOMOUS_24H_DEFAULTS.maxResults,
   };
 
   const toggle = (key: ConfigKey) =>
@@ -72,7 +85,7 @@ export function QuickConfigBar() {
           const Icon = item.icon;
           const isActive = open === item.key;
           const displayValue =
-            item.key === "leads" && settings.useMaxLeads && !isAutonomous
+            item.key === "leads" && useMaxLeads && !isAutonomous
               ? `Máx. (${settings.getEffectiveMaxResults()})`
               : `${values[item.key]}${item.unit}`;
 
@@ -113,7 +126,7 @@ export function QuickConfigBar() {
           </div>
           {openItem.key === "workers" && (
             <Slider
-              value={settings.workers}
+              value={values.workers}
               onChange={(v) => handleChange("workers", v)}
               min={workerMin}
               max={workerMax}
@@ -121,7 +134,7 @@ export function QuickConfigBar() {
           )}
           {openItem.key === "delay" && (
             <Slider
-              value={settings.delayMs}
+              value={values.delay}
               onChange={(v) => handleChange("delay", v)}
               min={delayBounds.min}
               max={delayBounds.max}
@@ -131,7 +144,7 @@ export function QuickConfigBar() {
           {openItem.key === "leads" && (
             <>
               <Slider
-                value={settings.maxResults}
+                value={values.leads}
                 onChange={(v) => handleChange("leads", v)}
                 min={leadsMin}
                 max={leadsMax}
@@ -149,7 +162,7 @@ export function QuickConfigBar() {
         </div>
       )}
 
-      {isAutonomous && <AutonomousSourcesPicker compact />}
+      {isAutonomous && <AutonomousSourcesPicker compact hydrated={hydrated} />}
     </div>
   );
 }

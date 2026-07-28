@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   Cloud,
@@ -77,13 +77,7 @@ export function BatchSendSettings({
     s.getAutonomousDailyRemaining(config.dailyLimit)
   );
 
-  const [sendMode, setSendMode] = useState<EmailSendMode>(() =>
-    resolveSendMode(provider)
-  );
-
-  useEffect(() => {
-    setSendMode(resolveSendMode(provider));
-  }, [provider]);
+  const sendMode = resolveSendMode(provider);
 
   const isAutonomous = sendMode === "autonomous-free";
   const providers = useMemo(
@@ -102,7 +96,6 @@ export function BatchSendSettings({
   );
 
   const handleModeChange = (mode: EmailSendMode) => {
-    setSendMode(mode);
     onChange(
       mode === "autonomous-free"
         ? { ...DEFAULT_AUTONOMOUS_BATCH_CONFIG }

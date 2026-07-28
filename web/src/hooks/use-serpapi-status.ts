@@ -46,8 +46,19 @@ export function useSerpApiStatus() {
   }, [serpApiKey, ensureCurrentMonth]);
 
   useEffect(() => {
-    refresh().catch(() => setStatus(null));
-  }, [refresh]);
+    let active = true;
+    ensureCurrentMonth();
+    void fetchSerpApiStatus(serpApiKey)
+      .then((data) => {
+        if (active) setStatus(data);
+      })
+      .catch(() => {
+        if (active) setStatus(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [ensureCurrentMonth, serpApiKey]);
 
   const configured = Boolean(status?.serpapiConfigured);
   const isSerpActive =

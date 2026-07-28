@@ -2,6 +2,12 @@ import { generateLeadsForSearch } from "@/lib/mock-data";
 import { isGoogleCseConfigured } from "@/lib/search/config";
 import type { SearchProvider } from "./types";
 
+interface GoogleCustomItem {
+  title?: string;
+  link?: string;
+  snippet?: string;
+}
+
 export const googleCustomProvider: SearchProvider = {
   name: "google-custom",
   async search({
@@ -11,6 +17,7 @@ export const googleCustomProvider: SearchProvider = {
     delayMs,
     googleApiKey,
     googleCseId,
+    allowArtificialResults,
   }) {
     if (delayMs > 0) {
       await new Promise((r) => setTimeout(r, delayMs));
@@ -22,6 +29,15 @@ export const googleCustomProvider: SearchProvider = {
     const cseId = googleCseId?.trim() || process.env.GOOGLE_CSE_ID?.trim();
 
     if (!hasConfig || !apiKey || !cseId) {
+      if (allowArtificialResults === false) {
+        return {
+          leads: [],
+          source: "google-cse-unavailable",
+          provider: "google-custom",
+          isLive: false,
+          apiCallConsumed: false,
+        };
+      }
       const leads = generateLeadsForSearch(keyword, location, maxResults);
       return {
         leads,
@@ -44,13 +60,13 @@ export const googleCustomProvider: SearchProvider = {
       if (!res.ok) throw new Error(`Google CSE ${res.status}`);
 
       const data = await res.json();
-      const items = data.items ?? [];
+      const items: GoogleCustomItem[] = data.items ?? [];
+      const eligibleItems =
+        allowArtificialResults === false
+          ? items.filter((item) => item.title?.trim() && item.link?.trim())
+          : items;
 
-      const leads = items.slice(0, maxResults).map(
-        (
-          item: { title?: string; link?: string; snippet?: string },
-          i: number
-        ) => ({
+      const leads = eligibleItems.slice(0, maxResults).map((item, i) => ({
           id: `gcs-${keyword}-${location}-${i}`,
           company: item.title ?? `Business ${i + 1}`,
           website: item.link ?? `https://example.co.uk`,
@@ -70,6 +86,15 @@ export const googleCustomProvider: SearchProvider = {
         apiCallConsumed: true,
       };
     } catch {
+      if (allowArtificialResults === false) {
+        return {
+          leads: [],
+          source: "google-cse-error-no-results",
+          provider: "google-custom",
+          isLive: false,
+          apiCallConsumed: true,
+        };
+      }
       const leads = generateLeadsForSearch(keyword, location, maxResults);
       return {
         leads,

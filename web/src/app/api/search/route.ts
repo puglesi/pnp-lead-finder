@@ -45,6 +45,7 @@ export async function POST(request: NextRequest) {
       creditExhausted: Boolean(body.creditExhausted),
       serpapiDeepPagination: Boolean(body.serpapiDeepPagination),
       useMaxLeads,
+      allowArtificialResults: body.allowArtificialResults !== false,
       autonomousSources: Array.isArray(body.autonomousSources)
         ? body.autonomousSources
         : undefined,

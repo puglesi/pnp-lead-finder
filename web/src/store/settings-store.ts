@@ -515,7 +515,7 @@ export const useSettingsStore = create<SettingsStore>()(
         };
         if (!state || typeof state !== "object") return persisted;
 
-        let next = { ...state } as Partial<SettingsStore> & {
+        const next = { ...state } as Partial<SettingsStore> & {
           continuousLoop?: boolean;
         };
 

@@ -12,15 +12,27 @@ import {
 import { isSerpApiEquilibriumMode, isSerpApiVolumeMode } from "@/lib/search/volume";
 import { cn } from "@/lib/utils";
 
-export function ActiveModeBadge({ className }: { className?: string }) {
+export function ActiveModeBadge({
+  className,
+  hydrated = true,
+}: {
+  className?: string;
+  hydrated?: boolean;
+}) {
   const mode = useSettingsStore((s) => s.getActiveQuickSearchMode());
   const profile = useSettingsStore((s) => s.searchProfile);
   const useMaxLeads = useSettingsStore((s) => s.useMaxLeads);
   const { isSerpActive, remaining, configured } = useSerpApiStatus();
-  const equilibrium = isSerpApiEquilibriumMode(useMaxLeads, profile);
-  const volumeHigh = isSerpApiVolumeMode(useMaxLeads, profile);
+  const renderMode = hydrated ? mode : "autonomous-24h";
+  const renderProfile = hydrated ? profile : "autonomous-24h";
+  const renderUseMaxLeads = hydrated ? useMaxLeads : false;
+  const equilibrium = isSerpApiEquilibriumMode(
+    renderUseMaxLeads,
+    renderProfile
+  );
+  const volumeHigh = isSerpApiVolumeMode(renderUseMaxLeads, renderProfile);
 
-  if (mode === "autonomous-24h") {
+  if (renderMode === "autonomous-24h") {
     return (
       <Badge
         className={cn(
@@ -36,7 +48,7 @@ export function ActiveModeBadge({ className }: { className?: string }) {
     );
   }
 
-  if (mode === "google-cse") {
+  if (renderMode === "google-cse") {
     return (
       <Badge
         className={cn(
@@ -65,14 +77,14 @@ export function ActiveModeBadge({ className }: { className?: string }) {
       ) : (
         <Scale className="size-3.5" />
       )}
-      {isSerpActive
+      {hydrated && isSerpActive
         ? volumeHigh
           ? "Volume Máximo"
           : equilibrium
             ? `${SERPAPI_PREMIUM_LABEL} · Equilíbrio`
             : SERPAPI_PREMIUM_LABEL
         : SERPAPI_PREMIUM_LABEL}
-      {configured && (
+      {hydrated && configured && (
         <span className="text-[10px] font-normal opacity-80">
           · ~{remaining} buscas
         </span>

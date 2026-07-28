@@ -43,7 +43,8 @@ function mapPlaceToLead(
   place: SerpPlace,
   keyword: string,
   location: string,
-  index: number
+  index: number,
+  allowGuessedEmail: boolean
 ): Lead {
   const website =
     place.website ||
@@ -53,7 +54,7 @@ function mapPlaceToLead(
     id: `serp-${place.place_id ?? `${keyword}-${index}`}`,
     company: place.title ?? `Business ${index + 1}`,
     website,
-    email: guessEmail(place.website),
+    email: allowGuessedEmail ? guessEmail(place.website) : null,
     phone: place.phone ?? "—",
     address: place.address ?? `${location}, UK`,
     category: place.types?.[0] ?? place.type ?? keyword,
@@ -270,7 +271,7 @@ export const serpApiProvider: SearchProvider = {
       }
 
       const serpLeads = places.map((place, i) =>
-        mapPlaceToLead(place, keyword, location, i)
+        mapPlaceToLead(place, keyword, location, i, params.allowArtificialResults !== false)
       );
 
       const { leads, supplemented } =
@@ -305,6 +306,16 @@ export const serpApiProvider: SearchProvider = {
 
       if (creditExhausted) {
         return autonomousFallback(params, "serpapi-quota", true);
+      }
+
+      if (params.allowArtificialResults === false) {
+        return {
+          leads: [],
+          source: "serpapi-error-no-results",
+          provider: "serpapi",
+          isLive: false,
+          apiCallConsumed: false,
+        };
       }
 
       return mockFallback(
