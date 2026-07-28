@@ -1,4 +1,5 @@
 import type { EmailProviderId } from "@/types/email-provider";
+import type { CampaignProfileId } from "@/types/campaign-profile";
 import { DEFAULT_SIGNATURE_HTML } from "@/lib/signature-template";
 
 export type CampaignStatus = "draft" | "active" | "paused" | "completed";
@@ -96,6 +97,7 @@ export interface CampaignSignature {
 
 export interface Campaign {
   id: string;
+  campaignProfileId: CampaignProfileId;
   name: string;
   subject: string;
   body: string;
