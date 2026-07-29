@@ -8,6 +8,7 @@ import {
 import { applyTrackingEventsToCampaign } from "@/lib/campaign-tracking";
 import { isAutonomousProvider } from "@/lib/email-provider-utils";
 import type { CampaignTrackingEvent } from "@/types/campaign-tracking";
+import type { CampaignProfileId } from "@/types/campaign-profile";
 import {
   DEFAULT_AUTONOMOUS_BATCH_CONFIG,
   DEFAULT_BATCH_SEND_CONFIG,
@@ -35,6 +36,7 @@ interface CampaignStore {
   sendingProgress: CampaignSendingProgress | null;
   sendPaused: boolean;
   createCampaign: (data: {
+    campaignProfileId?: CampaignProfileId;
     name: string;
     subject: string;
     body: string;
@@ -85,6 +87,7 @@ export const useCampaignStore = create<CampaignStore>()(
         const settings = useSettingsStore.getState();
         const campaign: Campaign = {
           id: `camp-${Date.now()}`,
+          campaignProfileId: data.campaignProfileId ?? "panek-puglesi",
           name: data.name,
           subject: data.subject,
           body: data.body,
@@ -140,6 +143,7 @@ export const useCampaignStore = create<CampaignStore>()(
         const now = new Date().toISOString();
         const copy: Campaign = {
           id: `camp-${Date.now()}`,
+          campaignProfileId: source.campaignProfileId,
           name: copyName,
           subject: source.subject,
           body: source.body,
@@ -420,7 +424,7 @@ export const useCampaignStore = create<CampaignStore>()(
     }),
     {
       name: "pnp-campaigns",
-      version: 9,
+      version: 10,
       migrate: (persisted) => {
         const state = persisted as { campaigns?: Campaign[] };
         if (!state?.campaigns) return persisted;
@@ -442,6 +446,10 @@ export const useCampaignStore = create<CampaignStore>()(
             }
             return {
               ...c,
+              campaignProfileId:
+                c.campaignProfileId === "modeclean"
+                  ? "modeclean"
+                  : "panek-puglesi",
               leadSource: c.leadSource ?? "saved",
               fromName: c.fromName ?? SEND_DEFAULTS.fromName,
               fromEmail: c.fromEmail ?? SEND_DEFAULTS.fromEmail,

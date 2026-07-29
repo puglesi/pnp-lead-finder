@@ -10,6 +10,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   DEFAULT_BODY_HTML,
   DEFAULT_SUBJECT,
   EMAIL_TEMPLATE_PRESETS,
@@ -42,6 +49,10 @@ import { EmailProviderSettings } from "./email-provider-settings";
 import { SmtpAutonomousSettings } from "./smtp-autonomous-settings";
 import { buildReuseCampaignName } from "@/lib/campaign-reuse";
 import { cn } from "@/lib/utils";
+import {
+  CAMPAIGN_PROFILES,
+  type CampaignProfileId,
+} from "@/types/campaign-profile";
 
 export function CreateCampaignForm({
   reuseFromId = null,
@@ -90,6 +101,10 @@ function CreateCampaignFormContent({
   const [name, setName] = useState(() =>
     reuseSource ? buildReuseCampaignName(reuseSource.name) : ""
   );
+  const [campaignProfileId, setCampaignProfileId] =
+    useState<CampaignProfileId>(
+      reuseSource?.campaignProfileId ?? "panek-puglesi"
+    );
   const [subject, setSubject] = useState<string>(
     reuseSource?.subject ?? DEFAULT_SUBJECT
   );
@@ -191,6 +206,7 @@ function CreateCampaignFormContent({
     }
 
     const campaign = createCampaign({
+      campaignProfileId,
       name: name.trim(),
       subject: subject.trim(),
       body: body.trim(),
@@ -240,6 +256,29 @@ function CreateCampaignFormContent({
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="campaign-profile">Operação</Label>
+              <Select
+                value={campaignProfileId}
+                onValueChange={(value: CampaignProfileId) =>
+                  setCampaignProfileId(value)
+                }
+              >
+                <SelectTrigger id="campaign-profile" className="bg-background/50">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {CAMPAIGN_PROFILES.map((profile) => (
+                    <SelectItem key={profile.id} value={profile.id}>
+                      {profile.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                A campanha e sua futura fila de envio ficarão isoladas nesta operação.
+              </p>
+            </div>
             <div className="space-y-2">
               <Label htmlFor="name">Nome da campanha</Label>
               <Input

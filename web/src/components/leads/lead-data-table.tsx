@@ -3,7 +3,6 @@
 import {
   Building2,
   ChevronRight,
-  ExternalLink,
   Globe,
   MapPin,
   Phone,
@@ -19,6 +18,7 @@ import { ScoreBadge } from "@/components/results/score-badge";
 import { EmailStatus } from "./email-status";
 import { LeadRowActions } from "./lead-row-actions";
 import { cn } from "@/lib/utils";
+import { resolveSafeWebsite } from "@/lib/website-url";
 import type { Lead } from "@/types/lead";
 
 const thClass =
@@ -104,6 +104,7 @@ export function LeadDataTable({
             ) : (
               leads.map((lead) => {
                 const isSelected = selectedSet.has(lead.id);
+                const website = resolveSafeWebsite(lead.website);
                 return (
                   <tr
                     key={lead.id}
@@ -123,31 +124,49 @@ export function LeadDataTable({
                     )}
 
                     <td className={tdClass}>
-                      <a
-                        href={lead.website}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex items-start gap-2.5 font-medium text-foreground transition-colors hover:text-primary"
-                      >
-                        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-blue-500/10 transition-colors group-hover:bg-blue-500/20">
-                          <Building2 className="size-4 text-blue-400" />
-                        </span>
-                        <span className="min-w-0 break-words leading-snug hover:underline">
-                          {lead.company}
-                        </span>
-                      </a>
+                      {website.href ? (
+                        <a
+                          href={website.href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-start gap-2.5 font-medium text-foreground transition-colors hover:text-primary"
+                        >
+                          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-blue-500/10 transition-colors group-hover:bg-blue-500/20">
+                            <Building2 className="size-4 text-blue-400" />
+                          </span>
+                          <span className="min-w-0 break-words leading-snug hover:underline">
+                            {lead.company}
+                          </span>
+                        </a>
+                      ) : (
+                        <div className="flex items-start gap-2.5 font-medium text-foreground">
+                          <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-blue-500/10 transition-colors group-hover:bg-blue-500/20">
+                            <Building2 className="size-4 text-blue-400" />
+                          </span>
+                          <span className="min-w-0 break-words leading-snug">
+                            {lead.company}
+                          </span>
+                        </div>
+                      )}
                     </td>
 
                     <td className={tdClass}>
-                      <a
-                        href={lead.website}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex min-w-0 items-center gap-1.5 break-all text-blue-400 transition-colors hover:text-blue-300 hover:underline"
-                      >
-                        <Globe className="size-3.5 shrink-0" />
-                        {new URL(lead.website).hostname.replace("www.", "")}
-                      </a>
+                      {website.href ? (
+                        <a
+                          href={website.href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex min-w-0 items-center gap-1.5 break-all text-blue-400 transition-colors hover:text-blue-300 hover:underline"
+                        >
+                          <Globe className="size-3.5 shrink-0" />
+                          {website.displayHostname}
+                        </a>
+                      ) : (
+                        <span className="inline-flex min-w-0 items-center gap-1.5 break-all text-muted-foreground">
+                          <Globe className="size-3.5 shrink-0" />
+                          {website.displayHostname}
+                        </span>
+                      )}
                     </td>
 
                     <td className={tdClass}>

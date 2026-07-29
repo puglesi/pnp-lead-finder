@@ -4,7 +4,10 @@ import type {
   EmailValidationStatus,
   LeadEmailValidationUpdate,
 } from "../types/email-validation.ts";
-import { normalizeEmail } from "./email-validation.ts";
+import {
+  emailValidationResultToLeadUpdate,
+  normalizeEmail,
+} from "./email-validation.ts";
 
 export type AgentTwoStatus =
   | "idle"
@@ -754,16 +757,7 @@ export function queueItemToLeadUpdate(
 export function emailResultToLeadUpdate(
   result: EmailValidationResult
 ): LeadEmailValidationUpdate {
-  return {
-    emailValidationStatus: result.status,
-    emailValidationReason: result.reason,
-    normalizedEmail: result.normalizedEmail ?? undefined,
-    emailValidatedAt: result.validatedAt,
-    emailValidationProvider: result.provider,
-    emailDomain: result.domain ?? undefined,
-    hasMxRecords: result.hasMxRecords ?? undefined,
-    isRoleBasedEmail: result.isRoleBasedEmail,
-  };
+  return emailValidationResultToLeadUpdate(result);
 }
 
 export function getAgentTwoStats(queue: AgentTwoQueueItem[]): AgentTwoStats {

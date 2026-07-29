@@ -9,6 +9,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { useLeadStore } from "@/store/lead-store";
+import { resolveSafeWebsite } from "@/lib/website-url";
 import type { Lead } from "@/types/lead";
 
 interface LeadRowActionsProps {
@@ -23,6 +24,7 @@ export function LeadRowActions({
 }: LeadRowActionsProps) {
   const { saveLead, isLeadSaved, removeSavedLead } = useLeadStore();
   const saved = isLeadSaved(lead);
+  const website = resolveSafeWebsite(lead.website);
 
   const handleCopyEmail = async () => {
     if (!lead.email) {
@@ -107,22 +109,35 @@ export function LeadRowActions({
 
       <Tooltip>
         <TooltipTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="size-8 text-muted-foreground hover:text-blue-400"
-            asChild
-          >
-            <a
-              href={lead.website}
-              target="_blank"
-              rel="noopener noreferrer"
+          {website.href ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8 text-muted-foreground hover:text-blue-400"
+              asChild
+            >
+              <a
+                href={website.href}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <ExternalLink className="size-3.5" />
+              </a>
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-8 text-muted-foreground"
+              disabled
             >
               <ExternalLink className="size-3.5" />
-            </a>
-          </Button>
+            </Button>
+          )}
         </TooltipTrigger>
-        <TooltipContent>Ver site</TooltipContent>
+        <TooltipContent>
+          {website.href ? "Ver site" : "Website inválido"}
+        </TooltipContent>
       </Tooltip>
     </div>
   );

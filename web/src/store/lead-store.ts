@@ -153,6 +153,44 @@ function dedupeLeads(leads: Lead[]): Lead[] {
   });
 }
 
+function applyEmailValidationToLeads(
+  leads: Lead[],
+  leadId: string,
+  validation: LeadEmailValidationUpdate
+): Lead[] {
+  return leads.map((lead) =>
+    lead.id === leadId ? { ...lead, ...validation } : lead
+  );
+}
+
+function searchRecordsContainLead(
+  records: SearchRecord[],
+  leadId: string
+): boolean {
+  return records.some((record) =>
+    record.leads?.some((lead) => lead.id === leadId)
+  );
+}
+
+function applyEmailValidationToRecords(
+  records: SearchRecord[],
+  leadId: string,
+  validation: LeadEmailValidationUpdate
+): SearchRecord[] {
+  return records.map((record) =>
+    record.leads?.some((lead) => lead.id === leadId)
+      ? {
+          ...record,
+          leads: applyEmailValidationToLeads(
+            record.leads,
+            leadId,
+            validation
+          ),
+        }
+      : record
+  );
+}
+
 function updateTiming(
   progress: BulkSearchProgress,
   completed: number,
@@ -642,10 +680,39 @@ export const useLeadStore = create<LeadStore>()(
       },
 
       updateLeadEmailValidation: (leadId, validation) => {
-        if (!get().savedLeads.some((lead) => lead.id === leadId)) return false;
+        const state = get();
+        const found =
+          state.currentLeads.some((lead) => lead.id === leadId) ||
+          state.savedLeads.some((lead) => lead.id === leadId) ||
+          state.importedLeads.some((lead) => lead.id === leadId) ||
+          searchRecordsContainLead(state.recentSearches, leadId) ||
+          searchRecordsContainLead(state.fullSearchHistory, leadId);
+        if (!found) return false;
         set((state) => ({
-          savedLeads: state.savedLeads.map((lead) =>
-            lead.id === leadId ? { ...lead, ...validation } : lead
+          currentLeads: applyEmailValidationToLeads(
+            state.currentLeads,
+            leadId,
+            validation
+          ),
+          savedLeads: applyEmailValidationToLeads(
+            state.savedLeads,
+            leadId,
+            validation
+          ),
+          importedLeads: applyEmailValidationToLeads(
+            state.importedLeads,
+            leadId,
+            validation
+          ),
+          recentSearches: applyEmailValidationToRecords(
+            state.recentSearches,
+            leadId,
+            validation
+          ),
+          fullSearchHistory: applyEmailValidationToRecords(
+            state.fullSearchHistory,
+            leadId,
+            validation
           ),
         }));
         return true;

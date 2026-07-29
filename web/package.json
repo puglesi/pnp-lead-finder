@@ -12,7 +12,7 @@
     "local:start": "next start -p 3000",
     "local:24h": "npm run build && npm run local:start",
     "lint": "eslint",
-    "test": "node --test tests/agent-one-queue.test.mjs tests/agent-one-leads.test.mjs tests/email-validation.test.mjs tests/agent-two-queue.test.mjs tests/agent-two-stability.test.mjs",
+    "test": "node --test tests/agent-one-queue.test.mjs tests/agent-one-leads.test.mjs tests/email-validation.test.mjs tests/agent-two-queue.test.mjs tests/agent-two-stability.test.mjs tests/agent-three-queue.test.mjs tests/agent-three-auto-validation.test.mjs tests/campaign-tracking-base64.test.mjs tests/website-url.test.mjs",
     "vercel:check": "npm run build"
   },
   "dependencies": {
