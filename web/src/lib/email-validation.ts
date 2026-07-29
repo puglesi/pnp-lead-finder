@@ -2,6 +2,7 @@ import type {
   EmailDomainCheckResult,
   EmailValidationProvider,
   EmailValidationResult,
+  LeadEmailValidationUpdate,
 } from "../types/email-validation.ts";
 
 export type EmailDomainChecker = (
@@ -172,5 +173,20 @@ export function createLocalEmailValidationProvider(
   return {
     id: "local_dns",
     validate: (email) => validateEmailLocally(email, checkDomain),
+  };
+}
+
+export function emailValidationResultToLeadUpdate(
+  result: EmailValidationResult
+): LeadEmailValidationUpdate {
+  return {
+    emailValidationStatus: result.status,
+    emailValidationReason: result.reason,
+    normalizedEmail: result.normalizedEmail ?? undefined,
+    emailValidatedAt: result.validatedAt,
+    emailValidationProvider: result.provider,
+    emailDomain: result.domain ?? undefined,
+    hasMxRecords: result.hasMxRecords ?? undefined,
+    isRoleBasedEmail: result.isRoleBasedEmail,
   };
 }

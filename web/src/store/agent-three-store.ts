@@ -3,12 +3,15 @@ import { persist } from "zustand/middleware";
 import type { Lead } from "@/types/lead";
 import type { CampaignProfileId } from "@/types/campaign-profile";
 import {
+  claimNextAgentThreeItem,
+  finishAgentThree,
   configureAgentThreeIntervals,
   configureAgentThreeLimit,
   createInitialAgentThreeSnapshot,
   loadAgentThreeLeads,
   normalizeAgentThreeSnapshot,
   pauseAgentThree,
+  prepareAgentThreeCampaign,
   resumeAgentThree,
   selectAgentThreeCampaign,
   selectAgentThreeProfile,
@@ -16,9 +19,16 @@ import {
   startAgentThree,
   stopAgentThree,
   type AgentThreeLoadResult,
+  type AgentThreePreparationResult,
+  type AgentThreeQueueItem,
   type AgentThreeSnapshot,
   type AgentThreeStartResult,
 } from "@/lib/agent-three-queue";
+import {
+  applyAgentThreeSmtpResult,
+  type AgentThreeDeliveryApplication,
+} from "@/lib/agent-three-delivery";
+import type { AgentThreeSmtpResult } from "@/lib/agent-three-smtp-contract";
 
 interface AgentThreeStore extends AgentThreeSnapshot {
   selectProfile: (profileId: CampaignProfileId) => void;
@@ -42,10 +52,28 @@ interface AgentThreeStore extends AgentThreeSnapshot {
     leads: Lead[],
     quantity: number
   ) => AgentThreeLoadResult;
-  start: (profileId: CampaignProfileId) => AgentThreeStartResult;
+  prepareCampaign: (
+    profileId: CampaignProfileId,
+    campaignId: string,
+    leads: Lead[]
+  ) => AgentThreePreparationResult;
+  start: (
+    profileId: CampaignProfileId,
+    providerConfigured?: boolean
+  ) => AgentThreeStartResult;
   pause: (profileId: CampaignProfileId) => void;
-  resume: (profileId: CampaignProfileId) => AgentThreeStartResult;
+  resume: (
+    profileId: CampaignProfileId,
+    providerConfigured?: boolean
+  ) => AgentThreeStartResult;
   stop: (profileId: CampaignProfileId) => void;
+  claimNext: (profileId: CampaignProfileId) => AgentThreeQueueItem | null;
+  applyDeliveryResult: (
+    profileId: CampaignProfileId,
+    itemId: string,
+    result: AgentThreeSmtpResult
+  ) => AgentThreeDeliveryApplication;
+  finish: (profileId: CampaignProfileId) => void;
 }
 
 function nowIso(): string {
@@ -114,14 +142,39 @@ export const useAgentThreeStore = create<AgentThreeStore>()(
         return result;
       },
 
-      start: (profileId) => {
+      prepareCampaign: (profileId, campaignId, leads) => {
+        let result: AgentThreePreparationResult = {
+          snapshot: createInitialAgentThreeSnapshot(),
+          eligibleCount: 0,
+          preparedCount: 0,
+          removedCount: 0,
+        };
+        set((state) => {
+          result = prepareAgentThreeCampaign(
+            state,
+            profileId,
+            campaignId,
+            leads,
+            nowIso()
+          );
+          return result.snapshot;
+        });
+        return result;
+      },
+
+      start: (profileId, providerConfigured = false) => {
         let result: AgentThreeStartResult = {
           snapshot: createInitialAgentThreeSnapshot(),
           started: false,
           message: null,
         };
         set((state) => {
-          result = startAgentThree(state, profileId, false, nowIso());
+          result = startAgentThree(
+            state,
+            profileId,
+            providerConfigured,
+            nowIso()
+          );
           return result.snapshot;
         });
         return result;
@@ -130,14 +183,19 @@ export const useAgentThreeStore = create<AgentThreeStore>()(
       pause: (profileId) =>
         set((state) => pauseAgentThree(state, profileId, nowIso())),
 
-      resume: (profileId) => {
+      resume: (profileId, providerConfigured = false) => {
         let result: AgentThreeStartResult = {
           snapshot: createInitialAgentThreeSnapshot(),
           started: false,
           message: null,
         };
         set((state) => {
-          result = resumeAgentThree(state, profileId, false, nowIso());
+          result = resumeAgentThree(
+            state,
+            profileId,
+            providerConfigured,
+            nowIso()
+          );
           return result.snapshot;
         });
         return result;
@@ -145,6 +203,41 @@ export const useAgentThreeStore = create<AgentThreeStore>()(
 
       stop: (profileId) =>
         set((state) => stopAgentThree(state, profileId, nowIso())),
+
+      claimNext: (profileId) => {
+        let item: AgentThreeQueueItem | null = null;
+        set((state) => {
+          const claimed = claimNextAgentThreeItem(
+            state,
+            profileId,
+            nowIso()
+          );
+          item = claimed.item;
+          return claimed.snapshot;
+        });
+        return item;
+      },
+
+      applyDeliveryResult: (profileId, itemId, smtpResult) => {
+        let application: AgentThreeDeliveryApplication = {
+          snapshot: createInitialAgentThreeSnapshot(),
+          shouldPause: false,
+        };
+        set((state) => {
+          application = applyAgentThreeSmtpResult(
+            state,
+            profileId,
+            itemId,
+            smtpResult,
+            nowIso()
+          );
+          return application.snapshot;
+        });
+        return application;
+      },
+
+      finish: (profileId) =>
+        set((state) => finishAgentThree(state, profileId, nowIso())),
     }),
     {
       name: "pnp-agent-three",

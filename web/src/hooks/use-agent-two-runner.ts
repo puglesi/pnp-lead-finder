@@ -3,58 +3,19 @@
 import { useCallback, useRef } from "react";
 import toast from "react-hot-toast";
 import { createAgentTwoExecutionGuard } from "@/lib/agent-two-execution";
-import {
-  createLocalEmailValidationProvider,
-  type EmailDomainChecker,
-} from "@/lib/email-validation";
+import { localEmailValidationProvider } from "@/lib/client-email-validation";
 import {
   emailResultToLeadUpdate,
   queueItemToLeadUpdate,
 } from "@/lib/agent-two-queue";
 import { useAgentTwoStore } from "@/store/agent-two-store";
 import { useLeadStore } from "@/store/lead-store";
-import type { EmailDomainCheckResult } from "@/types/email-validation";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error
     ? error.message
     : "Erro inesperado durante a validação";
 }
-
-function isDomainCheckResult(value: unknown): value is EmailDomainCheckResult {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "domain" in value &&
-    typeof value.domain === "string" &&
-    "exists" in value &&
-    typeof value.exists === "boolean" &&
-    "hasMxRecords" in value &&
-    typeof value.hasMxRecords === "boolean" &&
-    "reason" in value &&
-    (value.reason === null ||
-      value.reason === "domain_not_found" ||
-      value.reason === "no_mx_records" ||
-      value.reason === "dns_error") &&
-    (!("errorMessage" in value) || typeof value.errorMessage === "string")
-  );
-}
-
-const checkDomainFromApi: EmailDomainChecker = async (domain) => {
-  const response = await fetch("/api/email-validation/domain", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ domain }),
-  });
-  if (!response.ok) throw new Error("Falha ao verificar o domínio do e-mail");
-  const result: unknown = await response.json();
-  if (!isDomainCheckResult(result)) {
-    throw new Error("Resposta inválida da verificação de domínio");
-  }
-  return result;
-};
-
-const localProvider = createLocalEmailValidationProvider(checkDomainFromApi);
 
 export function persistImmediateAgentTwoResults() {
   const { queue } = useAgentTwoStore.getState();
@@ -80,14 +41,18 @@ export function useAgentTwoRunner() {
         }
 
         try {
-          const result = await localProvider.validate(item.email);
+          const result = await localEmailValidationProvider.validate(
+            item.email
+          );
           const updated = useLeadStore
             .getState()
             .updateLeadEmailValidation(
               item.leadId,
               emailResultToLeadUpdate(result)
             );
-          if (!updated) throw new Error("Lead não encontrado em Meus Leads");
+          if (!updated) {
+            throw new Error("Lead não encontrado em Meus Leads");
+          }
           useAgentTwoStore.getState().completeItem(item.id, result);
         } catch (error) {
           const message = errorMessage(error);

@@ -25,6 +25,10 @@ import {
   createInitialAgentThreeSnapshot,
   getAgentThreeMetrics,
 } from "@/lib/agent-three-queue";
+import {
+  connectionStatusMessage,
+  useAgentThreeRunner,
+} from "@/hooks/use-agent-three-runner";
 import { useAgentThreeStore } from "@/store/agent-three-store";
 import { useCampaignStore } from "@/store/campaign-store";
 import {
@@ -80,11 +84,8 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
   const configureIntervals = useAgentThreeStore(
     (state) => state.configureIntervals
   );
-  const start = useAgentThreeStore((state) => state.start);
-  const pause = useAgentThreeStore((state) => state.pause);
-  const resume = useAgentThreeStore((state) => state.resume);
-  const stop = useAgentThreeStore((state) => state.stop);
   const campaigns = useCampaignStore((state) => state.campaigns);
+  const runner = useAgentThreeRunner();
 
   const profileId: CampaignProfileId = hydrated
     ? persistedProfileId
@@ -134,15 +135,19 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
     );
   }
 
-  function handleStart() {
-    const result = start(profileId);
+  async function handleStart() {
+    const result = await runner.start(profileId);
     if (result.message) toast.error(result.message);
   }
 
-  function handleResume() {
-    const result = resume(profileId);
+  async function handleResume() {
+    const result = await runner.resume(profileId);
     if (result.message) toast.error(result.message);
   }
+
+  const connectionMessage = connectionStatusMessage(
+    runner.statuses[profileId]
+  );
 
   return (
     <Card>
@@ -276,13 +281,13 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <Button onClick={handleStart} disabled={isActive}>
+          <Button onClick={() => void handleStart()} disabled={isActive}>
             <Play className="size-4" />
             Start
           </Button>
           <Button
             variant="outline"
-            onClick={() => pause(profileId)}
+            onClick={() => runner.pause(profileId)}
             disabled={operation.status !== "running"}
           >
             <Pause className="size-4" />
@@ -290,7 +295,7 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
           </Button>
           <Button
             variant="outline"
-            onClick={handleResume}
+            onClick={() => void handleResume()}
             disabled={operation.status !== "paused"}
           >
             <RotateCcw className="size-4" />
@@ -298,13 +303,19 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
           </Button>
           <Button
             variant="destructive"
-            onClick={() => stop(profileId)}
+            onClick={() => runner.stop(profileId)}
             disabled={!isActive}
           >
             <Square className="size-4" />
             Stop
           </Button>
         </div>
+
+        {connectionMessage && (
+          <p className="text-sm text-muted-foreground" role="status">
+            {connectionMessage}
+          </p>
+        )}
 
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <SummaryCard label="Enviados" value={metrics.sent} />

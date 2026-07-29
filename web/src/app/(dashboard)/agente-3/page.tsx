@@ -10,7 +10,7 @@ export default function AgentThreePage() {
           Agente 3 — Enviador
         </h2>
         <p className="text-muted-foreground">
-          Prepare filas independentes por operação, sem realizar envios reais nesta etapa.
+          Execute filas independentes por operação com proteção server-side.
         </p>
       </div>
       <AgentThreeSender />

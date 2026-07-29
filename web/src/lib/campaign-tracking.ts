@@ -5,6 +5,10 @@ import type {
   CampaignTrackingTimelinePoint,
 } from "@/types/campaign-tracking";
 import type { Campaign, CampaignLeadStatus } from "@/types/campaign";
+import {
+  decodeUtf8Base64Url,
+  encodeUtf8Base64Url,
+} from "./base64-url.ts";
 
 const STATUS_RANK: Record<CampaignLeadStatus["status"], number> = {
   pending: 0,
@@ -26,30 +30,13 @@ export function getTrackingBaseUrl(): string {
 }
 
 export function encodeTrackingToken(payload: CampaignTrackingPayload): string {
-  const json = JSON.stringify(payload);
-  if (typeof Buffer !== "undefined") {
-    return Buffer.from(json, "utf8").toString("base64url");
-  }
-  const b64 = btoa(
-    encodeURIComponent(json).replace(/%([0-9A-F]{2})/g, (_, hex) =>
-      String.fromCharCode(parseInt(hex, 16))
-    )
-  );
-  return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return encodeUtf8Base64Url(JSON.stringify(payload));
 }
 
 export function decodeTrackingToken(token: string): CampaignTrackingPayload | null {
   try {
-    let json: string;
-    if (typeof Buffer !== "undefined") {
-      json = Buffer.from(token, "base64url").toString("utf8");
-    } else {
-      const b64 = token.replace(/-/g, "+").replace(/_/g, "/");
-      const padded = b64 + "=".repeat((4 - (b64.length % 4)) % 4);
-      json = decodeURIComponent(
-        Array.from(atob(padded), (c) => "%" + c.charCodeAt(0).toString(16).padStart(2, "0")).join("")
-      );
-    }
+    const json = decodeUtf8Base64Url(token);
+    if (json === null) return null;
     const data = JSON.parse(json) as CampaignTrackingPayload;
     if (!data.campaignId || !data.leadId || !data.email) return null;
     return data;
