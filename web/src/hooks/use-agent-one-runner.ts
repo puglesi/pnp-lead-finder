@@ -2,7 +2,11 @@
 
 import { useCallback, useRef } from "react";
 import toast from "react-hot-toast";
-import { saveAgentOneLeads } from "@/lib/agent-one-leads";
+import { requestAgentOneEmailEnrichment } from "@/lib/agent-one-enrichment";
+import {
+  saveAgentOneLeads,
+  selectAgentOneLeadCandidates,
+} from "@/lib/agent-one-leads";
 import { useAgentOneStore } from "@/store/agent-one-store";
 import { useLeadStore } from "@/store/lead-store";
 
@@ -45,12 +49,36 @@ export function useAgentOneRunner() {
             );
           }
 
+          const candidates = selectAgentOneLeadCandidates(
+            leadState.currentLeads,
+            leadState.savedLeads,
+            leadState.lastSearchSource
+          ).slice(0, sector.targetLeadCount);
+
+          if (candidates.length > 0) {
+            try {
+              await requestAgentOneEmailEnrichment(candidates, {
+                onBatch: (updates) =>
+                  useLeadStore
+                    .getState()
+                    .applyAgentOneContactUpdates(updates),
+              });
+            } catch (error) {
+              toast.error(
+                sector.sector +
+                  ": enriquecimento parcial — " +
+                  errorMessage(error)
+              );
+            }
+          }
+
+          const enrichedLeadState = useLeadStore.getState();
           const saveResult = saveAgentOneLeads({
-            results: leadState.currentLeads,
-            existingSavedLeads: leadState.savedLeads,
+            results: enrichedLeadState.currentLeads,
+            existingSavedLeads: enrichedLeadState.savedLeads,
             targetLeadCount: sector.targetLeadCount,
-            source: leadState.lastSearchSource,
-            saveLead: leadState.saveLead,
+            source: enrichedLeadState.lastSearchSource,
+            saveLead: enrichedLeadState.saveLead,
           });
 
           useAgentOneStore

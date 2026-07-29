@@ -24,22 +24,76 @@ export interface ScrapedResult {
   address?: string;
 }
 
-export async function fetchSearchHtml(url: string): Promise<string> {
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent": SCRAPER_UA,
-      Accept: "text/html,application/xhtml+xml",
-      "Accept-Language": "en-GB,en;q=0.9",
-      "Cache-Control": "no-cache",
-    },
-    next: { revalidate: 0 },
-  });
+interface FetchSearchHtmlOptions {
+  timeoutMs?: number;
+  maxLength?: number;
+  isUrlAllowed?: (url: string) => boolean;
+}
 
-  if (!res.ok) {
-    throw new Error(`Scraper HTTP ${res.status}`);
+export async function fetchSearchHtml(
+  url: string,
+  options: FetchSearchHtmlOptions = {}
+): Promise<string> {
+  const timeoutMs = Math.min(
+    15_000,
+    Math.max(1_000, options.timeoutMs ?? 10_000)
+  );
+  const maxLength = Math.min(
+    2_000_000,
+    Math.max(10_000, options.maxLength ?? 1_000_000)
+  );
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    let currentUrl = url;
+    for (let redirectCount = 0; redirectCount <= 3; redirectCount++) {
+      if (options.isUrlAllowed && !options.isUrlAllowed(currentUrl)) {
+        throw new Error("Scraper bloqueou um destino não permitido");
+      }
+
+      const res = await fetch(currentUrl, {
+        headers: {
+          "User-Agent": SCRAPER_UA,
+          Accept: "text/html,application/xhtml+xml",
+          "Accept-Language": "en-GB,en;q=0.9",
+          "Cache-Control": "no-cache",
+        },
+        next: { revalidate: 0 },
+        redirect: options.isUrlAllowed ? "manual" : "follow",
+        signal: controller.signal,
+      });
+
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get("location");
+        if (!location || redirectCount === 3) {
+          throw new Error("Scraper recebeu redirecionamento inválido");
+        }
+        currentUrl = new URL(location, currentUrl).toString();
+        continue;
+      }
+
+      if (!res.ok) {
+        throw new Error(`Scraper HTTP ${res.status}`);
+      }
+
+      const contentType = res.headers.get("content-type");
+      if (
+        contentType &&
+        !contentType.includes("text/html") &&
+        !contentType.includes("application/xhtml+xml") &&
+        !contentType.includes("text/plain")
+      ) {
+        throw new Error(`Scraper content-type não suportado: ${contentType}`);
+      }
+
+      return (await res.text()).slice(0, maxLength);
+    }
+
+    throw new Error("Scraper excedeu o limite de redirecionamentos");
+  } finally {
+    clearTimeout(timeout);
   }
-
-  return res.text();
 }
 
 export function decodeHtmlEntities(text: string): string {

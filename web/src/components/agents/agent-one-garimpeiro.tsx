@@ -3,6 +3,8 @@
 import { FormEvent, useState } from "react";
 import {
   MapPin,
+  Loader2,
+  MailSearch,
   Pause,
   Pencil,
   Pickaxe,
@@ -25,6 +27,11 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { useAgentOneRunner } from "@/hooks/use-agent-one-runner";
+import {
+  requestAgentOneEmailEnrichment,
+  selectAgentOneEmailEnrichmentCandidates,
+  type AgentOneEnrichmentProgress,
+} from "@/lib/agent-one-enrichment";
 import {
   getAgentOneFoundLeadTotal,
   type AgentOneSectorItem,
@@ -50,6 +57,10 @@ const SECTOR_STATUS_LABELS: Record<AgentOneSectorStatus, string> = {
   completed: "Concluído",
   error: "Erro",
 };
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Erro inesperado";
+}
 
 function AgentStatusBadge({ status }: { status: AgentOneStatus }) {
   const variant =
@@ -120,6 +131,10 @@ export function AgentOneGarimpeiro() {
   const resume = useAgentOneStore((state) => state.resume);
   const stop = useAgentOneStore((state) => state.stop);
   const searchIsActive = useLeadStore((state) => state.isSearching);
+  const savedLeads = useLeadStore((state) => state.savedLeads);
+  const applyContactUpdates = useLeadStore(
+    (state) => state.applyAgentOneContactUpdates
+  );
   const { runQueue, isExecutionActive } = useAgentOneRunner();
 
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -127,6 +142,9 @@ export function AgentOneGarimpeiro() {
   const [location, setLocation] = useState("");
   const [targetLeadCount, setTargetLeadCount] = useState("25");
   const [formError, setFormError] = useState<string | null>(null);
+  const [isEnriching, setIsEnriching] = useState(false);
+  const [enrichmentProgress, setEnrichmentProgress] =
+    useState<AgentOneEnrichmentProgress | null>(null);
 
   const currentSector =
     queue.find((item) => item.id === currentSectorId) ??
@@ -141,6 +159,7 @@ export function AgentOneGarimpeiro() {
   );
   const canStart =
     hasIncomplete && status !== "running" && status !== "paused";
+  const leadsWithoutEmail = selectAgentOneEmailEnrichmentCandidates(savedLeads);
 
   function clearForm() {
     setEditingId(null);
@@ -193,7 +212,7 @@ export function AgentOneGarimpeiro() {
   }
 
   function handleStart() {
-    if (searchIsActive) {
+    if (searchIsActive || isEnriching) {
       toast.error("Aguarde a busca atual terminar antes de iniciar o Agente 1.");
       return;
     }
@@ -215,6 +234,42 @@ export function AgentOneGarimpeiro() {
     toast("Execução interrompida com os resultados já salvos preservados.");
   }
 
+  async function handleReprocessSavedLeads() {
+    if (searchIsActive || status === "running" || status === "paused") {
+      toast.error("Pause ou conclua a busca antes de reprocessar os leads.");
+      return;
+    }
+    if (leadsWithoutEmail.length === 0) {
+      toast("Não há leads salvos elegíveis sem e-mail.");
+      return;
+    }
+
+    setIsEnriching(true);
+    setEnrichmentProgress({
+      processedCount: 0,
+      totalCount: leadsWithoutEmail.length,
+      emailFoundCount: 0,
+    });
+
+    try {
+      const updates = await requestAgentOneEmailEnrichment(
+        leadsWithoutEmail,
+        {
+          onBatch: applyContactUpdates,
+          onProgress: setEnrichmentProgress,
+        }
+      );
+      const emailFoundCount = updates.filter((update) => update.email).length;
+      toast.success(
+        `Reprocessamento concluído: ${emailFoundCount} e-mail(s) encontrado(s) em ${leadsWithoutEmail.length} website(s).`
+      );
+    } catch (error) {
+      toast.error("Reprocessamento interrompido: " + getErrorMessage(error));
+    } finally {
+      setIsEnriching(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <Card>
@@ -232,7 +287,10 @@ export function AgentOneGarimpeiro() {
             </CardDescription>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button onClick={handleStart} disabled={!canStart || searchIsActive}>
+            <Button
+              onClick={handleStart}
+              disabled={!canStart || searchIsActive || isEnriching}
+            >
               <Play className="size-4" />
               Start
             </Button>
@@ -301,6 +359,51 @@ export function AgentOneGarimpeiro() {
             </p>
           )}
         </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="gap-4 md:flex-row md:items-center md:justify-between">
+          <div className="space-y-1.5">
+            <CardTitle className="flex items-center gap-2">
+              <MailSearch className="size-5 text-primary" />
+              Enriquecimento de e-mails
+            </CardTitle>
+            <CardDescription>
+              Visita os websites dos leads já salvos no servidor. Esta ação não
+              repete a busca nem consome chamadas do SerpAPI.
+            </CardDescription>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void handleReprocessSavedLeads()}
+            disabled={
+              isEnriching ||
+              searchIsActive ||
+              status === "running" ||
+              status === "paused" ||
+              leadsWithoutEmail.length === 0
+            }
+          >
+            {isEnriching ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <MailSearch className="size-4" />
+            )}
+            {isEnriching
+              ? `Processando ${enrichmentProgress?.processedCount ?? 0}/${enrichmentProgress?.totalCount ?? leadsWithoutEmail.length}`
+              : `Reprocessar ${leadsWithoutEmail.length} sem e-mail`}
+          </Button>
+        </CardHeader>
+        {enrichmentProgress && (
+          <CardContent>
+            <p className="text-sm text-muted-foreground">
+              {enrichmentProgress.processedCount} de {enrichmentProgress.totalCount}
+              {" website(s) verificado(s) · "}
+              {enrichmentProgress.emailFoundCount} e-mail(s) encontrado(s)
+            </p>
+          </CardContent>
+        )}
       </Card>
 
       <Card>

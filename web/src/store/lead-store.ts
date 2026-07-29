@@ -12,6 +12,10 @@ import { useSettingsStore } from "@/store/settings-store";
 import { useUsageStore } from "@/store/usage-store";
 import { RECENT_SEARCHES_LIMIT } from "@/lib/mode-labels";
 import { exportLeadsToCSV } from "@/lib/csv-export";
+import {
+  mergeAgentOneContactUpdates,
+  type AgentOneContactUpdate,
+} from "@/lib/agent-one-enrichment";
 import { leadFingerprint, type Lead, type SearchRecord } from "@/types/lead";
 import type { BulkSearchProgress, SearchApiResponse } from "@/types/search";
 import type { LeadEmailValidationUpdate } from "@/types/email-validation";
@@ -72,6 +76,7 @@ interface LeadStore {
   clearSelection: () => void;
   getSelectedLeads: () => Lead[];
   saveLead: (lead: Lead) => boolean;
+  applyAgentOneContactUpdates: (updates: AgentOneContactUpdate[]) => void;
   updateLeadEmailValidation: (
     leadId: string,
     validation: LeadEmailValidationUpdate
@@ -186,6 +191,21 @@ function applyEmailValidationToRecords(
             leadId,
             validation
           ),
+        }
+      : record
+  );
+}
+
+function applyContactUpdatesToRecords(
+  records: SearchRecord[],
+  updates: AgentOneContactUpdate[]
+): SearchRecord[] {
+  const updatedIds = new Set(updates.map((update) => update.id));
+  return records.map((record) =>
+    record.leads?.some((lead) => updatedIds.has(lead.id))
+      ? {
+          ...record,
+          leads: mergeAgentOneContactUpdates(record.leads, updates),
         }
       : record
   );
@@ -677,6 +697,29 @@ export const useLeadStore = create<LeadStore>()(
         };
         set((state) => ({ savedLeads: [saved, ...state.savedLeads] }));
         return true;
+      },
+
+      applyAgentOneContactUpdates: (updates) => {
+        if (updates.length === 0) return;
+        set((state) => ({
+          currentLeads: mergeAgentOneContactUpdates(
+            state.currentLeads,
+            updates
+          ),
+          savedLeads: mergeAgentOneContactUpdates(state.savedLeads, updates),
+          importedLeads: mergeAgentOneContactUpdates(
+            state.importedLeads,
+            updates
+          ),
+          recentSearches: applyContactUpdatesToRecords(
+            state.recentSearches,
+            updates
+          ),
+          fullSearchHistory: applyContactUpdatesToRecords(
+            state.fullSearchHistory,
+            updates
+          ),
+        }));
       },
 
       updateLeadEmailValidation: (leadId, validation) => {
