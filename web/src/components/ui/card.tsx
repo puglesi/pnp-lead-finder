@@ -13,7 +13,9 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
   );
 }
 
-function CardHeader({ className, ...props }: React.ComponentProps<"div">) {
+export type CardHeaderProps = React.ComponentProps<"div">;
+
+function CardHeader({ className, ...props }: CardHeaderProps) {
   return (
     <div
       className={cn("flex flex-col space-y-1.5 p-6", className)}
@@ -40,7 +42,9 @@ function CardDescription({ className, ...props }: React.ComponentProps<"div">) {
   );
 }
 
-function CardContent({ className, ...props }: React.ComponentProps<"div">) {
+export type CardContentProps = React.ComponentProps<"div">;
+
+function CardContent({ className, ...props }: CardContentProps) {
   return <div className={cn("p-6 pt-0", className)} {...props} />;
 }
 

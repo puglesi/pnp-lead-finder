@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { buildReuseCampaignUrl } from "@/lib/campaign-reuse";
 import { CampaignStatusBadge } from "./campaign-status-badge";
 import {
+  getCampaignDeliverySnapshot,
   getClickRate,
   getResponseRate,
   getSendProgress,
@@ -17,6 +18,7 @@ import type { Campaign } from "@/types/campaign";
 
 export function CampaignCard({ campaign }: { campaign: Campaign }) {
   const router = useRouter();
+  const delivery = getCampaignDeliverySnapshot(campaign);
   const progress = getSendProgress(campaign);
   const responseRate = getResponseRate(campaign);
   const clickRate = getClickRate(campaign);
@@ -57,7 +59,7 @@ export function CampaignCard({ campaign }: { campaign: Campaign }) {
             <Users className="size-3.5 text-blue-400" />
             {campaign.leadIds.length} leads
           </span>
-          {campaign.sentCount > 0 && (
+          {delivery.sentCount > 0 && (
             <>
               <span className="inline-flex items-center gap-1.5">
                 <MessageSquare className="size-3.5 text-violet-400" />

@@ -909,6 +909,37 @@ test("intervalos 5. Stop interrompe a espera injetada", async () => {
   assert.equal(stopped.operations["panek-puglesi"].status, "stopped");
 });
 
+test("intervalos 5b. timer informa o intervalo ao indicador visual", async () => {
+  let snapshot = readySnapshot();
+  snapshot = configureAgentThreeIntervals(
+    snapshot,
+    "panek-puglesi",
+    3,
+    7,
+    now
+  );
+  let announcedSeconds = null;
+  let observedMilliseconds = null;
+  const result = await waitForAgentThreeInterval(
+    snapshot.operations["panek-puglesi"],
+    {
+      delay: async (milliseconds) => {
+        observedMilliseconds = milliseconds;
+      },
+      random: () => 0.5,
+      onIntervalSelected: (seconds) => {
+        announcedSeconds = seconds;
+      },
+    },
+    new AbortController().signal
+  );
+
+  assert.equal(announcedSeconds, 5);
+  assert.equal(observedMilliseconds, 5_000);
+  assert.equal(result.intervalSeconds, 5);
+  assert.equal(result.interrupted, false);
+});
+
 test("intervalos 6. Start sem provedor não consome contadores", () => {
   const snapshot = readySnapshot();
   const before = snapshot.operations["panek-puglesi"];
@@ -936,6 +967,36 @@ test("intervalos 7. interface principal não mostra bloqueados ou ignorados", ()
   );
   assert.equal(source.includes('label="Bloqueados"'), false);
   assert.equal(source.includes('label="Ignorados"'), false);
+});
+
+test("intervalos 7b. interface mostra preparação, progresso e contagem regressiva", () => {
+  const source = readFileSync(
+    new URL(
+      "../src/components/agents/agent-three-sender.tsx",
+      import.meta.url
+    ),
+    "utf8"
+  );
+
+  assert.equal(
+    source.includes("Carregando destinatários da campanha…"),
+    true
+  );
+  assert.equal(
+    source.includes("Enviando ${currentPosition} de ${executionTotal}"),
+    true
+  );
+  assert.equal(
+    source.includes("Próximo envio em ${nextSendSeconds}s"),
+    true
+  );
+  assert.equal(source.includes('role="progressbar"'), true);
+  assert.equal(source.includes("displayItem?.companyName"), true);
+  assert.equal(source.includes("runner.nextSendAt[profileId]"), true);
+  assert.equal(source.includes('label="Destinatários da campanha"'), true);
+  assert.equal(source.includes('label="Prontos"'), true);
+  assert.equal(source.includes("runner.loadCampaign"), true);
+  assert.equal(source.includes("emptyQueueReason"), true);
 });
 
 test("intervalos 8. configurações P&P e Modeclean continuam separadas", () => {
@@ -1867,4 +1928,153 @@ test("preparação 15. migração persistida atual aceita evidência local nova"
   assert.equal(preparedItem.queueStatus, "ready");
   assert.equal(preparedItem.hasMxRecords, true);
   assert.equal(preparedItem.emailDomain, "example.test");
+});
+
+test("preparação 16. NOT_CONFIGURED sem messageId volta para ready", () => {
+  const loaded = load(
+    createInitialAgentThreeSnapshot(),
+    "panek-puglesi",
+    "campaign-not-configured",
+    [lead("nc-1", "nc-1@example.test", "unknown", "mailbox_not_verified")]
+  );
+  const failedItem = {
+    ...loaded.snapshot.operations["panek-puglesi"].queue[0],
+    queueStatus: "failed",
+    errorMessage: "NOT_CONFIGURED: SMTP ausente",
+    failedAt: later,
+  };
+  const withFailure = {
+    ...loaded.snapshot,
+    operations: {
+      ...loaded.snapshot.operations,
+      "panek-puglesi": {
+        ...loaded.snapshot.operations["panek-puglesi"],
+        queue: [failedItem],
+        processedCount: 12,
+      },
+    },
+  };
+  const prepared = prepareAgentThreeCampaign(
+    withFailure,
+    "panek-puglesi",
+    "campaign-not-configured",
+    [lead("nc-1", "nc-1@example.test", "unknown", "mailbox_not_verified")],
+    finalTime
+  );
+  const item = prepared.snapshot.operations["panek-puglesi"].queue[0];
+  assert.equal(item.queueStatus, "ready");
+  assert.equal(item.errorMessage, undefined);
+  assert.equal(prepared.eligibleCount, 1);
+  assert.equal(
+    prepared.snapshot.operations["panek-puglesi"].processedCount,
+    0
+  );
+});
+
+test("preparação 16b. enviado simulado sem SMTP real volta para ready", () => {
+  const loaded = load(
+    createInitialAgentThreeSnapshot(),
+    "panek-puglesi",
+    "campaign-sim-sent",
+    [lead("sim-1", "sim-1@example.test", "unknown", "mailbox_not_verified")]
+  );
+  const fakeSent = {
+    ...loaded.snapshot.operations["panek-puglesi"].queue[0],
+    queueStatus: "sent",
+    providerMessageId: "sim-not-real",
+    sentAt: later,
+  };
+  const withFake = {
+    ...loaded.snapshot,
+    operations: {
+      ...loaded.snapshot.operations,
+      "panek-puglesi": {
+        ...loaded.snapshot.operations["panek-puglesi"],
+        queue: [fakeSent],
+        sentIndex: [
+          {
+            queueItemId: fakeSent.id,
+            leadId: fakeSent.leadId,
+            normalizedEmail: fakeSent.normalizedEmail,
+            campaignProfileId: "panek-puglesi",
+            campaignId: "campaign-sim-sent",
+            sentAt: later,
+            providerMessageId: "sim-not-real",
+          },
+        ],
+        processedCount: 5,
+      },
+    },
+  };
+  const prepared = prepareAgentThreeCampaign(
+    withFake,
+    "panek-puglesi",
+    "campaign-sim-sent",
+    [lead("sim-1", "sim-1@example.test", "unknown", "mailbox_not_verified")],
+    finalTime
+  );
+  const operation = prepared.snapshot.operations["panek-puglesi"];
+  assert.equal(operation.queue[0].queueStatus, "ready");
+  assert.equal(operation.sentIndex.length, 0);
+  assert.equal(operation.processedCount, 0);
+  assert.equal(prepared.eligibleCount, 1);
+});
+
+test("preparação 17. enviados confirmados não voltam para ready", () => {
+  const claimed = claimReady(readySnapshot());
+  const completed = completeAgentThreeItem(
+    claimed.snapshot,
+    "panek-puglesi",
+    claimed.item.id,
+    finalTime,
+    "smtp-real-message"
+  );
+  const prepared = prepareAgentThreeCampaign(
+    completed,
+    "panek-puglesi",
+    "campaign-a",
+    [lead("one", "one@example.test", "unknown", "mailbox_not_verified")],
+    finalTime
+  );
+  const item = prepared.snapshot.operations["panek-puglesi"].queue[0];
+  assert.equal(item.queueStatus, "sent");
+  assert.equal(item.providerMessageId, "smtp-real-message");
+  assert.equal(prepared.eligibleCount, 0);
+});
+
+test("preparação 18. métricas da campanha atual não misturam outras campanhas", () => {
+  let snapshot = load(
+    createInitialAgentThreeSnapshot(),
+    "panek-puglesi",
+    "campaign-a",
+    [lead("one", "one@example.test")]
+  ).snapshot;
+  snapshot = load(snapshot, "panek-puglesi", "campaign-b", [
+    lead("two", "two@example.test"),
+    lead("three", "three@example.test"),
+  ]).snapshot;
+  snapshot = selectAgentThreeCampaign(
+    snapshot,
+    "panek-puglesi",
+    "campaign-a",
+    later
+  );
+  const metrics = getAgentThreeMetrics(snapshot.operations["panek-puglesi"]);
+  assert.equal(metrics.total, 1);
+  assert.equal(metrics.ready, 1);
+  assert.equal(metrics.currentCampaignId, "campaign-a");
+});
+
+test("preparação 19. página antiga da campanha não envia e abre Agente 3", () => {
+  const source = readFileSync(
+    new URL(
+      "../src/components/campaigns/campaign-detail.tsx",
+      import.meta.url
+    ),
+    "utf8"
+  );
+  assert.equal(source.includes("startBatchSend"), false);
+  assert.equal(source.includes("handleSend"), false);
+  assert.equal(source.includes("Abrir no Agente 3"), true);
+  assert.equal(source.includes('router.push("/agente-3")'), true);
 });

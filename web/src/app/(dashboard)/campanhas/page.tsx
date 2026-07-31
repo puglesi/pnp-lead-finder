@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import {
   Megaphone,
   MessageSquare,
@@ -9,14 +10,48 @@ import {
   TrendingUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardTitle } from "@/components/ui/card";
+import {
+  CollapsibleCard,
+  CollapsibleCardContent,
+  CollapsibleCardHeader,
+} from "@/components/ui/collapsible-card";
 import { CampaignListTable } from "@/components/campaigns/campaign-list-table";
-import { enrichCampaignStats } from "@/lib/campaign-metrics";
+import { getCampaignListViewStats } from "@/lib/campaign-list-metrics";
 import { useCampaignStore } from "@/store/campaign-store";
 
+const subscribeToHydration = () => () => {};
+const getClientHydrationSnapshot = () => true;
+const getServerHydrationSnapshot = () => false;
+
 export default function CampanhasPage() {
-  const { campaigns, getStats } = useCampaignStore();
-  const stats = enrichCampaignStats(getStats(), campaigns);
+  const hydrated = useSyncExternalStore(
+    subscribeToHydration,
+    getClientHydrationSnapshot,
+    getServerHydrationSnapshot
+  );
+  const campaigns = useCampaignStore((state) => state.campaigns);
+  const normalizeLegacyDeliveryMetrics = useCampaignStore(
+    (state) => state.normalizeLegacyDeliveryMetrics
+  );
+
+  // After localStorage rehydrate, rewrite legacy sentCount/progress in the store.
+  useEffect(() => {
+    if (!hydrated) return;
+    normalizeLegacyDeliveryMetrics();
+  }, [hydrated, normalizeLegacyDeliveryMetrics]);
+
+  // Server and first client paint use empty store to avoid hydration mismatch.
+  const visibleCampaigns = useMemo(
+    () => (hydrated ? campaigns : []),
+    [hydrated, campaigns]
+  );
+
+  // List header never reads legacy counters — only confirmed SMTP message ids.
+  const stats = useMemo(
+    () => getCampaignListViewStats(visibleCampaigns),
+    [visibleCampaigns]
+  );
 
   return (
     <div className="mx-auto max-w-6xl space-y-8">
@@ -88,26 +123,37 @@ export default function CampanhasPage() {
         })}
       </div>
 
-      {campaigns.length === 0 ? (
-        <Card className="border-border/60 border-dashed">
-          <CardContent className="flex flex-col items-center justify-center py-20 text-center">
-            <Megaphone className="mb-4 size-16 text-muted-foreground/40" />
-            <h3 className="text-lg font-semibold">Nenhuma campanha ainda</h3>
-            <p className="mt-2 max-w-md text-sm text-muted-foreground">
-              Crie sua primeira campanha com templates personalizados, seleção de
-              leads e preview em tempo real.
-            </p>
-            <Button asChild className="mt-6">
-              <Link href="/campanhas/nova">
-                <Plus className="size-4" />
-                Criar Primeira Campanha
-              </Link>
-            </Button>
-          </CardContent>
-        </Card>
-      ) : (
-        <CampaignListTable campaigns={campaigns} />
-      )}
+      <CollapsibleCard storageKey="campaigns-list" className="border-border/60">
+        <CollapsibleCardHeader>
+          <CardTitle>Lista de campanhas</CardTitle>
+        </CollapsibleCardHeader>
+        <CollapsibleCardContent className="p-0">
+          {!hydrated || visibleCampaigns.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-20 text-center">
+              <Megaphone className="mb-4 size-16 text-muted-foreground/40" />
+              <h3 className="text-lg font-semibold">
+                {hydrated ? "Nenhuma campanha ainda" : "Carregando campanhas…"}
+              </h3>
+              {hydrated && (
+                <>
+                  <p className="mt-2 max-w-md text-sm text-muted-foreground">
+                    Crie sua primeira campanha com templates personalizados,
+                    seleção de leads e preview em tempo real.
+                  </p>
+                  <Button asChild className="mt-6">
+                    <Link href="/campanhas/nova">
+                      <Plus className="size-4" />
+                      Criar Primeira Campanha
+                    </Link>
+                  </Button>
+                </>
+              )}
+            </div>
+          ) : (
+            <CampaignListTable campaigns={visibleCampaigns} />
+          )}
+        </CollapsibleCardContent>
+      </CollapsibleCard>
     </div>
   );
 }

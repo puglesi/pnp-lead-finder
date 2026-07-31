@@ -1,6 +1,7 @@
 "use client";
 
 import { Infinity, Moon, Search, Sparkles, Wifi, Zap } from "lucide-react";
+import { useSyncExternalStore } from "react";
 import { useSettingsStore } from "@/store/settings-store";
 import { useUsageStore } from "@/store/usage-store";
 import { AUTONOMOUS_VOLUME_24H_LABEL } from "@/lib/search/volume";
@@ -15,7 +16,16 @@ import {
 import { ModeQuickSwitcher } from "./mode-quick-switcher";
 import { cn } from "@/lib/utils";
 
+const subscribeToMount = () => () => {};
+const getClientMountSnapshot = () => true;
+const getServerMountSnapshot = () => false;
+
 export function ActiveModeBanner() {
+  const mounted = useSyncExternalStore(
+    subscribeToMount,
+    getClientMountSnapshot,
+    getServerMountSnapshot
+  );
   const mode = useSettingsStore((s) => s.getActiveQuickSearchMode());
   const localProductionEnabled = useSettingsStore(
     (s) => s.localProductionEnabled
@@ -26,7 +36,8 @@ export function ActiveModeBanner() {
 
   const isAutonomous = mode === "autonomous-24h";
   const isPremium = mode === "serpapi";
-  const isGoogle = mode === "google-cse";
+
+  if (!mounted) return null;
 
   return (
     <div

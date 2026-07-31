@@ -9,6 +9,7 @@ import {
   TrendingUp,
 } from "lucide-react";
 import {
+  getCampaignDeliverySnapshot,
   getClickRate,
   getOpenRate,
   getResponseRate,
@@ -28,11 +29,12 @@ export function CampaignOverview({
   events?: CampaignTrackingEvent[];
 }) {
   const summary = buildTrackingSummary(campaign, events);
+  const delivery = getCampaignDeliverySnapshot(campaign);
 
   const stats = [
     {
       label: "Enviados",
-      value: campaign.sentCount,
+      value: delivery.sentCount,
       total: campaign.leadIds.length,
       rate: getSendProgress(campaign),
       icon: Send,
@@ -42,7 +44,7 @@ export function CampaignOverview({
     },
     {
       label: "Abertos",
-      value: campaign.openedCount,
+      value: delivery.openedCount,
       rate: getOpenRate(campaign),
       icon: Eye,
       color: "text-cyan-400",
@@ -51,7 +53,7 @@ export function CampaignOverview({
     },
     {
       label: "Cliques",
-      value: campaign.clickedCount,
+      value: delivery.clickedCount,
       rate: getClickRate(campaign),
       icon: MousePointerClick,
       color: "text-violet-400",
@@ -60,7 +62,7 @@ export function CampaignOverview({
     },
     {
       label: "Respostas",
-      value: campaign.repliedCount,
+      value: delivery.repliedCount,
       rate: getResponseRate(campaign),
       icon: MessageSquare,
       color: "text-amber-400",
@@ -87,7 +89,7 @@ export function CampaignOverview({
                 <div className={cn("rounded-xl bg-background/50 p-2.5", stat.color)}>
                   <Icon className="size-5" />
                 </div>
-                {campaign.sentCount > 0 && stat.label !== "Enviados" && (
+                {delivery.sentCount > 0 && stat.label !== "Enviados" && (
                   <span className={cn("text-sm font-semibold tabular-nums", stat.color)}>
                     {stat.rate}%
                   </span>
@@ -107,7 +109,7 @@ export function CampaignOverview({
         })}
       </div>
 
-      {campaign.sentCount > 0 && (
+      {delivery.sentCount > 0 && (
         <div className="rounded-2xl border border-border/60 bg-card/40 p-5">
           <div className="mb-4 flex items-center gap-2">
             <TrendingUp className="size-4 text-blue-400" />
@@ -116,14 +118,14 @@ export function CampaignOverview({
               · tracking ativo
             </span>
           </div>
-          <CampaignFunnelChart summary={summary} sentTotal={campaign.sentCount} />
+          <CampaignFunnelChart summary={summary} sentTotal={delivery.sentCount} />
         </div>
       )}
 
-      {campaign.sentCount === 0 && (
+      {delivery.sentCount === 0 && (
         <div className="flex items-center gap-3 rounded-xl border border-dashed border-border/60 bg-muted/10 px-4 py-3 text-sm text-muted-foreground">
           <Mail className="size-4 shrink-0" />
-          Após o envio, aberturas (pixel), cliques (links rastreados) e respostas
+          Após o envio real (Agente 3), aberturas, cliques e respostas
           aparecerão aqui automaticamente.
         </div>
       )}

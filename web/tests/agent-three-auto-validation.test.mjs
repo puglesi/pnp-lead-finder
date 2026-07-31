@@ -353,6 +353,8 @@ test("automático 13. nenhum botão novo é necessário", () => {
   assert.equal(source.includes(">Validar<"), false);
   assert.equal(source.includes(">Preparar<"), false);
   assert.equal(source.includes(">Carregar leads<"), false);
+  assert.equal(source.includes("runner.loadCampaign"), true);
+  assert.equal(source.includes("handleCampaignChange"), true);
 });
 
 test("automático 14. Agente 2 continua usando o mesmo validador local", () => {

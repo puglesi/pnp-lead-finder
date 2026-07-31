@@ -29,6 +29,7 @@ import {
 import type { EmailProviderId } from "@/types/email-provider";
 import { useLeadStore } from "@/store/lead-store";
 import { useSettingsStore } from "@/store/settings-store";
+import { applyCampaignDeliveryReconciliation } from "@/lib/campaign-metrics";
 
 interface CampaignStore {
   campaigns: Campaign[];
@@ -63,6 +64,8 @@ interface CampaignStore {
   simulateSend: (id: string, leadContexts: BatchSendLeadContext[]) => Promise<void>;
   getCampaign: (id: string) => Campaign | undefined;
   getStats: () => CampaignStats;
+  /** Rewrite persisted delivery counters from real SMTP evidence only. */
+  normalizeLegacyDeliveryMetrics: () => void;
   syncCampaignTracking: (id: string) => Promise<CampaignTrackingEvent[]>;
   markLeadReplied: (
     campaignId: string,
@@ -387,8 +390,23 @@ export const useCampaignStore = create<CampaignStore>()(
           active: campaigns.filter((c) => c.status === "active").length,
           draft: campaigns.filter((c) => c.status === "draft").length,
           completed: campaigns.filter((c) => c.status === "completed").length,
-          totalSent: campaigns.reduce((sum, c) => sum + c.sentCount, 0),
+          totalSent: campaigns.reduce(
+            (sum, c) =>
+              sum + applyCampaignDeliveryReconciliation(c).sentCount,
+            0
+          ),
         };
+      },
+
+      normalizeLegacyDeliveryMetrics: () => {
+        set((state) => ({
+          campaigns: state.campaigns.map((campaign) =>
+            applyCampaignDeliveryReconciliation(campaign)
+          ),
+          sendingProgress: null,
+          sendingCampaignId: null,
+          sendPaused: false,
+        }));
       },
 
       syncCampaignTracking: async (id) => {
@@ -424,8 +442,9 @@ export const useCampaignStore = create<CampaignStore>()(
     }),
     {
       name: "pnp-campaigns",
-      version: 10,
-      migrate: (persisted) => {
+      // v12: force list metrics to ignore legacy sentCount/failed progress.
+      version: 12,
+      migrate: (persisted, fromVersion) => {
         const state = persisted as { campaigns?: Campaign[] };
         if (!state?.campaigns) return persisted;
 
@@ -436,15 +455,19 @@ export const useCampaignStore = create<CampaignStore>()(
               body?.includes("gradient(135deg,#1e40af")
           );
 
+        void fromVersion;
+
         return {
           ...state,
           sendingProgress: null,
+          sendingCampaignId: null,
+          sendPaused: false,
           campaigns: state.campaigns.map((c) => {
             const signature = c.signature ?? { ...DEFAULT_SIGNATURE };
             if (isLegacySignature(signature.body)) {
               signature.body = DEFAULT_SIGNATURE.body;
             }
-            return {
+            const base: Campaign = {
               ...c,
               campaignProfileId:
                 c.campaignProfileId === "modeclean"
@@ -474,9 +497,47 @@ export const useCampaignStore = create<CampaignStore>()(
               },
               sendErrors: c.sendErrors ?? [],
               failedCount: c.failedCount ?? 0,
+              sentCount: c.sentCount ?? 0,
+              openedCount: c.openedCount ?? 0,
+              repliedCount: c.repliedCount ?? 0,
               emailProvider: c.emailProvider ?? "simulate",
             };
+            return applyCampaignDeliveryReconciliation(base);
           }),
+        };
+      },
+      merge: (persisted, current) => {
+        const state = (persisted ?? {}) as {
+          campaigns?: Campaign[];
+          sendingCampaignId?: string | null;
+          sendingProgress?: unknown;
+          sendPaused?: boolean;
+        };
+        const campaigns = Array.isArray(state.campaigns)
+          ? state.campaigns.map((campaign) =>
+              applyCampaignDeliveryReconciliation({
+                ...campaign,
+                leadStatuses:
+                  campaign.leadStatuses?.length > 0
+                    ? campaign.leadStatuses
+                    : initLeadStatuses(campaign.leadIds ?? []),
+                sendErrors: campaign.sendErrors ?? [],
+                failedCount: campaign.failedCount ?? 0,
+                sentCount: campaign.sentCount ?? 0,
+                openedCount: campaign.openedCount ?? 0,
+                clickedCount: campaign.clickedCount ?? 0,
+                repliedCount: campaign.repliedCount ?? 0,
+                emailProvider: campaign.emailProvider ?? "simulate",
+              } as Campaign)
+            )
+          : current.campaigns;
+        return {
+          ...current,
+          ...state,
+          campaigns,
+          sendingProgress: null,
+          sendingCampaignId: null,
+          sendPaused: false,
         };
       },
     }

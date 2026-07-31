@@ -12,8 +12,8 @@ export default function BuscaPage() {
           Configure sua busca inteligente de empresas B2B
         </p>
       </div>
-      <OneClickOutreach />
-      <QuickSearch />
+      <OneClickOutreach cardStorageKey="new-search-one-click-outreach" />
+      <QuickSearch cardStorageKey="new-search-volume" />
       <SearchedSectorsHistory />
       <RecentSearches />
     </div>

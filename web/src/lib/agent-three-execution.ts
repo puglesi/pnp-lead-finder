@@ -8,6 +8,7 @@ export type AgentThreeDelay = (
 export interface AgentThreeIntervalDependencies {
   delay: AgentThreeDelay;
   random: () => number;
+  onIntervalSelected?: (intervalSeconds: number) => void;
 }
 
 export interface AgentThreeIntervalWaitResult {
@@ -45,6 +46,7 @@ export async function waitForAgentThreeInterval(
     operation.maxIntervalSeconds,
     dependencies.random
   );
+  dependencies.onIntervalSelected?.(intervalSeconds);
   if (signal.aborted) {
     return { intervalSeconds, interrupted: true };
   }

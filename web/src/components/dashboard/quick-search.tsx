@@ -14,7 +14,12 @@ import {
   Infinity,
 } from "lucide-react";
 import toast from "react-hot-toast";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CardTitle } from "@/components/ui/card";
+import {
+  CollapsibleCard,
+  CollapsibleCardContent,
+  CollapsibleCardHeader,
+} from "@/components/ui/collapsible-card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -61,6 +66,7 @@ import { QuickConfigBar } from "./quick-config-bar";
 
 interface QuickSearchProps {
   defaultLocation?: string;
+  cardStorageKey?: string;
 }
 
 const subscribeToHydration = () => () => {};
@@ -85,6 +91,7 @@ export function QuickSearch(props: QuickSearchProps) {
 
 function QuickSearchContent({
   defaultLocation = "London",
+  cardStorageKey = "search-volume",
   hydrated,
 }: QuickSearchProps & { hydrated: boolean }) {
   const router = useRouter();
@@ -251,8 +258,8 @@ function QuickSearchContent({
   };
 
   return (
-    <Card className="border-border/60 bg-gradient-to-br from-card via-card to-blue-500/5 shadow-xl shadow-blue-500/5">
-      <CardHeader>
+    <CollapsibleCard storageKey={cardStorageKey} className="border-border/60 bg-gradient-to-br from-card via-card to-blue-500/5 shadow-xl shadow-blue-500/5">
+      <CollapsibleCardHeader>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <CardTitle className="flex items-center gap-2 text-xl">
@@ -311,8 +318,8 @@ function QuickSearchContent({
             </Badge>
           )}
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
+      </CollapsibleCardHeader>
+      <CollapsibleCardContent className="space-y-4">
         {isAutonomous && (
           <div
             className={`flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm ${
@@ -490,7 +497,7 @@ function QuickSearchContent({
             </>
           )}
         </Button>
-      </CardContent>
-    </Card>
+      </CollapsibleCardContent>
+    </CollapsibleCard>
   );
 }

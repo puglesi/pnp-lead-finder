@@ -5,6 +5,7 @@ import {
   AlertCircle,
   ListRestart,
   MailCheck,
+  Loader2,
   Pause,
   Play,
   RotateCcw,
@@ -15,13 +16,12 @@ import toast from "react-hot-toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { CardDescription, CardTitle } from "@/components/ui/card";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  CollapsibleCard,
+  CollapsibleCardContent,
+  CollapsibleCardHeader,
+} from "@/components/ui/collapsible-card";
 import {
   getAgentTwoEligibleLeadCount,
   getAgentTwoStats,
@@ -234,8 +234,8 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardHeader className="gap-4 md:flex-row md:items-center md:justify-between">
+      <CollapsibleCard storageKey="agent-2-control">
+        <CollapsibleCardHeader className="gap-4 md:flex-row md:items-center md:justify-between">
           <div className="space-y-1.5">
             <div className="flex flex-wrap items-center gap-2">
               <CardTitle className="flex items-center gap-2 text-xl">
@@ -279,9 +279,17 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
               <RotateCcw className="size-4" />
               Tentar novamente erros DNS
             </Button>
-            <Button onClick={handleStart} disabled={!hasPending || isActive}>
-              <Play className="size-4" />
-              Start
+            <Button
+              onClick={handleStart}
+              disabled={!hasPending || isActive}
+              title={!hasPending ? "Carregue e-mails pendentes" : isActive ? "Validação já iniciada" : undefined}
+            >
+              {status === "running" ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Play className="size-4" />
+              )}
+              {status === "running" ? "Validando…" : "Start"}
             </Button>
             <Button variant="outline" onClick={handlePause} disabled={status !== "running"}>
               <Pause className="size-4" />
@@ -296,8 +304,8 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
               Stop
             </Button>
           </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
+        </CollapsibleCardHeader>
+        <CollapsibleCardContent className="space-y-4">
           <div className="rounded-lg border border-border bg-background/30 p-4">
             <div className="grid gap-3 md:grid-cols-[minmax(180px,240px)_auto_auto] md:items-end">
               <div className="space-y-1.5">
@@ -365,17 +373,17 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
             <MailCheck className="size-4" />
             Sintaxe e MX aprovados permanecem desconhecidos até uma futura confirmação externa da caixa postal.
           </div>
-        </CardContent>
-      </Card>
+        </CollapsibleCardContent>
+      </CollapsibleCard>
 
-      <Card>
-        <CardHeader>
+      <CollapsibleCard storageKey="agent-2-queue">
+        <CollapsibleCardHeader>
           <CardTitle>Fila de e-mails</CardTitle>
           <CardDescription>
             A fila só é montada por uma ação acima. Cada resultado é salvo no lead imediatamente.
           </CardDescription>
-        </CardHeader>
-        <CardContent>
+        </CollapsibleCardHeader>
+        <CollapsibleCardContent>
           {queue.length === 0 ? (
             <div className="rounded-lg border border-dashed border-border p-10 text-center">
               <MailCheck className="mx-auto mb-3 size-8 text-muted-foreground" />
@@ -407,8 +415,8 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
               </table>
             </div>
           )}
-        </CardContent>
-      </Card>
+        </CollapsibleCardContent>
+      </CollapsibleCard>
     </div>
   );
 }

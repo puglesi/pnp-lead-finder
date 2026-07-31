@@ -9,10 +9,8 @@ import {
   Eye,
   EyeOff,
   LineChart,
-  Loader2,
-  Pause,
-  Play,
   Save,
+  Send,
   Settings2,
   Trash2,
   Users,
@@ -28,7 +26,6 @@ import { CampaignPerformanceReport } from "./campaign-performance-report";
 import { useCampaignTrackingSync } from "@/hooks/use-campaign-tracking-sync";
 import type { CampaignTrackingEvent } from "@/types/campaign-tracking";
 import { CampaignLeadsTable } from "./campaign-leads-table";
-import { CampaignSendProgress } from "./campaign-send-progress";
 import { CampaignSendErrorLog } from "./campaign-send-error-log";
 import { BatchSendSettings } from "./batch-send-settings";
 import { EmailProviderSettings } from "./email-provider-settings";
@@ -45,6 +42,7 @@ import { useSettingsStore } from "@/store/settings-store";
 import { resolveCampaignLeads } from "@/lib/campaign-leads";
 import { useLeadStore } from "@/store/lead-store";
 import { useCampaignStore } from "@/store/campaign-store";
+import { useAgentThreeStore } from "@/store/agent-three-store";
 import {
   DEFAULT_SIGNATURE,
   type Campaign,
@@ -130,17 +128,13 @@ function CampaignDetailContent({
   const campaign = useCampaignStore((s) =>
     s.campaigns.find((c) => c.id === campaignId)
   );
-  const sendingCampaignId = useCampaignStore((s) => s.sendingCampaignId);
-  const sendingProgress = useCampaignStore((s) => s.sendingProgress);
-  const sendPaused = useCampaignStore((s) => s.sendPaused);
   const {
-    startBatchSend,
-    pauseBatchSend,
-    resumeBatchSend,
     deleteCampaign,
     updateCampaign,
     syncCampaignTracking,
   } = useCampaignStore();
+  const selectProfile = useAgentThreeStore((s) => s.selectProfile);
+  const selectCampaign = useAgentThreeStore((s) => s.selectCampaign);
 
   const [tab, setTab] = useState<CampaignTab>(() =>
     resolveInitialTab(campaign, initialTab)
@@ -198,7 +192,6 @@ function CampaignDetailContent({
 
   if (!campaign) return null;
 
-  const isSending = sendingCampaignId === campaign.id;
   const isEditable =
     campaign.status === "draft" || campaign.status === "paused";
   const previewLead =
@@ -226,44 +219,12 @@ function CampaignDetailContent({
     toast.success("Campanha salva");
   };
 
-  const buildLeadContexts = () =>
-    leads
-      .filter((l) => l.email)
-      .map((l) => ({
-        leadId: l.id,
-        label: l.company,
-        email: l.email!,
-        lead: l,
-      }));
-
-  const handleSend = async () => {
-    if (isSending && sendPaused) {
-      resumeBatchSend();
-      toast.success("Envio retomado");
-      return;
-    }
+  const handleOpenInAgentThree = () => {
     if (isEditable) handleSave();
-    const contexts = buildLeadContexts();
-    if (contexts.length === 0) {
-      toast.error("Nenhum lead com email válido.");
-      return;
-    }
-    toast.loading("Iniciando envio em lotes...", { id: "send" });
-    try {
-      await startBatchSend(campaign.id, contexts);
-      toast.success("Campanha concluída!", { id: "send" });
-      setTab("overview");
-    } catch {
-      toast.error("Erro no envio", { id: "send" });
-    }
+    selectProfile(campaign.campaignProfileId);
+    selectCampaign(campaign.campaignProfileId, campaign.id);
+    router.push("/agente-3");
   };
-
-  const showProgress =
-    isSending ||
-    sendPaused ||
-    campaign.status === "active" ||
-    campaign.status === "paused" ||
-    campaign.status === "completed";
 
   return (
     <div className="space-y-6">
@@ -281,7 +242,7 @@ function CampaignDetailContent({
             <CampaignStatusBadge status={campaign.status} />
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
-            {campaign.leadIds.length} leads · Mailmeteor-style workspace
+            {campaign.leadIds.length} leads · envio exclusivo pelo Agente 3
           </p>
         </div>
 
@@ -299,38 +260,13 @@ function CampaignDetailContent({
               Salvar
             </Button>
           )}
-          {campaign.status === "draft" && (
-            <Button
-              onClick={handleSend}
-              disabled={isSending}
-              className="bg-emerald-600 hover:bg-emerald-500"
-            >
-              {isSending ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Play className="size-4" />
-              )}
-              Enviar
-            </Button>
-          )}
-          {(isSending || campaign.status === "active") && !sendPaused && (
-            <Button
-              variant="outline"
-              onClick={() => {
-                pauseBatchSend();
-                toast("Envio pausado");
-              }}
-            >
-              <Pause className="size-4" />
-              Pausar
-            </Button>
-          )}
-          {(sendPaused || (campaign.status === "paused" && !isSending)) && (
-            <Button onClick={handleSend}>
-              <Play className="size-4" />
-              Retomar
-            </Button>
-          )}
+          <Button
+            onClick={handleOpenInAgentThree}
+            className="bg-emerald-600 hover:bg-emerald-500"
+          >
+            <Send className="size-4" />
+            Abrir no Agente 3
+          </Button>
           <Button variant="outline" onClick={() => {
             deleteCampaign(campaign.id);
             router.push("/campanhas");
@@ -370,16 +306,11 @@ function CampaignDetailContent({
       {tab === "overview" && (
         <div className="space-y-6">
           <CampaignOverview campaign={campaign} events={trackingEvents} />
-          {showProgress && (
-            <CampaignSendProgress
-              campaign={campaign}
-              isSending={isSending}
-              sendingProgress={sendingProgress}
-              isPaused={sendPaused}
-              onPause={pauseBatchSend}
-              onResume={resumeBatchSend}
-            />
-          )}
+          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-100/90">
+            Envio legado desativado nesta página. Use{" "}
+            <strong>Abrir no Agente 3</strong> para carregar e enviar os
+            destinatários elegíveis com proteção SMTP.
+          </div>
           <CampaignSendErrorLog errors={campaign.sendErrors ?? []} />
           {campaign.followUp.enabled && (
             <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-100/90">

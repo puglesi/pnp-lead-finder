@@ -52,9 +52,9 @@ export function DashboardTabs() {
       {tab === "overview" ? (
         <div className="space-y-8">
           <StatsCards />
-          <OneClickOutreach />
+          <OneClickOutreach cardStorageKey="dashboard-one-click-outreach" />
           <BulkSearchProgress />
-          <QuickSearch />
+          <QuickSearch cardStorageKey="dashboard-search-volume" />
           <RecentSearches />
         </div>
       ) : (

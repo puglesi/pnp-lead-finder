@@ -1,5 +1,6 @@
 "use client";
 
+import { useSyncExternalStore } from "react";
 import { Moon, Scale, Wifi } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useSerpApiStatus } from "@/hooks/use-serpapi-status";
@@ -12,17 +13,29 @@ import {
 import { isSerpApiEquilibriumMode, isSerpApiVolumeMode } from "@/lib/search/volume";
 import { cn } from "@/lib/utils";
 
+const subscribeToHydration = () => () => {};
+const getClientHydrationSnapshot = () => true;
+const getServerHydrationSnapshot = () => false;
+
 export function ActiveModeBadge({
   className,
-  hydrated = true,
+  hydrated: hydratedOverride,
 }: {
   className?: string;
+  /** Optional external hydration flag; defaults to client-safe internal gate. */
   hydrated?: boolean;
 }) {
+  const autoHydrated = useSyncExternalStore(
+    subscribeToHydration,
+    getClientHydrationSnapshot,
+    getServerHydrationSnapshot
+  );
+  const hydrated = hydratedOverride ?? autoHydrated;
   const mode = useSettingsStore((s) => s.getActiveQuickSearchMode());
   const profile = useSettingsStore((s) => s.searchProfile);
   const useMaxLeads = useSettingsStore((s) => s.useMaxLeads);
   const { isSerpActive, remaining, configured } = useSerpApiStatus();
+  // Always render the default autonomous badge until the store is hydrated.
   const renderMode = hydrated ? mode : "autonomous-24h";
   const renderProfile = hydrated ? profile : "autonomous-24h";
   const renderUseMaxLeads = hydrated ? useMaxLeads : false;

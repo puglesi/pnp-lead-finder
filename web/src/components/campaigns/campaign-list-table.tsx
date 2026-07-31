@@ -6,10 +6,9 @@ import { ArrowRight, MessageSquare, Users, UsersRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CampaignStatusBadge } from "./campaign-status-badge";
 import {
-  getClickRate,
-  getResponseRate,
-  getSendProgress,
-} from "@/lib/campaign-metrics";
+  countConfirmedSmtpSends,
+  getCampaignListProgressPercent,
+} from "@/lib/campaign-list-metrics";
 import { formatDistanceToNow } from "@/lib/date-utils";
 import { buildReuseCampaignUrl } from "@/lib/campaign-reuse";
 import type { Campaign } from "@/types/campaign";
@@ -31,7 +30,7 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
               <th className="px-5 py-3 font-medium">Campanha</th>
               <th className="px-5 py-3 font-medium">Leads</th>
               <th className="px-5 py-3 font-medium">Status</th>
-              <th className="px-5 py-3 font-medium">Cliques</th>
+              <th className="px-5 py-3 font-medium">Enviados</th>
               <th className="px-5 py-3 font-medium">Respostas</th>
               <th className="px-5 py-3 font-medium">Progresso</th>
               <th className="px-5 py-3 font-medium">Atualizado</th>
@@ -40,9 +39,19 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
           </thead>
           <tbody>
             {campaigns.map((campaign) => {
-              const responseRate = getResponseRate(campaign);
-              const clickRate = getClickRate(campaign);
-              const progress = getSendProgress(campaign);
+              const confirmedSent = countConfirmedSmtpSends(campaign);
+              const progress = getCampaignListProgressPercent(campaign);
+              const replied = (campaign.leadStatuses ?? []).filter(
+                (status) =>
+                  status.status === "replied" &&
+                  Boolean(status.providerMessageId) &&
+                  !String(status.providerMessageId).startsWith("sim-")
+              ).length;
+              const responseRate =
+                confirmedSent === 0
+                  ? 0
+                  : Math.round((replied / confirmedSent) * 100);
+
               return (
                 <tr
                   key={campaign.id}
@@ -66,25 +75,24 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
                     <CampaignStatusBadge status={campaign.status} />
                   </td>
                   <td className="px-5 py-4 tabular-nums">
-                    {campaign.sentCount > 0 ? (
-                      <span className="inline-flex items-center gap-1 font-medium text-violet-400">
-                        <MessageSquare className="size-3.5" />
-                        {clickRate}%
-                      </span>
-                    ) : (
-                      "—"
-                    )}
+                    <span className="font-medium text-emerald-400">
+                      {confirmedSent}
+                    </span>
+                    <span className="text-muted-foreground">
+                      /{campaign.leadIds.length}
+                    </span>
                   </td>
                   <td className="px-5 py-4 tabular-nums">
-                    {campaign.sentCount > 0 ? (
+                    {confirmedSent > 0 ? (
                       <span
                         className={cn(
-                          "font-medium",
+                          "inline-flex items-center gap-1 font-medium",
                           responseRate >= 10
                             ? "text-emerald-400"
                             : "text-muted-foreground"
                         )}
                       >
+                        <MessageSquare className="size-3.5" />
                         {responseRate}%
                       </span>
                     ) : (

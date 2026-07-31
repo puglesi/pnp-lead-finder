@@ -18,13 +18,12 @@ import {
 import toast from "react-hot-toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CardDescription, CardTitle } from "@/components/ui/card";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+  CollapsibleCard,
+  CollapsibleCardContent,
+  CollapsibleCardHeader,
+} from "@/components/ui/collapsible-card";
 import { Input } from "@/components/ui/input";
 import { useAgentOneRunner } from "@/hooks/use-agent-one-runner";
 import {
@@ -272,8 +271,8 @@ export function AgentOneGarimpeiro() {
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardHeader className="gap-4 md:flex-row md:items-center md:justify-between">
+      <CollapsibleCard storageKey="agent-1-control">
+        <CollapsibleCardHeader className="gap-4 md:flex-row md:items-center md:justify-between">
           <div className="space-y-1.5">
             <div className="flex flex-wrap items-center gap-2">
               <CardTitle className="flex items-center gap-2 text-xl">
@@ -290,14 +289,20 @@ export function AgentOneGarimpeiro() {
             <Button
               onClick={handleStart}
               disabled={!canStart || searchIsActive || isEnriching}
+              title={!canStart ? "Adicione um setor pendente" : searchIsActive || isEnriching ? "Aguarde o processamento atual" : undefined}
             >
-              <Play className="size-4" />
-              Start
+              {status === "running" ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Play className="size-4" />
+              )}
+              {status === "running" ? "Processando…" : "Start"}
             </Button>
             <Button
               variant="outline"
               onClick={handlePause}
               disabled={status !== "running"}
+              title={status !== "running" ? "Disponível durante a execução" : undefined}
             >
               <Pause className="size-4" />
               Pause
@@ -306,6 +311,7 @@ export function AgentOneGarimpeiro() {
               variant="outline"
               onClick={handleResume}
               disabled={status !== "paused"}
+              title={status !== "paused" ? "Disponível quando estiver pausado" : undefined}
             >
               <RotateCcw className="size-4" />
               Resume
@@ -314,13 +320,14 @@ export function AgentOneGarimpeiro() {
               variant="destructive"
               onClick={handleStop}
               disabled={status !== "running" && status !== "paused"}
+              title={status !== "running" && status !== "paused" ? "Nenhuma execução ativa" : undefined}
             >
               <Square className="size-4" />
               Stop
             </Button>
           </div>
-        </CardHeader>
-        <CardContent>
+        </CollapsibleCardHeader>
+        <CollapsibleCardContent>
           <div className="grid gap-3 sm:grid-cols-3">
             <div className="rounded-lg border border-border bg-background/40 p-4">
               <p className="text-xs uppercase tracking-wide text-muted-foreground">
@@ -358,11 +365,11 @@ export function AgentOneGarimpeiro() {
               {agentError}
             </p>
           )}
-        </CardContent>
-      </Card>
+        </CollapsibleCardContent>
+      </CollapsibleCard>
 
-      <Card>
-        <CardHeader className="gap-4 md:flex-row md:items-center md:justify-between">
+      <CollapsibleCard storageKey="agent-1-email-enrichment">
+        <CollapsibleCardHeader className="gap-4 md:flex-row md:items-center md:justify-between">
           <div className="space-y-1.5">
             <CardTitle className="flex items-center gap-2">
               <MailSearch className="size-5 text-primary" />
@@ -394,26 +401,26 @@ export function AgentOneGarimpeiro() {
               ? `Processando ${enrichmentProgress?.processedCount ?? 0}/${enrichmentProgress?.totalCount ?? leadsWithoutEmail.length}`
               : `Reprocessar ${leadsWithoutEmail.length} sem e-mail`}
           </Button>
-        </CardHeader>
+        </CollapsibleCardHeader>
         {enrichmentProgress && (
-          <CardContent>
+          <CollapsibleCardContent>
             <p className="text-sm text-muted-foreground">
               {enrichmentProgress.processedCount} de {enrichmentProgress.totalCount}
               {" website(s) verificado(s) · "}
               {enrichmentProgress.emailFoundCount} e-mail(s) encontrado(s)
             </p>
-          </CardContent>
+          </CollapsibleCardContent>
         )}
-      </Card>
+      </CollapsibleCard>
 
-      <Card>
-        <CardHeader>
+      <CollapsibleCard storageKey="agent-1-sector-form">
+        <CollapsibleCardHeader>
           <CardTitle>{editingId ? "Editar setor" : "Adicionar setor"}</CardTitle>
           <CardDescription>
             Defina o setor, a localização e a quantidade desejada de leads.
           </CardDescription>
-        </CardHeader>
-        <CardContent>
+        </CollapsibleCardHeader>
+        <CollapsibleCardContent>
           <form className="grid gap-4 md:grid-cols-[1fr_1fr_180px_auto]" onSubmit={handleSubmit}>
             <div className="space-y-1.5">
               <label className="text-sm font-medium" htmlFor="agent-one-sector">
@@ -471,17 +478,17 @@ export function AgentOneGarimpeiro() {
               {formError}
             </p>
           )}
-        </CardContent>
-      </Card>
+        </CollapsibleCardContent>
+      </CollapsibleCard>
 
-      <Card>
-        <CardHeader>
+      <CollapsibleCard storageKey="agent-1-queue">
+        <CollapsibleCardHeader>
           <CardTitle>Fila de setores</CardTitle>
           <CardDescription>
             A ordem abaixo é a ordem de execução. Apenas itens ainda não iniciados podem ser editados ou excluídos.
           </CardDescription>
-        </CardHeader>
-        <CardContent>
+        </CollapsibleCardHeader>
+        <CollapsibleCardContent>
           {queue.length === 0 ? (
             <div className="rounded-lg border border-dashed border-border p-10 text-center">
               <Pickaxe className="mx-auto mb-3 size-8 text-muted-foreground" />
@@ -559,8 +566,8 @@ export function AgentOneGarimpeiro() {
               })}
             </div>
           )}
-        </CardContent>
-      </Card>
+        </CollapsibleCardContent>
+      </CollapsibleCard>
     </div>
   );
 }

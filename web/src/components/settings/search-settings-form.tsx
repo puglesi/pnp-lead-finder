@@ -13,7 +13,12 @@ import {
   Wifi,
 } from "lucide-react";
 import toast from "react-hot-toast";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardTitle } from "@/components/ui/card";
+import {
+  CollapsibleCard,
+  CollapsibleCardContent,
+  CollapsibleCardHeader,
+} from "@/components/ui/collapsible-card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -81,13 +86,14 @@ export function SearchSettingsForm() {
 
       <AutonomousOptions />
 
-      <Card
+      <CollapsibleCard
+        storageKey="settings-serpapi-key"
         className={cn(
           "border-border/60",
           isAutonomous && "opacity-80"
         )}
       >
-        <CardHeader>
+        <CollapsibleCardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <Key className="size-5 text-emerald-400" />
             Chave SerpAPI
@@ -103,8 +109,8 @@ export function SearchSettingsForm() {
             <code className="text-primary">SERPAPI_KEY</code> no{" "}
             <code className="text-primary">.env.local</code>.
           </p>
-        </CardHeader>
-        <CardContent className="space-y-4">
+        </CollapsibleCardHeader>
+        <CollapsibleCardContent className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="serp-key">API Key SerpAPI</Label>
             <div className="relative">
@@ -155,16 +161,16 @@ export function SearchSettingsForm() {
             Se o crédito acabar, fallback automático discreto — a fila continua
             sem interrupção.
           </p>
-        </CardContent>
-      </Card>
+        </CollapsibleCardContent>
+      </CollapsibleCard>
 
-      <Card className="border-border/60">
-        <CardHeader>
+      <CollapsibleCard storageKey="settings-google-search" className="border-border/60">
+        <CollapsibleCardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
             Google Custom Search (opcional)
           </CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-4 sm:grid-cols-2">
+        </CollapsibleCardHeader>
+        <CollapsibleCardContent className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
             <Label>API Key Google</Label>
             <Input
@@ -184,8 +190,8 @@ export function SearchSettingsForm() {
               className="bg-background/50 font-mono text-sm"
             />
           </div>
-        </CardContent>
-      </Card>
+        </CollapsibleCardContent>
+      </CollapsibleCard>
 
       <Card
         className={cn(
@@ -222,14 +228,14 @@ export function SearchSettingsForm() {
         </CardContent>
       </Card>
 
-      <Card className="border-border/60">
-        <CardHeader>
+      <CollapsibleCard storageKey="settings-volume-quality" className="border-border/60">
+        <CollapsibleCardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <Gauge className="size-5 text-blue-400" />
             Volume & Qualidade
           </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2 text-sm text-muted-foreground">
+        </CollapsibleCardHeader>
+        <CollapsibleCardContent className="space-y-2 text-sm text-muted-foreground">
           <p>
             Padrão Equilíbrio:{" "}
             <strong className="text-foreground">
@@ -258,8 +264,8 @@ export function SearchSettingsForm() {
               <ArrowRight className="size-3.5" />
             </Link>
           </Button>
-        </CardContent>
-      </Card>
+        </CollapsibleCardContent>
+      </CollapsibleCard>
 
       <div className="flex items-center gap-2">
         <span className="text-sm text-muted-foreground">Status:</span>
@@ -280,7 +286,12 @@ export function SearchSettingsForm() {
         )}
       </div>
 
-      <Button onClick={handleSave}>Salvar Configurações</Button>
+      <Button
+        onClick={handleSave}
+        className="bg-emerald-600 text-white hover:bg-emerald-500"
+      >
+        Salvar Configurações
+      </Button>
     </div>
   );
 }

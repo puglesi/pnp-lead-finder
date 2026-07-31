@@ -1,10 +1,15 @@
 "use client";
 
 import { AlertTriangle, Wifi, Zap } from "lucide-react";
+import { useSyncExternalStore } from "react";
 import { Badge } from "@/components/ui/badge";
 import { useSerpApiStatus } from "@/hooks/use-serpapi-status";
 import { SERPAPI_FREE_MONTHLY_LIMIT } from "@/lib/search/volume";
 import { cn } from "@/lib/utils";
+
+const subscribeToMount = () => () => {};
+const getClientMountSnapshot = () => true;
+const getServerMountSnapshot = () => false;
 
 export function SerpApiActiveStatus({
   className,
@@ -13,9 +18,15 @@ export function SerpApiActiveStatus({
   className?: string;
   compact?: boolean;
 }) {
+  const mounted = useSyncExternalStore(
+    subscribeToMount,
+    getClientMountSnapshot,
+    getServerMountSnapshot
+  );
   const { isSerpActive, configured, remaining, creditExhausted, envKeyConfigured, status } =
     useSerpApiStatus();
 
+  if (!mounted) return null;
   if (!configured) return null;
 
   if (creditExhausted) {
@@ -50,7 +61,7 @@ export function SerpApiActiveStatus({
         <Zap className="size-4 text-emerald-400" />
       </div>
       <div className="min-w-0 flex-1">
-        <p className="flex flex-wrap items-center gap-2 font-semibold text-emerald-200">
+        <div className="flex flex-wrap items-center gap-2 font-semibold text-emerald-200">
           <Wifi className="size-3.5" />
           Modo SerpAPI Ativo
           {envKeyConfigured && (
@@ -58,7 +69,7 @@ export function SerpApiActiveStatus({
               .env.local
             </Badge>
           )}
-        </p>
+        </div>
         {!compact && (
           <p className="text-sm text-muted-foreground">
             Google Maps via SerpAPI · busca real em tempo real

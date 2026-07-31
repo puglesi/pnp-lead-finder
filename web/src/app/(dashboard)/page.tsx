@@ -1,5 +1,6 @@
 "use client";
 
+import { useSyncExternalStore } from "react";
 import { DashboardTabs } from "@/components/dashboard/dashboard-tabs";
 import { ActiveModeBanner } from "@/components/dashboard/active-mode-banner";
 import { LocalProductionPanel } from "@/components/dashboard/local-production-panel";
@@ -9,9 +10,19 @@ import { SerpApiPlanBanner } from "@/components/dashboard/serpapi-plan-banner";
 import { SerpApiActiveStatus } from "@/components/dashboard/serpapi-active-status";
 import { useSettingsStore } from "@/store/settings-store";
 
+const subscribeToHydration = () => () => {};
+const getClientHydrationSnapshot = () => true;
+const getServerHydrationSnapshot = () => false;
+
 export default function DashboardPage() {
+  const hydrated = useSyncExternalStore(
+    subscribeToHydration,
+    getClientHydrationSnapshot,
+    getServerHydrationSnapshot
+  );
   const mode = useSettingsStore((s) => s.getActiveQuickSearchMode());
-  const isPremium = mode === "serpapi";
+  const renderMode = hydrated ? mode : "autonomous-24h";
+  const isPremium = renderMode === "serpapi";
 
   return (
     <div className="mx-auto max-w-7xl space-y-8">
@@ -20,8 +31,8 @@ export default function DashboardPage() {
       {isPremium && <SerpApiActiveStatus />}
       {isPremium ? <SerpApiPlanBanner /> : null}
       <div className="flex flex-wrap items-center gap-2">
-        <ActiveModeBadge />
-        <ProviderStatusBadge />
+        <ActiveModeBadge hydrated={hydrated} />
+        <ProviderStatusBadge hydrated={hydrated} />
       </div>
       <DashboardTabs />
     </div>

@@ -1,6 +1,11 @@
 import Link from "next/link";
 import { Settings, Building2, Bell, Settings2, ArrowRight } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardTitle } from "@/components/ui/card";
+import {
+  CollapsibleCard,
+  CollapsibleCardContent,
+  CollapsibleCardHeader,
+} from "@/components/ui/collapsible-card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -44,14 +49,14 @@ export default function ConfiguracoesPage() {
 
       <SearchSettingsForm />
 
-      <Card className="border-border/60">
-        <CardHeader>
+      <CollapsibleCard storageKey="settings-company" className="border-border/60">
+        <CollapsibleCardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <Building2 className="size-5 text-blue-400" />
             Empresa
           </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
+        </CollapsibleCardHeader>
+        <CollapsibleCardContent className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
               <label className="text-sm font-medium">Nome da Empresa</label>
@@ -65,24 +70,24 @@ export default function ConfiguracoesPage() {
               />
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </CollapsibleCardContent>
+      </CollapsibleCard>
 
-      <Card className="border-border/60">
-        <CardHeader>
+      <CollapsibleCard storageKey="settings-notifications" className="border-border/60">
+        <CollapsibleCardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <Bell className="size-5 text-amber-400" />
             Notificações
           </CardTitle>
-        </CardHeader>
-        <CardContent>
+        </CollapsibleCardHeader>
+        <CollapsibleCardContent>
           <p className="text-sm text-muted-foreground">
             Receba alertas quando buscas em volume forem concluídas.
           </p>
           <Separator className="my-4" />
           <Button variant="outline">Configurar Notificações</Button>
-        </CardContent>
-      </Card>
+        </CollapsibleCardContent>
+      </CollapsibleCard>
     </div>
   );
 }

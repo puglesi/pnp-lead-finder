@@ -9,6 +9,7 @@ import {
   isEmailSyntaxValid,
   normalizeEmail,
 } from "./email-validation.ts";
+import { isRealDeliveryMessageId } from "./campaign-delivery-metrics.ts";
 
 export type AgentThreeQueueStatus =
   | "pending"
@@ -359,8 +360,15 @@ export function selectAgentThreeCampaign(
 ): AgentThreeSnapshot {
   const operation = snapshot.operations[profileId];
   if (operation.currentCampaignId === campaignId) return snapshot;
+  const isLive =
+    operation.status === "running" || operation.status === "paused";
   const next = withHistory(
-    { ...operation, currentCampaignId: campaignId },
+    {
+      ...operation,
+      currentCampaignId: campaignId,
+      // New selection starts a fresh execution counter unless already live.
+      processedCount: isLive ? operation.processedCount : 0,
+    },
     "campaign_selected",
     occurredAt,
     campaignId ? "Campanha selecionada." : "Campanha removida da seleção."
@@ -764,6 +772,21 @@ export function isAgentThreeItemEligible(
   return item.hasMxRecords === true;
 }
 
+/** Failures where SMTP was never called (config/protection) may return to ready. */
+export function isRecoverableConfigurationQueueFailure(
+  item: AgentThreeQueueItem
+): boolean {
+  if (item.queueStatus !== "failed") return false;
+  if (item.providerMessageId) return false;
+  const message = item.errorMessage ?? "";
+  return (
+    /not[_\s-]?configured/i.test(message) ||
+    /configura(?:ção|cao|tion)/i.test(message) ||
+    /real_send_disabled/i.test(message) ||
+    /envio real desativado/i.test(message)
+  );
+}
+
 export function prepareAgentThreeCampaign(
   snapshot: AgentThreeSnapshot,
   profileId: CampaignProfileId,
@@ -796,14 +819,22 @@ export function prepareAgentThreeCampaign(
   let removedCount = 0;
   let changed = false;
   const queue = operation.queue.map((originalItem) => {
+    const unconfirmedSent =
+      originalItem.campaignId === campaignId &&
+      originalItem.queueStatus === "sent" &&
+      !isRealDeliveryMessageId(originalItem.providerMessageId);
     if (
       originalItem.campaignId !== campaignId ||
-      originalItem.queueStatus === "sent" ||
       originalItem.queueStatus === "sending" ||
-      originalItem.queueStatus === "failed" ||
-      originalItem.queueStatus === "skipped"
+      originalItem.queueStatus === "skipped" ||
+      (originalItem.queueStatus === "sent" && !unconfirmedSent) ||
+      (originalItem.queueStatus === "failed" &&
+        !isRecoverableConfigurationQueueFailure(originalItem))
     ) {
       return originalItem;
+    }
+    if (unconfirmedSent) {
+      changed = true;
     }
     const item = leadEvidenceForItem(
       originalItem,
@@ -834,7 +865,8 @@ export function prepareAgentThreeCampaign(
       item.validationReason === originalItem.validationReason &&
       item.normalizedEmail === originalItem.normalizedEmail &&
       item.hasMxRecords === originalItem.hasMxRecords &&
-      exclusionReason === originalItem.exclusionReason
+      exclusionReason === originalItem.exclusionReason &&
+      item.errorMessage === originalItem.errorMessage
     ) {
       return originalItem;
     }
@@ -844,8 +876,30 @@ export function prepareAgentThreeCampaign(
       queueStatus,
       exclusionReason,
       updatedAt: occurredAt,
+      sentAt:
+        queueStatus === "ready" || queueStatus === "pending"
+          ? undefined
+          : item.sentAt,
+      providerMessageId:
+        queueStatus === "ready" || queueStatus === "pending"
+          ? undefined
+          : item.providerMessageId,
+      failedAt: queueStatus === "ready" || queueStatus === "pending"
+        ? undefined
+        : item.failedAt,
+      errorMessage:
+        queueStatus === "ready" || queueStatus === "pending"
+          ? undefined
+          : item.errorMessage,
     };
   });
+  const cleanedSentIndex = operation.sentIndex.filter((record) => {
+    if (record.campaignId !== campaignId) return true;
+    return isRealDeliveryMessageId(record.providerMessageId);
+  });
+  if (cleanedSentIndex.length !== operation.sentIndex.length) {
+    changed = true;
+  }
   const eligibleCount = queue.filter(
     (item) =>
       item.campaignId === campaignId && item.queueStatus === "ready"
@@ -858,12 +912,16 @@ export function prepareAgentThreeCampaign(
       removedCount,
     };
   }
+  // prepare returns early when status is "running"; only paused keeps counters.
+  const preserveProcessedCount = operation.status === "paused";
   const next = withHistory(
     {
       ...operation,
       queue,
+      sentIndex: cleanedSentIndex,
       currentCampaignId: campaignId,
       errorMessage: null,
+      processedCount: preserveProcessedCount ? operation.processedCount : 0,
     },
     "items_prepared",
     occurredAt,
@@ -1421,10 +1479,14 @@ function listLabel(item: AgentThreeQueueItem): string {
 export function getAgentThreeMetrics(
   operation: AgentThreeOperationState
 ): AgentThreeMetrics {
+  const campaignId = operation.currentCampaignId;
+  const queue = campaignId
+    ? operation.queue.filter((item) => item.campaignId === campaignId)
+    : operation.queue;
   const count = (status: AgentThreeQueueStatus) =>
-    operation.queue.filter((item) => item.queueStatus === status).length;
+    queue.filter((item) => item.queueStatus === status).length;
   const lists = new Map<string, AgentThreeQueueItem[]>();
-  for (const item of operation.queue) {
+  for (const item of queue) {
     const label = listLabel(item);
     lists.set(label, [...(lists.get(label) ?? []), item]);
   }
@@ -1441,15 +1503,14 @@ export function getAgentThreeMetrics(
     (completed ? completedLists : pendingLists).push(label);
   }
   const currentItem =
-    operation.queue.find((item) => item.id === operation.currentItemId) ??
-    operation.queue.find(
+    queue.find((item) => item.id === operation.currentItemId) ??
+    queue.find(
       (item) =>
-        item.campaignId === operation.currentCampaignId &&
-        (item.queueStatus === "ready" ||
-          item.queueStatus === "pending" ||
-          item.queueStatus === "sending")
+        item.queueStatus === "ready" ||
+        item.queueStatus === "pending" ||
+        item.queueStatus === "sending"
     );
-  const blockedItems = operation.queue.filter(
+  const blockedItems = queue.filter(
     (item) => item.queueStatus === "blocked"
   );
   const invalidRemoved = blockedItems.filter(
@@ -1460,19 +1521,18 @@ export function getAgentThreeMetrics(
   ).length;
   const otherRemoved = blockedItems.length - invalidRemoved;
   return {
-    total: operation.queue.length,
+    total: queue.length,
     sent: count("sent"),
     pending: count("pending"),
     ready: count("ready") + count("sending"),
     failed: count("failed"),
     blocked: count("blocked"),
-    skipped: count("skipped") + operation.ignoredCount,
+    skipped: count("skipped"),
     numericLimit: operation.numericLimit,
     untilQueueEnds: operation.untilQueueEnds,
     processedCount: operation.processedCount,
     remainingCapacity: getAgentThreeRemainingCapacity(operation),
-    removed:
-      count("skipped") + otherRemoved + operation.ignoredCount,
+    removed: count("skipped") + otherRemoved,
     invalidRemoved,
     currentCampaignId: operation.currentCampaignId,
     currentSector: currentItem?.sector || null,

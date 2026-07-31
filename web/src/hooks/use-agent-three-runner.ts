@@ -11,6 +11,12 @@ import {
   AGENT_THREE_VALIDATING_MESSAGE,
   validateAgentThreeCampaignLeads,
 } from "@/lib/agent-three-auto-validation";
+import {
+  describeAgentThreeEmptyQueue,
+  getAgentThreeLoadableLeadIds,
+  isAgentThreeConfirmedDelivery,
+  recoverNotConfiguredCampaignLeadStatuses,
+} from "@/lib/agent-three-campaign-load";
 import { localEmailValidationProvider } from "@/lib/client-email-validation";
 import {
   AGENT_THREE_TRACKING_ERROR_MESSAGE,
@@ -23,6 +29,7 @@ import {
 import { waitForAgentThreeInterval } from "@/lib/agent-three-execution";
 import {
   NO_ELIGIBLE_LEADS_MESSAGE,
+  getAgentThreeMetrics,
 } from "@/lib/agent-three-queue";
 import { useAgentThreeStore } from "@/store/agent-three-store";
 import { useCampaignStore } from "@/store/campaign-store";
@@ -45,12 +52,40 @@ interface AgentThreeRunnerResult {
   message: string | null;
 }
 
-interface AgentThreeCampaignPreparation {
+export interface AgentThreeCampaignPreparation {
   campaign: Campaign | null;
+  campaignRecipientCount: number;
+  loadableCount: number;
+  resolvedLeadCount: number;
   eligibleCount: number;
+  preparedCount: number;
+  removedCount: number;
+  alreadySentCount: number;
+  /** Duplicates/skips ignored on load (not confirmed sends). */
+  excludedOnLoadCount: number;
+  confirmedDeliveryCount: number;
+  recoveredNotConfiguredCount: number;
+  missingLeadCount: number;
   dnsErrorCount: number;
   message: string | null;
 }
+
+const EMPTY_PREPARATION: AgentThreeCampaignPreparation = {
+  campaign: null,
+  campaignRecipientCount: 0,
+  loadableCount: 0,
+  resolvedLeadCount: 0,
+  eligibleCount: 0,
+  preparedCount: 0,
+  removedCount: 0,
+  alreadySentCount: 0,
+  excludedOnLoadCount: 0,
+  confirmedDeliveryCount: 0,
+  recoveredNotConfiguredCount: 0,
+  missingLeadCount: 0,
+  dnsErrorCount: 0,
+  message: "Selecione uma campanha antes de iniciar.",
+};
 
 function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -86,60 +121,108 @@ function findLead(leadId: string): Lead | null {
 }
 
 async function prepareSelectedCampaign(
-  profileId: CampaignProfileId
+  profileId: CampaignProfileId,
+  campaignIdOverride?: string | null
 ): Promise<AgentThreeCampaignPreparation> {
   const agentStore = useAgentThreeStore.getState();
   const operation = agentStore.operations[profileId];
-  if (!operation.currentCampaignId) {
-    return {
-      campaign: null,
-      eligibleCount: 0,
-      dnsErrorCount: 0,
-      message: "Selecione uma campanha antes de iniciar.",
-    };
+  const campaignId =
+    campaignIdOverride === undefined
+      ? operation.currentCampaignId
+      : campaignIdOverride;
+
+  if (!campaignId) {
+    return { ...EMPTY_PREPARATION };
   }
-  const campaign =
+
+  if (operation.currentCampaignId !== campaignId) {
+    agentStore.selectCampaign(profileId, campaignId);
+  }
+
+  let campaign =
     useCampaignStore
       .getState()
       .campaigns.find(
         (candidate) =>
-          candidate.id === operation.currentCampaignId &&
+          candidate.id === campaignId &&
           candidate.campaignProfileId === profileId
       ) ?? null;
   if (!campaign) {
     return {
-      campaign: null,
-      eligibleCount: 0,
-      dnsErrorCount: 0,
+      ...EMPTY_PREPARATION,
       message: "Campanha selecionada não foi encontrada.",
     };
   }
-  const deliveredLeadIds = new Set(
-    campaign.leadStatuses
-      .filter((status) =>
-        ["sent", "opened", "clicked", "replied"].includes(status.status)
-      )
-      .map((status) => status.leadId)
-  );
-  const leads = campaign.leadIds
-    .filter((leadId) => !deliveredLeadIds.has(leadId))
-    .map(findLead)
-    .filter((lead): lead is Lead => lead !== null);
-  if (leads.length > 0) {
-    agentStore.loadLeads(profileId, campaign.id, leads, leads.length);
+
+  const recovered = recoverNotConfiguredCampaignLeadStatuses(campaign);
+  if (recovered.changed) {
+    const campaignIdToRecover = campaign.id;
+    useCampaignStore.getState().updateCampaign(campaignIdToRecover, {
+      leadStatuses: recovered.leadStatuses,
+      failedCount: recovered.failedCount,
+      sentCount: recovered.sentCount,
+      openedCount: recovered.openedCount,
+      clickedCount: recovered.clickedCount,
+      repliedCount: recovered.repliedCount,
+      sendErrors: recovered.sendErrors,
+    });
+    campaign =
+      useCampaignStore
+        .getState()
+        .campaigns.find((candidate) => candidate.id === campaignIdToRecover) ??
+      {
+        ...campaign,
+        leadStatuses: recovered.leadStatuses,
+        failedCount: recovered.failedCount,
+        sentCount: recovered.sentCount,
+        openedCount: recovered.openedCount,
+        clickedCount: recovered.clickedCount,
+        repliedCount: recovered.repliedCount,
+        sendErrors: recovered.sendErrors,
+      };
   }
+
+  const activeCampaign = campaign;
+  const confirmedDeliveryCount = activeCampaign.leadStatuses.filter(
+    isAgentThreeConfirmedDelivery
+  ).length;
+  const loadableLeadIds = getAgentThreeLoadableLeadIds(activeCampaign);
+  const resolvedLeads: Lead[] = [];
+  let missingLeadCount = 0;
+  for (const leadId of loadableLeadIds) {
+    const lead = findLead(leadId);
+    if (lead) resolvedLeads.push(lead);
+    else missingLeadCount += 1;
+  }
+
+  let alreadySentCount = 0;
+  let excludedOnLoadCount = 0;
+  if (resolvedLeads.length > 0) {
+    const loadResult = agentStore.loadLeads(
+      profileId,
+      activeCampaign.id,
+      resolvedLeads,
+      resolvedLeads.length
+    );
+    alreadySentCount = loadResult.alreadySentCount;
+    excludedOnLoadCount = Math.max(
+      0,
+      loadResult.ignoredCount - loadResult.alreadySentCount
+    );
+  }
+
   const suppressedLeadIds = new Set(
     useAgentThreeStore
       .getState()
       .operations[profileId].queue.filter(
         (item) =>
-          item.campaignId === campaign.id &&
+          item.campaignId === activeCampaign.id &&
           item.exclusionReason === "suppressed"
       )
       .map((item) => item.leadId)
   );
   const validation = await validateAgentThreeCampaignLeads(
-    leads,
+    resolvedLeads,
     (email) => localEmailValidationProvider.validate(email),
     {
       shouldSkip: (lead) => suppressedLeadIds.has(lead.id),
@@ -147,24 +230,45 @@ async function prepareSelectedCampaign(
   );
   const leadStore = useLeadStore.getState();
   for (const update of validation.updates) {
-    leadStore.updateLeadEmailValidation(
-      update.leadId,
-      update.validation
-    );
+    leadStore.updateLeadEmailValidation(update.leadId, update.validation);
   }
   const preparation = useAgentThreeStore
     .getState()
-    .prepareCampaign(profileId, campaign.id, validation.leads);
-  return {
-    campaign,
-    eligibleCount: preparation.eligibleCount,
+    .prepareCampaign(profileId, activeCampaign.id, validation.leads);
+  const metrics = getAgentThreeMetrics(
+    useAgentThreeStore.getState().operations[profileId]
+  );
+  const message = describeAgentThreeEmptyQueue({
+    hasCampaign: true,
+    campaignRecipientCount: activeCampaign.leadIds.length,
+    loadableCount: loadableLeadIds.length,
+    resolvedLeadCount: resolvedLeads.length,
+    readyCount: preparation.eligibleCount,
+    alreadySentCount,
+    confirmedDeliveryCount,
+    recoveredNotConfiguredCount: recovered.recoveredCount,
+    missingLeadCount,
+    removedCount: preparation.removedCount + metrics.removed + metrics.invalidRemoved,
     dnsErrorCount: validation.dnsErrorCount,
-    message:
-      preparation.eligibleCount > 0
-        ? null
-        : validation.dnsErrorCount > 0
-          ? AGENT_THREE_DNS_INCOMPLETE_MESSAGE
-          : NO_ELIGIBLE_LEADS_MESSAGE,
+    dnsMessage: AGENT_THREE_DNS_INCOMPLETE_MESSAGE,
+    noEligibleMessage: NO_ELIGIBLE_LEADS_MESSAGE,
+  });
+
+  return {
+    campaign: activeCampaign,
+    campaignRecipientCount: activeCampaign.leadIds.length,
+    loadableCount: loadableLeadIds.length,
+    resolvedLeadCount: resolvedLeads.length,
+    eligibleCount: preparation.eligibleCount,
+    preparedCount: preparation.preparedCount,
+    removedCount: preparation.removedCount,
+    alreadySentCount,
+    excludedOnLoadCount,
+    confirmedDeliveryCount,
+    recoveredNotConfiguredCount: recovered.recoveredCount,
+    missingLeadCount,
+    dnsErrorCount: validation.dnsErrorCount,
+    message,
   };
 }
 
@@ -248,11 +352,33 @@ export function useAgentThreeRunner() {
     new Map<CampaignProfileId, AbortController>()
   );
   const activeLoops = useRef(new Set<CampaignProfileId>());
+  const startRequests = useRef(new Set<CampaignProfileId>());
+  const loadPromises = useRef(
+    new Map<string, Promise<AgentThreeCampaignPreparation>>()
+  );
   const [statuses, setStatuses] = useState<
     Record<CampaignProfileId, AgentThreeUiConnectionStatus>
   >({
     "panek-puglesi": null,
     modeclean: null,
+  });
+  const [nextSendAt, setNextSendAt] = useState<
+    Record<CampaignProfileId, number | null>
+  >({
+    "panek-puglesi": null,
+    modeclean: null,
+  });
+  const [preparations, setPreparations] = useState<
+    Record<CampaignProfileId, AgentThreeCampaignPreparation | null>
+  >({
+    "panek-puglesi": null,
+    modeclean: null,
+  });
+  const [loadingCampaign, setLoadingCampaign] = useState<
+    Record<CampaignProfileId, boolean>
+  >({
+    "panek-puglesi": false,
+    modeclean: false,
   });
 
   function setStatus(
@@ -260,6 +386,92 @@ export function useAgentThreeRunner() {
     status: AgentThreeUiConnectionStatus
   ) {
     setStatuses((current) => ({ ...current, [profileId]: status }));
+  }
+
+  function setProfileNextSendAt(
+    profileId: CampaignProfileId,
+    value: number | null
+  ) {
+    setNextSendAt((current) => ({ ...current, [profileId]: value }));
+  }
+
+  function setPreparation(
+    profileId: CampaignProfileId,
+    preparation: AgentThreeCampaignPreparation | null
+  ) {
+    setPreparations((current) => ({ ...current, [profileId]: preparation }));
+  }
+
+  async function loadCampaign(
+    profileId: CampaignProfileId,
+    campaignId?: string | null
+  ): Promise<AgentThreeCampaignPreparation> {
+    const resolvedCampaignId =
+      campaignId === undefined
+        ? useAgentThreeStore.getState().operations[profileId].currentCampaignId
+        : campaignId;
+    const loadKey = `${profileId}:${resolvedCampaignId ?? "none"}`;
+    const inflight = loadPromises.current.get(loadKey);
+    if (inflight) return inflight;
+
+    const operation = useAgentThreeStore.getState().operations[profileId];
+    if (operation.status === "running" || operation.status === "paused") {
+      const metrics = getAgentThreeMetrics(operation);
+      const current: AgentThreeCampaignPreparation = {
+        ...EMPTY_PREPARATION,
+        campaign:
+          useCampaignStore
+            .getState()
+            .campaigns.find((item) => item.id === operation.currentCampaignId) ??
+          null,
+        campaignRecipientCount:
+          useCampaignStore
+            .getState()
+            .campaigns.find((item) => item.id === operation.currentCampaignId)
+            ?.leadIds.length ?? metrics.total,
+        eligibleCount: metrics.ready,
+        message: null,
+      };
+      setPreparation(profileId, current);
+      return current;
+    }
+
+    const promise = (async (): Promise<AgentThreeCampaignPreparation> => {
+      setLoadingCampaign((current) => ({ ...current, [profileId]: true }));
+      setStatus(profileId, "validating");
+      try {
+        if (!resolvedCampaignId) {
+          useAgentThreeStore.getState().selectCampaign(profileId, null);
+          const empty = { ...EMPTY_PREPARATION };
+          setPreparation(profileId, empty);
+          setStatus(profileId, null);
+          return empty;
+        }
+        const preparation = await prepareSelectedCampaign(
+          profileId,
+          resolvedCampaignId
+        );
+        setPreparation(profileId, preparation);
+        if (preparation.message && preparation.eligibleCount === 0) {
+          setStatus(
+            profileId,
+            preparation.dnsErrorCount > 0 ? "dns_incomplete" : null
+          );
+        } else {
+          setStatus(profileId, "lead_ready");
+        }
+        return preparation;
+      } finally {
+        setLoadingCampaign((current) => ({ ...current, [profileId]: false }));
+      }
+    })();
+
+    loadPromises.current.set(loadKey, promise);
+    try {
+      return await promise;
+    } finally {
+      loadPromises.current.delete(loadKey);
+    }
   }
 
   async function run(profileId: CampaignProfileId): Promise<void> {
@@ -271,6 +483,7 @@ export function useAgentThreeRunner() {
         const operation = store.operations[profileId];
         if (operation.status !== "running") break;
 
+        setProfileNextSendAt(profileId, null);
         const item = store.claimNext(profileId);
         if (!item) {
           store.finish(profileId);
@@ -368,43 +581,63 @@ export function useAgentThreeRunner() {
         controllers.current.set(profileId, controller);
         const waited = await waitForAgentThreeInterval(
           nextOperation,
-          { delay, random: Math.random },
+          {
+            delay,
+            random: Math.random,
+            onIntervalSelected: (intervalSeconds) =>
+              setProfileNextSendAt(
+                profileId,
+                Date.now() + intervalSeconds * 1_000
+              ),
+          },
           controller.signal
         );
         controllers.current.delete(profileId);
+        setProfileNextSendAt(profileId, null);
         if (waited.interrupted) break;
       }
     } finally {
       controllers.current.delete(profileId);
       activeLoops.current.delete(profileId);
+      setProfileNextSendAt(profileId, null);
     }
   }
 
   async function start(
     profileId: CampaignProfileId
   ): Promise<AgentThreeRunnerResult> {
+    if (startRequests.current.has(profileId)) {
+      return { started: false, message: null };
+    }
+    startRequests.current.add(profileId);
+    setProfileNextSendAt(profileId, null);
     setStatus(profileId, "validating");
-    const preparation = await prepareSelectedCampaign(profileId);
-    if (preparation.message) {
-      setStatus(
-        profileId,
-        preparation.dnsErrorCount > 0 ? "dns_incomplete" : null
-      );
-      return { started: false, message: preparation.message };
+    try {
+      const preparation = await loadCampaign(profileId);
+      if (preparation.message) {
+        setStatus(
+          profileId,
+          preparation.dnsErrorCount > 0 ? "dns_incomplete" : null
+        );
+        return { started: false, message: preparation.message };
+      }
+      setStatus(profileId, "lead_ready");
+      const availability = await checkAgentThreeSmtpAvailability(profileId);
+      setStatus(profileId, availability.status);
+      if (availability.status !== "connected") {
+        return { started: false, message: availability.message };
+      }
+      const result = useAgentThreeStore.getState().start(profileId, true);
+      if (result.started) void run(profileId);
+      return { started: result.started, message: result.message };
+    } finally {
+      startRequests.current.delete(profileId);
     }
-    setStatus(profileId, "lead_ready");
-    const availability = await checkAgentThreeSmtpAvailability(profileId);
-    setStatus(profileId, availability.status);
-    if (availability.status !== "connected") {
-      return { started: false, message: availability.message };
-    }
-    const result = useAgentThreeStore.getState().start(profileId, true);
-    if (result.started) void run(profileId);
-    return { started: result.started, message: result.message };
   }
 
   function pause(profileId: CampaignProfileId) {
     controllers.current.get(profileId)?.abort();
+    setProfileNextSendAt(profileId, null);
     useAgentThreeStore.getState().pause(profileId);
     setStatus(profileId, "paused");
   }
@@ -412,6 +645,7 @@ export function useAgentThreeRunner() {
   async function resume(
     profileId: CampaignProfileId
   ): Promise<AgentThreeRunnerResult> {
+    setProfileNextSendAt(profileId, null);
     if (activeLoops.current.has(profileId)) {
       return { started: false, message: "Aguarde a pausa ser concluída." };
     }
@@ -427,12 +661,17 @@ export function useAgentThreeRunner() {
 
   function stop(profileId: CampaignProfileId) {
     controllers.current.get(profileId)?.abort();
+    setProfileNextSendAt(profileId, null);
     useAgentThreeStore.getState().stop(profileId);
     setStatus(profileId, "paused");
   }
 
   return {
     statuses,
+    nextSendAt,
+    preparations,
+    loadingCampaign,
+    loadCampaign,
     start,
     pause,
     resume,

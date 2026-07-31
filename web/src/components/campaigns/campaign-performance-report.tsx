@@ -19,6 +19,7 @@ import {
 } from "./campaign-metrics-charts";
 import { buildTrackingSummary } from "@/lib/campaign-tracking";
 import {
+  getCampaignDeliverySnapshot,
   getClickRate,
   getOpenRate,
   getResponseRate,
@@ -57,6 +58,10 @@ export function CampaignPerformanceReport({
     () => buildTrackingSummary(campaign, events),
     [campaign, events]
   );
+  const delivery = useMemo(
+    () => getCampaignDeliverySnapshot(campaign),
+    [campaign]
+  );
 
   const recentEvents = useMemo(
     () =>
@@ -75,8 +80,8 @@ export function CampaignPerformanceReport({
     const clickRate = getClickRate(campaign);
     const replyRate = getResponseRate(campaign);
 
-    if (campaign.sentCount === 0) {
-      lines.push("Envie a campanha para começar a coletar métricas de tracking.");
+    if (delivery.sentCount === 0) {
+      lines.push("Envie a campanha pelo Agente 3 para começar a coletar métricas de tracking.");
     } else {
       if (openRate >= 40) lines.push("Excelente taxa de abertura — assunto e remetente estão funcionando bem.");
       else if (openRate < 15) lines.push("Taxa de abertura baixa — teste outro assunto ou horário de envio.");
@@ -95,7 +100,7 @@ export function CampaignPerformanceReport({
     }
 
     return lines;
-  }, [campaign, summary.clickToOpenRate]);
+  }, [campaign, delivery.sentCount, summary.clickToOpenRate]);
 
   return (
     <div className="space-y-6">
@@ -127,7 +132,7 @@ export function CampaignPerformanceReport({
         {[
           {
             label: "Enviados",
-            value: campaign.sentCount,
+            value: delivery.sentCount,
             sub: `de ${campaign.leadIds.length} leads`,
             icon: Mail,
             color: "text-emerald-400",
@@ -136,7 +141,7 @@ export function CampaignPerformanceReport({
           },
           {
             label: "Aberturas",
-            value: campaign.openedCount,
+            value: delivery.openedCount,
             sub: `${getOpenRate(campaign)}% taxa`,
             icon: Activity,
             color: "text-cyan-400",
@@ -145,7 +150,7 @@ export function CampaignPerformanceReport({
           },
           {
             label: "Cliques",
-            value: campaign.clickedCount,
+            value: delivery.clickedCount,
             sub: `${getClickRate(campaign)}% taxa`,
             icon: ExternalLink,
             color: "text-violet-400",
@@ -154,7 +159,7 @@ export function CampaignPerformanceReport({
           },
           {
             label: "Respostas",
-            value: campaign.repliedCount,
+            value: delivery.repliedCount,
             sub: `${getResponseRate(campaign)}% taxa`,
             icon: TrendingUp,
             color: "text-amber-400",
@@ -193,7 +198,7 @@ export function CampaignPerformanceReport({
             <CardTitle className="text-base">Funil de conversão</CardTitle>
           </CardHeader>
           <CardContent>
-            <CampaignFunnelChart summary={summary} sentTotal={campaign.sentCount} />
+            <CampaignFunnelChart summary={summary} sentTotal={delivery.sentCount} />
           </CardContent>
         </Card>
 

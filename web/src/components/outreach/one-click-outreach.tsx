@@ -18,7 +18,12 @@ import {
   Users,
 } from "lucide-react";
 import toast from "react-hot-toast";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { CardTitle } from "@/components/ui/card";
+import {
+  CollapsibleCard,
+  CollapsibleCardContent,
+  CollapsibleCardHeader,
+} from "@/components/ui/collapsible-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -727,13 +732,17 @@ function OneClickFlow({
   );
 }
 
-export function OneClickOutreach() {
+export function OneClickOutreach({
+  cardStorageKey = "one-click-outreach",
+}: {
+  cardStorageKey?: string;
+}) {
   const [open, setOpen] = useState(false);
 
   return (
     <>
-      <Card className="overflow-hidden border-violet-500/25 bg-gradient-to-br from-card via-card to-violet-500/8 shadow-lg shadow-violet-500/5">
-        <CardHeader className="pb-3">
+      <CollapsibleCard storageKey={cardStorageKey} className="overflow-hidden border-violet-500/25 bg-gradient-to-br from-card via-card to-violet-500/8 shadow-lg shadow-violet-500/5">
+        <CollapsibleCardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-lg">
             <Sparkles className="size-5 text-violet-400" />
             One-Click Outreach
@@ -741,8 +750,8 @@ export function OneClickOutreach() {
           <p className="text-sm text-muted-foreground">
             Busca + validação de emails + envio de campanha em um único clique
           </p>
-        </CardHeader>
-        <CardContent className="space-y-4">
+        </CollapsibleCardHeader>
+        <CollapsibleCardContent className="space-y-4">
           <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
             <Badge variant="outline" className="gap-1">
               <Search className="size-3" />
@@ -765,8 +774,8 @@ export function OneClickOutreach() {
             <Rocket className="size-5" />
             Iniciar Campanha Completa
           </Button>
-        </CardContent>
-      </Card>
+        </CollapsibleCardContent>
+      </CollapsibleCard>
       <OneClickFlow
         key={open ? "open" : "closed"}
         open={open}
