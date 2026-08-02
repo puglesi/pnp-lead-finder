@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowRight, MessageSquare, Users, UsersRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { getCampaignEffectiveStatus } from "@/lib/campaign-completion";
 import { CampaignStatusBadge } from "./campaign-status-badge";
 import {
   countConfirmedSmtpSends,
@@ -72,7 +73,9 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
                     </span>
                   </td>
                   <td className="px-5 py-4">
-                    <CampaignStatusBadge status={campaign.status} />
+                    <CampaignStatusBadge
+                      status={getCampaignEffectiveStatus(campaign)}
+                    />
                   </td>
                   <td className="px-5 py-4 tabular-nums">
                     <span className="font-medium text-emerald-400">

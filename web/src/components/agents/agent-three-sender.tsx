@@ -36,6 +36,7 @@ import {
   countAgentThreeExcludedRecipients,
   describeAgentThreeExclusionReason,
 } from "@/lib/agent-three-campaign-load";
+import { isCampaignFullyDelivered } from "@/lib/campaign-completion";
 import { getCampaignDeliverySnapshot } from "@/lib/campaign-metrics";
 import {
   connectionStatusMessage,
@@ -173,6 +174,9 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
   const campaignDelivery = currentCampaign
     ? getCampaignDeliverySnapshot(currentCampaign)
     : null;
+  const campaignFullyDelivered = currentCampaign
+    ? isCampaignFullyDelivered(currentCampaign)
+    : false;
   // Queue status is authoritative for Agent 3; falls back to reconciled campaign counters.
   const confirmedSentCount =
     campaignItems.length > 0
@@ -237,10 +241,12 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
     operation.currentCampaignId &&
     readyCount === 0 &&
     operation.status !== "running"
-      ? preparation?.message ??
-        (campaignRecipientCount === 0
-          ? "A campanha não possui destinatários."
-          : null)
+      ? campaignFullyDelivered
+        ? "Campanha concluída: todos os destinatários já foram enviados."
+        : preparation?.message ??
+          (campaignRecipientCount === 0
+            ? "A campanha não possui destinatários."
+            : null)
       : null;
 
   const visualState = isPreparing
@@ -508,8 +514,20 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
         <div className="flex flex-wrap gap-2">
           <Button
             onClick={() => void handleStart()}
-            disabled={controlsLocked}
-            title={controlsLocked ? "Envio em andamento ou indisponível" : undefined}
+            disabled={
+              controlsLocked ||
+              campaignFullyDelivered ||
+              (readyCount === 0 && !isPreparing)
+            }
+            title={
+              campaignFullyDelivered
+                ? "Campanha concluída — destinatários já enviados"
+                : controlsLocked
+                  ? "Envio em andamento ou indisponível"
+                  : readyCount === 0
+                    ? "Nenhum destinatário pronto"
+                    : undefined
+            }
           >
             {isPreparing ? (
               <Loader2 className="size-4 animate-spin" />

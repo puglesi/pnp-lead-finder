@@ -4,6 +4,7 @@
  * Only counts leadStatuses with a real SMTP providerMessageId.
  */
 import type { Campaign, CampaignLeadStatus } from "../types/campaign.ts";
+import { getCampaignEffectiveStatus } from "./campaign-completion.ts";
 import {
   isConfirmedCampaignDelivery,
   isRealDeliveryMessageId,
@@ -68,9 +69,10 @@ export function getCampaignListViewStats(campaigns: readonly Campaign[]): {
   let completed = 0;
 
   for (const campaign of campaigns) {
-    if (campaign.status === "active") active += 1;
-    else if (campaign.status === "draft") draft += 1;
-    else if (campaign.status === "completed") completed += 1;
+    const status = getCampaignEffectiveStatus(campaign);
+    if (status === "active") active += 1;
+    else if (status === "draft") draft += 1;
+    else if (status === "completed") completed += 1;
 
     const sent = countConfirmedSmtpSends(campaign);
     totalSent += sent;

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   ArrowRight,
   BarChart3,
@@ -12,8 +13,6 @@ import {
   Loader2,
   Mail,
   Plus,
-  Send,
-  Sparkles,
   Star,
   Target,
   XCircle,
@@ -24,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useLeadStore } from "@/store/lead-store";
 import { useSettingsStore } from "@/store/settings-store";
+import { useBatchPipelineStore } from "@/store/batch-pipeline-store";
 import { exportLeadsToCSV } from "@/lib/csv-export";
 import { getMockLeadStats } from "@/lib/mock-data";
 import { formatDuration } from "@/lib/time-estimate";
@@ -58,6 +58,7 @@ function StatTile({
 }
 
 export function BulkSearchProgress() {
+  const router = useRouter();
   const {
     isSearching,
     bulkProgress,
@@ -448,12 +449,43 @@ export function BulkSearchProgress() {
         </div>
 
         {!isSearching && currentLeads.length > 0 && (
-          <div className="space-y-3 rounded-xl border border-border/50 bg-background/30 p-4">
-            <p className="flex items-center gap-2 text-sm font-medium">
-              <Sparkles className="size-4 text-emerald-400" />
-              Próximos passos — fluxo completo
+          <div className="space-y-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
+            <p className="flex items-center gap-2 text-sm font-medium text-emerald-100">
+              <CheckCircle2 className="size-4 text-emerald-400" />
+              Busca concluída: {currentLeads.length} lead
+              {currentLeads.length === 1 ? "" : "s"}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Lote registrado no fluxo guiado. Continue no Agente 1 para
+              garimpar e-mails deste lote sem misturar outras buscas.
             </p>
             <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                className="bg-emerald-600 hover:bg-emerald-500"
+                onClick={() => {
+                  // Migrate legacy searches (no batchId) from existing results —
+                  // never re-run search or consume SerpAPI.
+                  const batchId =
+                    useLeadStore.getState().ensureCurrentSearchBatch();
+                  if (!batchId) {
+                    toast.error(
+                      "Nenhum resultado disponível para abrir no Agente 1."
+                    );
+                    return;
+                  }
+                  useBatchPipelineStore.getState().setActiveBatch(batchId);
+                  useBatchPipelineStore
+                    .getState()
+                    .updateBatchStage(batchId, "garimpo");
+                  router.push(
+                    `/agente-1?batchId=${encodeURIComponent(batchId)}`
+                  );
+                }}
+              >
+                <ArrowRight className="size-3.5" />
+                Abrir no Agente 1
+              </Button>
               <Button
                 size="sm"
                 variant="outline"
@@ -469,17 +501,8 @@ export function BulkSearchProgress() {
               </Button>
               <Button
                 size="sm"
-                variant="outline"
-                disabled={isGenerating}
-                onClick={() => handleGenerateMore(100)}
-              >
-                <Plus className="size-3.5" />
-                Gerar +100 Leads
-              </Button>
-              <Button
-                size="sm"
                 onClick={handleExportAll}
-                className="bg-emerald-600 hover:bg-emerald-500"
+                variant="outline"
               >
                 <Download className="size-3.5" />
                 Exportar ({currentLeads.length})
@@ -490,17 +513,7 @@ export function BulkSearchProgress() {
                   Meus Leads
                 </Link>
               </Button>
-              <Button size="sm" variant="outline" asChild>
-                <Link href="/campanhas/nova">
-                  <Send className="size-3.5" />
-                  Nova Campanha
-                </Link>
-              </Button>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Exporte ou inicie uma campanha — no modo 24h, leads são salvos
-              automaticamente ao concluir a fila.
-            </p>
           </div>
         )}
       </CardContent>

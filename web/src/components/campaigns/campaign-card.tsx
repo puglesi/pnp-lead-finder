@@ -6,6 +6,7 @@ import { ArrowRight, MessageSquare, Users, UsersRound } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { buildReuseCampaignUrl } from "@/lib/campaign-reuse";
+import { getCampaignEffectiveStatus } from "@/lib/campaign-completion";
 import { CampaignStatusBadge } from "./campaign-status-badge";
 import {
   getCampaignDeliverySnapshot,
@@ -30,7 +31,9 @@ export function CampaignCard({ campaign }: { campaign: Campaign }) {
           <div className="min-w-0 flex-1">
             <div className="mb-2 flex flex-wrap items-center gap-2">
               <h3 className="truncate text-lg font-semibold">{campaign.name}</h3>
-              <CampaignStatusBadge status={campaign.status} />
+              <CampaignStatusBadge
+                status={getCampaignEffectiveStatus(campaign)}
+              />
             </div>
             <p className="truncate text-sm text-muted-foreground">
               {campaign.subject}

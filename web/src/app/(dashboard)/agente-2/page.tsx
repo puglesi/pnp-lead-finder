@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { ShieldCheck } from "lucide-react";
 import { AgentTwoValidator } from "@/components/agents/agent-two-validator";
 
@@ -13,7 +14,9 @@ export default function AgentTwoPage() {
           Valide sintaxe, domínio e registros MX dos e-mails salvos, sem presumir a existência da caixa postal.
         </p>
       </div>
-      <AgentTwoValidator />
+      <Suspense fallback={<p className="text-sm text-muted-foreground">Carregando lote…</p>}>
+        <AgentTwoValidator />
+      </Suspense>
     </div>
   );
 }

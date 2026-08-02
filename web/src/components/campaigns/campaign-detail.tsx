@@ -20,6 +20,7 @@ import {
 import toast from "react-hot-toast";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { getCampaignEffectiveStatus } from "@/lib/campaign-completion";
 import { CampaignStatusBadge } from "./campaign-status-badge";
 import { CampaignOverview } from "./campaign-overview";
 import { CampaignPerformanceReport } from "./campaign-performance-report";
@@ -43,6 +44,7 @@ import { resolveCampaignLeads } from "@/lib/campaign-leads";
 import { useLeadStore } from "@/store/lead-store";
 import { useCampaignStore } from "@/store/campaign-store";
 import { useAgentThreeStore } from "@/store/agent-three-store";
+import { useBatchPipelineStore } from "@/store/batch-pipeline-store";
 import {
   DEFAULT_SIGNATURE,
   type Campaign,
@@ -135,6 +137,9 @@ function CampaignDetailContent({
   } = useCampaignStore();
   const selectProfile = useAgentThreeStore((s) => s.selectProfile);
   const selectCampaign = useAgentThreeStore((s) => s.selectCampaign);
+  const setActiveBatch = useBatchPipelineStore((s) => s.setActiveBatch);
+  const updateBatchStage = useBatchPipelineStore((s) => s.updateBatchStage);
+  const attachCampaign = useBatchPipelineStore((s) => s.attachCampaign);
 
   const [tab, setTab] = useState<CampaignTab>(() =>
     resolveInitialTab(campaign, initialTab)
@@ -192,8 +197,9 @@ function CampaignDetailContent({
 
   if (!campaign) return null;
 
+  const effectiveStatus = getCampaignEffectiveStatus(campaign);
   const isEditable =
-    campaign.status === "draft" || campaign.status === "paused";
+    effectiveStatus === "draft" || effectiveStatus === "paused";
   const previewLead =
     leads.find((l) => l.id === previewLeadId) ?? leads[0] ?? null;
 
@@ -223,6 +229,11 @@ function CampaignDetailContent({
     if (isEditable) handleSave();
     selectProfile(campaign.campaignProfileId);
     selectCampaign(campaign.campaignProfileId, campaign.id);
+    if (campaign.batchId) {
+      setActiveBatch(campaign.batchId);
+      attachCampaign(campaign.batchId, campaign.id);
+      updateBatchStage(campaign.batchId, "send");
+    }
     router.push("/agente-3");
   };
 
@@ -239,10 +250,13 @@ function CampaignDetailContent({
           </Link>
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-2xl font-bold tracking-tight">{campaign.name}</h1>
-            <CampaignStatusBadge status={campaign.status} />
+            <CampaignStatusBadge status={effectiveStatus} />
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
             {campaign.leadIds.length} leads · envio exclusivo pelo Agente 3
+            {effectiveStatus === "completed"
+              ? " · campanha concluída"
+              : ""}
           </p>
         </div>
 

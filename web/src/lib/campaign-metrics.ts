@@ -1,4 +1,5 @@
 import type { Campaign, CampaignStats } from "../types/campaign.ts";
+import { withCampaignCompletionStatus } from "./campaign-completion.ts";
 import { reconcileCampaignDelivery } from "./campaign-delivery-metrics.ts";
 
 /**
@@ -85,7 +86,7 @@ export function applyCampaignDeliveryReconciliation(
 ): Campaign {
   const reconciled = reconcileCampaignDelivery(campaign);
   // Always rewrite counters so stale sentCount/progress never survives rehydrate.
-  return {
+  const next: Campaign = {
     ...campaign,
     leadStatuses: reconciled.leadStatuses,
     sentCount: reconciled.sentCount,
@@ -95,4 +96,6 @@ export function applyCampaignDeliveryReconciliation(
     repliedCount: reconciled.repliedCount,
     sendErrors: reconciled.sendErrors,
   };
+  // 25/25 confirmed SMTP → always Concluída (never leave as active/draft).
+  return withCampaignCompletionStatus(next);
 }

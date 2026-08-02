@@ -9,6 +9,8 @@ export interface Lead {
   address: string;
   category: string;
   aiScore: number;
+  /** Search/handoff batch this lead belongs to (never mix without explicit action). */
+  batchId?: string;
   savedAt?: string;
   emailValidationStatus?: EmailValidationStatus;
   emailValidationReason?: string;
@@ -27,6 +29,7 @@ export interface SearchRecord {
   resultsCount: number;
   date: string;
   leads?: Lead[];
+  batchId?: string;
 }
 
 export interface DashboardStats {

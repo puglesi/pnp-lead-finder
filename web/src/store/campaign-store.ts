@@ -29,6 +29,7 @@ import {
 import type { EmailProviderId } from "@/types/email-provider";
 import { useLeadStore } from "@/store/lead-store";
 import { useSettingsStore } from "@/store/settings-store";
+import { useBatchPipelineStore } from "@/store/batch-pipeline-store";
 import { applyCampaignDeliveryReconciliation } from "@/lib/campaign-metrics";
 
 interface CampaignStore {
@@ -43,6 +44,7 @@ interface CampaignStore {
     body: string;
     leadIds: string[];
     leadSource?: CampaignLeadSource;
+    batchId?: string;
     fromName?: string;
     fromEmail?: string;
     replyTo?: string;
@@ -103,6 +105,7 @@ export const useCampaignStore = create<CampaignStore>()(
           leadIds: data.leadIds,
           leadStatuses: initLeadStatuses(data.leadIds),
           leadSource: data.leadSource ?? "saved",
+          batchId: data.batchId,
           status: "draft",
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
@@ -349,32 +352,40 @@ export const useCampaignStore = create<CampaignStore>()(
           finalReplied = statuses.filter((s) => s.status === "replied").length;
         }
 
-        const finalStatus =
-          batchResult.stoppedEarly && batchResult.stopReason === "daily_limit"
-            ? ("paused" as const)
-            : ("completed" as const);
+        const updatedCampaign = {
+          ...campaign,
+          status:
+            batchResult.stoppedEarly && batchResult.stopReason === "daily_limit"
+              ? ("paused" as const)
+              : ("completed" as const),
+          sentCount: batchResult.sentCount,
+          failedCount: batchResult.failedCount,
+          sendErrors: batchResult.sendErrors,
+          openedCount: finalOpened,
+          clickedCount: finalClicked,
+          repliedCount: finalReplied,
+          leadStatuses: statuses,
+          updatedAt: new Date().toISOString(),
+        };
+        const reconciled = applyCampaignDeliveryReconciliation(updatedCampaign);
 
         set((state) => ({
           sendingCampaignId: null,
           sendingProgress: null,
           sendPaused: false,
           campaigns: state.campaigns.map((c) =>
-            c.id === id
-              ? {
-                  ...c,
-                  status: finalStatus,
-                  sentCount: batchResult.sentCount,
-                  failedCount: batchResult.failedCount,
-                  sendErrors: batchResult.sendErrors,
-                  openedCount: finalOpened,
-                  clickedCount: finalClicked,
-                  repliedCount: finalReplied,
-                  leadStatuses: statuses,
-                  updatedAt: new Date().toISOString(),
-                }
-              : c
+            c.id === id ? reconciled : c
           ),
         }));
+
+        if (
+          reconciled.status === "completed" &&
+          reconciled.batchId
+        ) {
+          useBatchPipelineStore
+            .getState()
+            .updateBatchStage(reconciled.batchId, "complete");
+        }
       },
 
       simulateSend: async (id, leadContexts) => {

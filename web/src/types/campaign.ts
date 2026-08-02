@@ -109,6 +109,8 @@ export interface Campaign {
   leadIds: string[];
   leadStatuses: CampaignLeadStatus[];
   leadSource: CampaignLeadSource;
+  /** Optional search/validation batch this campaign was built from. */
+  batchId?: string;
   status: CampaignStatus;
   createdAt: string;
   updatedAt: string;

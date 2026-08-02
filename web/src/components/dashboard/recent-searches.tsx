@@ -3,12 +3,19 @@
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { formatDistanceToNow } from "@/lib/date-utils";
-import { History, ArrowRight, ExternalLink, Trash2 } from "lucide-react";
+import {
+  History,
+  ArrowRight,
+  ExternalLink,
+  Pickaxe,
+  Trash2,
+} from "lucide-react";
 import toast from "react-hot-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useLeadStore } from "@/store/lead-store";
+import { useBatchPipelineStore } from "@/store/batch-pipeline-store";
 import { RECENT_SEARCHES_LIMIT } from "@/lib/mode-labels";
 
 export function RecentSearches() {
@@ -17,6 +24,7 @@ export function RecentSearches() {
     recentSearches,
     fullSearchHistory,
     loadSearchFromHistory,
+    openSearchBatchInAgentOne,
     clearRecentSearches,
   } = useLeadStore();
 
@@ -27,6 +35,29 @@ export function RecentSearches() {
     }
     toast.success(`Resultados carregados: ${keyword} em ${location}`);
     router.push("/resultados");
+  };
+
+  const handleContinueAgentOne = (
+    event: { stopPropagation: () => void },
+    id: string,
+    keyword: string,
+    location: string,
+    resultsCount: number
+  ) => {
+    event.stopPropagation();
+    const batchId = openSearchBatchInAgentOne(id);
+    if (!batchId) {
+      toast.error(
+        "Sem leads salvos neste registro para continuar no Agente 1."
+      );
+      return;
+    }
+    useBatchPipelineStore.getState().setActiveBatch(batchId);
+    useBatchPipelineStore.getState().updateBatchStage(batchId, "garimpo");
+    toast.success(
+      `Lote aberto: ${keyword} · ${location} · ${resultsCount} leads`
+    );
+    router.push(`/agente-1?batchId=${encodeURIComponent(batchId)}`);
   };
 
   const handleClear = () => {
@@ -102,7 +133,7 @@ export function RecentSearches() {
                 <th className="pb-3 pr-4 font-medium">Localização</th>
                 <th className="pb-3 pr-4 font-medium">Leads</th>
                 <th className="pb-3 pr-4 font-medium">Data</th>
-                <th className="pb-3 font-medium" />
+                <th className="pb-3 font-medium text-right">Ações</th>
               </tr>
             </thead>
             <tbody>
@@ -131,7 +162,27 @@ export function RecentSearches() {
                     {formatDistanceToNow(search.date)}
                   </td>
                   <td className="py-3">
-                    <ExternalLink className="size-4 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                    <div className="flex items-center justify-end gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="default"
+                        className="h-8"
+                        onClick={(event) =>
+                          handleContinueAgentOne(
+                            event,
+                            search.id,
+                            search.keyword,
+                            search.location,
+                            search.resultsCount
+                          )
+                        }
+                      >
+                        <Pickaxe className="size-3.5" />
+                        Continuar no Agente 1
+                      </Button>
+                      <ExternalLink className="size-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+                    </div>
                   </td>
                 </tr>
               ))}

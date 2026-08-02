@@ -19,6 +19,17 @@ import {
 import { leadFingerprint, type Lead, type SearchRecord } from "@/types/lead";
 import type { BulkSearchProgress, SearchApiResponse } from "@/types/search";
 import type { LeadEmailValidationUpdate } from "@/types/email-validation";
+import {
+  clearBatchIdFromNonMembers,
+  createLeadBatch,
+  findSearchRecordForBatch,
+  getSharedLeadBatchId,
+  migrateLegacySearchToBatch,
+  repairBatchFromSearchSnapshot,
+  stampLeadsWithBatchId,
+} from "@/lib/lead-batch";
+import type { LeadBatch } from "@/types/batch";
+import { useBatchPipelineStore } from "@/store/batch-pipeline-store";
 
 const FULL_HISTORY_LIMIT = 200;
 
@@ -76,6 +87,22 @@ interface LeadStore {
   clearSelection: () => void;
   getSelectedLeads: () => Lead[];
   saveLead: (lead: Lead) => boolean;
+  /**
+   * Ensures the completed current search has a pipeline batchId.
+   * Migrates legacy results (no batchId) without re-running search or duplicating leads.
+   * Returns the batchId to open in Agent 1, or null if there are no results.
+   */
+  ensureCurrentSearchBatch: () => string | null;
+  /**
+   * Continues a historical search (e.g. Buscas Recentes) in Agent 1.
+   * Loads existing snapshot leads, locates/creates batchId, never re-runs search.
+   */
+  openSearchBatchInAgentOne: (recordId: string) => string | null;
+  /**
+   * Repair batch.leadIds from the original SearchRecord snapshot.
+   * Detaches contaminants without deleting them. Returns the repaired batch.
+   */
+  repairBatchMembershipFromSnapshot: (batchId: string) => LeadBatch | null;
   applyAgentOneContactUpdates: (updates: AgentOneContactUpdate[]) => void;
   updateLeadEmailValidation: (
     leadId: string,
@@ -472,6 +499,17 @@ export const useLeadStore = create<LeadStore>()(
 
         const finalLeads = dedupeLeads(allLeads);
         const elapsedMs = Date.now() - startedAt;
+        const searchRecordId = `${Date.now()}`;
+        const searchDate = new Date().toISOString();
+        const batch = useBatchPipelineStore.getState().registerSearchBatch({
+          sector: keywordsInput.trim(),
+          location: location.trim(),
+          foundCount: finalLeads.length,
+          searchRecordId,
+          createdAt: searchDate,
+          leadIds: finalLeads.map((lead) => lead.id),
+        });
+        const batchedLeads = stampLeadsWithBatchId(finalLeads, batch.batchId);
 
         const isAutonomousRun =
           settings.searchProfile === "autonomous-24h" ||
@@ -480,16 +518,16 @@ export const useLeadStore = create<LeadStore>()(
         if (
           options.autoSaveResults !== false &&
           (settings.autoSaveLeads || isAutonomousRun) &&
-          finalLeads.length > 0
+          batchedLeads.length > 0
         ) {
-          autoSavedCount = autoSaveAllLeads(finalLeads, get().saveLead);
+          autoSavedCount = autoSaveAllLeads(batchedLeads, get().saveLead);
         }
 
         const searchSummary = {
           apiCallsConsumed,
           liveCalls,
           mockFallbackCalls,
-          leadsFound: finalLeads.length,
+          leadsFound: batchedLeads.length,
           elapsedMs,
           creditExhausted: anyCreditExhausted,
           autoSavedCount,
@@ -508,12 +546,13 @@ export const useLeadStore = create<LeadStore>()(
         usage.setLastSearchSummary(searchSummary);
 
         const search: SearchRecord = {
-          id: `${Date.now()}`,
+          id: searchRecordId,
           keyword: keywordsInput.trim(),
           location: location.trim(),
-          resultsCount: finalLeads.length,
-          date: new Date().toISOString(),
-          leads: finalLeads,
+          resultsCount: batchedLeads.length,
+          date: searchDate,
+          leads: batchedLeads,
+          batchId: batch.batchId,
         };
 
         set((state) => {
@@ -530,7 +569,7 @@ export const useLeadStore = create<LeadStore>()(
 
           return {
             isSearching: false,
-            currentLeads: finalLeads,
+            currentLeads: batchedLeads,
             currentKeyword: keywordsInput.trim(),
             currentLocation: location.trim(),
             lastSearchIsLive: anyLive,
@@ -542,7 +581,7 @@ export const useLeadStore = create<LeadStore>()(
               ...state.bulkProgress,
               active: false,
               completedCount: sectors.length,
-              leadsFound: finalLeads.length,
+              leadsFound: batchedLeads.length,
               runningSectors: [],
               elapsedMs,
               estimatedRemainingMs: 0,
@@ -690,13 +729,299 @@ export const useLeadStore = create<LeadStore>()(
 
       saveLead: (lead) => {
         if (get().isLeadSaved(lead)) return false;
+        const activeBatchId =
+          lead.batchId ??
+          useBatchPipelineStore.getState().activeBatchId ??
+          undefined;
         const saved: Lead = {
           ...lead,
           id: `saved-${Date.now()}-${lead.id}`,
+          batchId: activeBatchId,
           savedAt: new Date().toISOString(),
         };
         set((state) => ({ savedLeads: [saved, ...state.savedLeads] }));
         return true;
+      },
+
+      ensureCurrentSearchBatch: () => {
+        const state = get();
+        if (state.currentLeads.length === 0) return null;
+
+        const sharedId = getSharedLeadBatchId(state.currentLeads);
+        if (sharedId) {
+          const pipeline = useBatchPipelineStore.getState();
+          const existing = pipeline.getBatch(sharedId);
+          const snapshotIds = state.currentLeads.map((lead) => lead.id);
+          if (existing) {
+            // Ensure exclusive membership is locked to the current snapshot IDs.
+            pipeline.upsertBatch({
+              ...existing,
+              leadIds: snapshotIds,
+              foundCount: snapshotIds.length,
+            });
+            set({
+              savedLeads: clearBatchIdFromNonMembers(
+                state.savedLeads,
+                sharedId,
+                snapshotIds
+              ),
+            });
+            pipeline.setActiveBatch(sharedId);
+            return sharedId;
+          }
+          // Leads already stamped but pipeline entry missing — rehydrate metadata.
+          const rehydrated = migrateLegacySearchToBatch({
+            sector: state.currentKeyword || "Busca",
+            location: state.currentLocation || "UK",
+            leads: state.currentLeads,
+            savedLeads: state.savedLeads,
+            recentSearches: state.recentSearches,
+            fullSearchHistory: state.fullSearchHistory,
+            createdAt: new Date().toISOString(),
+          });
+          pipeline.upsertBatch(rehydrated.batch);
+          set({
+            currentLeads: rehydrated.currentLeads,
+            savedLeads: rehydrated.savedLeads,
+            recentSearches: rehydrated.recentSearches,
+            fullSearchHistory: rehydrated.fullSearchHistory,
+          });
+          return rehydrated.batch.batchId;
+        }
+
+        // Legacy completed search: no batchId on results — create lote from existing leads.
+        const matchingRecord =
+          state.fullSearchHistory.find(
+            (r) =>
+              !r.batchId &&
+              r.keyword.trim().toLowerCase() ===
+                state.currentKeyword.trim().toLowerCase() &&
+              r.location.trim().toLowerCase() ===
+                state.currentLocation.trim().toLowerCase()
+          ) ??
+          state.recentSearches.find(
+            (r) =>
+              !r.batchId &&
+              r.keyword.trim().toLowerCase() ===
+                state.currentKeyword.trim().toLowerCase() &&
+              r.location.trim().toLowerCase() ===
+                state.currentLocation.trim().toLowerCase()
+          );
+
+        const migrated = migrateLegacySearchToBatch({
+          sector: state.currentKeyword || "Busca",
+          location: state.currentLocation || "UK",
+          leads: state.currentLeads,
+          savedLeads: state.savedLeads,
+          recentSearches: state.recentSearches,
+          fullSearchHistory: state.fullSearchHistory,
+          createdAt: matchingRecord?.date,
+          searchRecordId: matchingRecord?.id,
+        });
+
+        useBatchPipelineStore.getState().upsertBatch(migrated.batch);
+        set({
+          currentLeads: migrated.currentLeads,
+          savedLeads: migrated.savedLeads,
+          recentSearches: migrated.recentSearches,
+          fullSearchHistory: migrated.fullSearchHistory,
+        });
+        return migrated.batch.batchId;
+      },
+
+      openSearchBatchInAgentOne: (recordId) => {
+        const record = get().getHistoryRecord(recordId);
+        if (!record) return null;
+
+        // Prefer stored snapshot; fall back to matching in-session results only.
+        // Never re-run search or fabricate leads for Agent 1 handoff.
+        let leads: Lead[] =
+          record.leads && record.leads.length > 0 ? [...record.leads] : [];
+        if (leads.length === 0) {
+          const state = get();
+          const sameSession =
+            state.currentKeyword.trim().toLowerCase() ===
+              record.keyword.trim().toLowerCase() &&
+            state.currentLocation.trim().toLowerCase() ===
+              record.location.trim().toLowerCase() &&
+            state.currentLeads.length > 0;
+          if (sameSession) leads = [...state.currentLeads];
+        }
+        if (leads.length === 0) return null;
+
+        const sectors = parseSectors(record.keyword);
+        const applySession = (nextLeads: Lead[]) => {
+          set({
+            currentLeads: nextLeads,
+            currentKeyword: record.keyword,
+            currentLocation: record.location,
+            isSearching: false,
+            selectedLeadIds: [],
+            bulkProgress: {
+              active: false,
+              location: record.location,
+              sectors: sectors.map((s, i) => ({
+                sector: s,
+                status: "done" as const,
+                queueIndex: i + 1,
+                leadsFound: nextLeads.filter((l) => l.category === s).length,
+              })),
+              completedCount: sectors.length,
+              totalCount: Math.max(sectors.length, 1),
+              leadsFound: nextLeads.length,
+              runningSectors: [],
+              startedAt: null,
+              elapsedMs: 0,
+              estimatedRemainingMs: 0,
+            },
+          });
+        };
+
+        applySession(leads);
+
+        const snapshotIds = leads.map((lead) => lead.id);
+
+        // Record already has batchId — rehydrate pipeline with exclusive membership.
+        if (record.batchId) {
+          const pipeline = useBatchPipelineStore.getState();
+          const existing = pipeline.getBatch(record.batchId);
+          pipeline.upsertBatch(
+            createLeadBatch({
+              sector: record.keyword,
+              location: record.location,
+              foundCount: snapshotIds.length,
+              createdAt: record.date,
+              searchRecordId: record.id,
+              batchId: record.batchId,
+              stage: existing?.stage ?? "search",
+              leadIds: snapshotIds,
+              campaignId: existing?.campaignId,
+            })
+          );
+          const stamped = stampLeadsWithBatchId(leads, record.batchId);
+          // Detach contaminants from this batch without deleting those leads.
+          set((state) => ({
+            currentLeads: stamped,
+            currentKeyword: record.keyword,
+            currentLocation: record.location,
+            isSearching: false,
+            selectedLeadIds: [],
+            savedLeads: clearBatchIdFromNonMembers(
+              state.savedLeads,
+              record.batchId!,
+              snapshotIds
+            ),
+            recentSearches: state.recentSearches.map((r) =>
+              r.id === record.id
+                ? {
+                    ...r,
+                    batchId: record.batchId,
+                    leads: stamped,
+                    resultsCount: stamped.length,
+                  }
+                : r
+            ),
+            fullSearchHistory: state.fullSearchHistory.map((r) =>
+              r.id === record.id
+                ? {
+                    ...r,
+                    batchId: record.batchId,
+                    leads: stamped,
+                    resultsCount: stamped.length,
+                  }
+                : r
+            ),
+            bulkProgress: {
+              active: false,
+              location: record.location,
+              sectors: sectors.map((s, i) => ({
+                sector: s,
+                status: "done" as const,
+                queueIndex: i + 1,
+                leadsFound: stamped.filter((l) => l.category === s).length,
+              })),
+              completedCount: sectors.length,
+              totalCount: Math.max(sectors.length, 1),
+              leadsFound: stamped.length,
+              runningSectors: [],
+              startedAt: null,
+              elapsedMs: 0,
+              estimatedRemainingMs: 0,
+            },
+          }));
+          pipeline.setActiveBatch(record.batchId);
+          return record.batchId;
+        }
+
+        // Legacy search without batchId: create from existing snapshot only.
+        return get().ensureCurrentSearchBatch();
+      },
+
+      repairBatchMembershipFromSnapshot: (batchId) => {
+        const pipeline = useBatchPipelineStore.getState();
+        const existing = pipeline.getBatch(batchId);
+        if (!existing) return null;
+
+        const state = get();
+        const records = [
+          ...state.fullSearchHistory,
+          ...state.recentSearches,
+        ];
+        const searchRecord = findSearchRecordForBatch(existing, records);
+
+        const repaired = repairBatchFromSearchSnapshot({
+          batch: existing,
+          searchRecord,
+          currentLeads: state.currentLeads,
+          savedLeads: state.savedLeads,
+        });
+
+        pipeline.upsertBatch(repaired.batch);
+
+        // Also re-stamp only the owning SearchRecord snapshot leads.
+        const stampRecord = (record: SearchRecord): SearchRecord => {
+          if (
+            record.id !== repaired.batch.searchRecordId &&
+            record.batchId !== batchId
+          ) {
+            return record;
+          }
+          if (!record.leads || record.leads.length === 0) {
+            return {
+              ...record,
+              batchId: batchId,
+              resultsCount:
+                repaired.batch.leadIds?.length ?? record.resultsCount,
+            };
+          }
+          const allowed = new Set(repaired.batch.leadIds ?? []);
+          return {
+            ...record,
+            batchId: batchId,
+            resultsCount: repaired.batch.leadIds?.length ?? record.leads.length,
+            leads: record.leads.map((lead) => {
+              if (allowed.has(lead.id)) {
+                return { ...lead, batchId };
+              }
+              if (lead.batchId === batchId) {
+                const next = { ...lead };
+                delete next.batchId;
+                return next;
+              }
+              return lead;
+            }),
+          };
+        };
+
+        set({
+          currentLeads: repaired.currentLeads,
+          savedLeads: repaired.savedLeads,
+          recentSearches: state.recentSearches.map(stampRecord),
+          fullSearchHistory: state.fullSearchHistory.map(stampRecord),
+        });
+
+        pipeline.setActiveBatch(batchId);
+        return repaired.batch;
       },
 
       applyAgentOneContactUpdates: (updates) => {
@@ -838,16 +1163,13 @@ export const useLeadStore = create<LeadStore>()(
 
         return next;
       },
+      // Session UI (keyword/location/current results) is NOT persisted so each
+      // session opens with Nova Busca empty. Durable data remains.
       partialize: (state) => ({
         sidebarCollapsed: state.sidebarCollapsed,
         recentSearches: state.recentSearches,
         fullSearchHistory: state.fullSearchHistory,
         sectorHistory: state.sectorHistory,
-        lastBulkSearchSectors: state.lastBulkSearchSectors,
-        lastBulkSearchLocation: state.lastBulkSearchLocation,
-        currentLeads: state.currentLeads,
-        currentKeyword: state.currentKeyword,
-        currentLocation: state.currentLocation,
         savedLeads: state.savedLeads,
         importedLeads: state.importedLeads,
       }),
