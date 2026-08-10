@@ -105,6 +105,34 @@ function buildProgress(
   };
 }
 
+const SYSTEMIC_BATCH_ERROR_CODES = new Set([
+  "NOT_CONFIGURED",
+  "AUTH",
+  "EAUTH",
+  "AUTHENTICATION",
+  "CONFIGURATION",
+  "CONNECTION",
+  "ECONNECTION",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "REAL_SEND_DISABLED",
+]);
+
+function isSystemicBatchError(errorCode: string, errorMessage: string): boolean {
+  const code = (errorCode || "").toUpperCase();
+  const message = (errorMessage || "").toLowerCase();
+  if (SYSTEMIC_BATCH_ERROR_CODES.has(code)) return true;
+  if (code.includes("AUTH") || code.includes("CONFIG")) return true;
+  if (
+    /not[_\s-]?configured|autentica|authentication|smtp ausente|connection refused|econnrefused|timed?\s*out|envio real desativado/i.test(
+      `${code} ${message}`
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export async function runBatchEmailSend(
   campaign: Campaign,
   leadContexts: BatchSendLeadContext[],
@@ -117,7 +145,7 @@ export async function runBatchEmailSend(
   sentCount: number;
   failedCount: number;
   stoppedEarly?: boolean;
-  stopReason?: "daily_limit";
+  stopReason?: "daily_limit" | "systemic_failure" | "consecutive_failures";
 }> {
   const config: CampaignBatchSendConfig = campaign.batchSend;
   const autonomous = isAutonomousProvider(providerId);
@@ -131,6 +159,10 @@ export async function runBatchEmailSend(
 
   const pending = leadContexts.filter((ctx) => {
     const st = statuses.find((s) => s.leadId === ctx.leadId);
+    // Never re-attempt recipients with a confirmed provider message id.
+    if (st?.providerMessageId && !String(st.providerMessageId).startsWith("sim-")) {
+      return false;
+    }
     return !st || st.status === "pending" || st.status === "failed";
   });
 
@@ -138,6 +170,9 @@ export async function runBatchEmailSend(
   const total = leadContexts.length;
   const startedAt = new Date().toISOString();
   let globalIndex = countSent(statuses) + countFailed(statuses);
+  let consecutiveSameCode = 0;
+  let lastErrorCode: string | null = null;
+  let successfulSendsThisRun = 0;
 
   for (let b = 0; b < batches.length; b++) {
     await callbacks.waitWhilePaused();
@@ -258,6 +293,9 @@ export async function runBatchEmailSend(
           errorCode: undefined,
         });
         sentInBatch++;
+        successfulSendsThisRun += 1;
+        consecutiveSameCode = 0;
+        lastErrorCode = null;
 
         if (autonomous && dailyLimit > 0) {
           useSettingsStore.getState().incrementAutonomousDailySent();
@@ -284,6 +322,66 @@ export async function runBatchEmailSend(
           errorMessage: err.errorMessage,
           errorCode: err.errorCode,
         });
+
+        consecutiveSameCode =
+          lastErrorCode === err.errorCode ? consecutiveSameCode + 1 : 1;
+        lastErrorCode = err.errorCode;
+
+        const sentCountNow = countSent(statuses);
+        const failedCountNow = countFailed(statuses);
+        callbacks.onProgress(
+          buildProgress(campaign.id, {
+            phase: callbacks.isPaused() ? "paused" : "sending",
+            currentIndex: sentCountNow + failedCountNow,
+            total,
+            currentLeadLabel: ctx.label,
+            currentBatch: b + 1,
+            totalBatches: batches.length,
+            batchSize,
+            sentInBatch,
+            successCount: sentCountNow,
+            failedCount: failedCountNow,
+            paused: callbacks.isPaused(),
+            provider: providerId,
+            startedAt,
+          })
+        );
+        callbacks.onCampaignPatch({
+          sentCount: sentCountNow,
+          failedCount: failedCountNow,
+          leadStatuses: statuses,
+          sendErrors,
+          updatedAt: now,
+        });
+
+        // Never keep hammering hundreds of recipients when the provider is down.
+        if (
+          isSystemicBatchError(err.errorCode, err.errorMessage) &&
+          successfulSendsThisRun === 0
+        ) {
+          return {
+            statuses,
+            sendErrors,
+            sentCount: sentCountNow,
+            failedCount: failedCountNow,
+            stoppedEarly: true,
+            stopReason: "systemic_failure",
+          };
+        }
+        if (consecutiveSameCode >= 3) {
+          return {
+            statuses,
+            sendErrors,
+            sentCount: sentCountNow,
+            failedCount: failedCountNow,
+            stoppedEarly: true,
+            stopReason: "consecutive_failures",
+          };
+        }
+        if (config.delayBetweenEmailsMs > 0) {
+          await delay(config.delayBetweenEmailsMs);
+        }
+        continue;
       }
 
       const sentCount = countSent(statuses);

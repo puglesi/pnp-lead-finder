@@ -37,6 +37,14 @@ import { useLeadStore } from "@/store/lead-store";
 import type { Campaign, CampaignLeadStatus } from "@/types/campaign";
 import type { CampaignProfileId } from "@/types/campaign-profile";
 import type { Lead } from "@/types/lead";
+import { isRealDeliveryMessageId } from "@/lib/campaign-delivery-metrics";
+import {
+  acquireGlobalEmailSendLock,
+  auditGlobalEmailRecipients,
+  buildGlobalEmailHistory,
+  buildPermanentContactBlocks,
+  type GlobalDeduplicationPreview,
+} from "@/lib/global-email-deduplication";
 
 export type AgentThreeUiConnectionStatus =
   | AgentThreeSmtpStatus
@@ -67,6 +75,7 @@ export interface AgentThreeCampaignPreparation {
   recoveredNotConfiguredCount: number;
   missingLeadCount: number;
   dnsErrorCount: number;
+  deduplicationPreview: GlobalDeduplicationPreview | null;
   message: string | null;
 }
 
@@ -84,6 +93,7 @@ const EMPTY_PREPARATION: AgentThreeCampaignPreparation = {
   recoveredNotConfiguredCount: 0,
   missingLeadCount: 0,
   dnsErrorCount: 0,
+  deduplicationPreview: null,
   message: "Selecione uma campanha antes de iniciar.",
 };
 
@@ -118,6 +128,44 @@ function findLead(leadId: string): Lead | null {
     if (lead) return lead;
   }
   return null;
+}
+
+function getAllKnownLeads(): Lead[] {
+  const state = useLeadStore.getState();
+  const byId = new Map<string, Lead>();
+  for (const lead of [
+    ...state.currentLeads,
+    ...state.savedLeads,
+    ...state.importedLeads,
+    ...state.fullSearchHistory.flatMap((record) => record.leads ?? []),
+  ]) {
+    byId.set(lead.id, lead);
+  }
+  return [...byId.values()];
+}
+
+function buildCampaignDeduplicationPreview(
+  campaign: Campaign,
+  recipients: readonly Lead[],
+  companiesFound = campaign.leadIds.length
+): GlobalDeduplicationPreview {
+  const campaigns = useCampaignStore.getState().campaigns;
+  const operations = useAgentThreeStore.getState().operations;
+  const leads = getAllKnownLeads();
+  const evidence = { campaigns, operations, leads };
+  return auditGlobalEmailRecipients({
+    operation: campaign.campaignProfileId,
+    campaignId: campaign.id,
+    contactKind: campaign.contactKind ?? "first_contact",
+    companiesFound,
+    recipients: recipients.map((lead) => ({
+      leadId: lead.id,
+      company: lead.company,
+      email: lead.normalizedEmail ?? lead.email,
+    })),
+    history: buildGlobalEmailHistory(evidence),
+    permanentBlocks: buildPermanentContactBlocks(evidence),
+  });
 }
 
 async function prepareSelectedCampaign(
@@ -187,11 +235,28 @@ async function prepareSelectedCampaign(
     isAgentThreeConfirmedDelivery
   ).length;
   const loadableLeadIds = getAgentThreeLoadableLeadIds(activeCampaign);
+  const campaignLeads = activeCampaign.leadIds
+    .map((leadId) => findLead(leadId))
+    .filter(Boolean) as Lead[];
+  const deduplicationPreview = buildCampaignDeduplicationPreview(
+    activeCampaign,
+    campaignLeads
+  );
+  const includedLeadIds = new Set(
+    deduplicationPreview.decisions
+      .filter((decision) => decision.included)
+      .map((decision) => decision.leadId)
+  );
+  agentStore.applyDeduplicationPreview(
+    profileId,
+    activeCampaign.id,
+    deduplicationPreview
+  );
   const resolvedLeads: Lead[] = [];
   let missingLeadCount = 0;
   for (const leadId of loadableLeadIds) {
     const lead = findLead(leadId);
-    if (lead) resolvedLeads.push(lead);
+    if (lead && includedLeadIds.has(lead.id)) resolvedLeads.push(lead);
     else missingLeadCount += 1;
   }
 
@@ -238,7 +303,10 @@ async function prepareSelectedCampaign(
   const metrics = getAgentThreeMetrics(
     useAgentThreeStore.getState().operations[profileId]
   );
-  const message = describeAgentThreeEmptyQueue({
+  const message =
+    deduplicationPreview.finalSendCount === 0
+      ? "A prévia global não encontrou destinatários autorizados para envio."
+      : describeAgentThreeEmptyQueue({
     hasCampaign: true,
     campaignRecipientCount: activeCampaign.leadIds.length,
     loadableCount: loadableLeadIds.length,
@@ -252,7 +320,7 @@ async function prepareSelectedCampaign(
     dnsErrorCount: validation.dnsErrorCount,
     dnsMessage: AGENT_THREE_DNS_INCOMPLETE_MESSAGE,
     noEligibleMessage: NO_ELIGIBLE_LEADS_MESSAGE,
-  });
+        });
 
   return {
     campaign: activeCampaign,
@@ -268,6 +336,7 @@ async function prepareSelectedCampaign(
     recoveredNotConfiguredCount: recovered.recoveredCount,
     missingLeadCount,
     dnsErrorCount: validation.dnsErrorCount,
+    deduplicationPreview,
     message,
   };
 }
@@ -430,6 +499,18 @@ export function useAgentThreeRunner() {
             .campaigns.find((item) => item.id === operation.currentCampaignId)
             ?.leadIds.length ?? metrics.total,
         eligibleCount: metrics.ready,
+        deduplicationPreview: operation.currentCampaignId
+          ? (() => {
+              const campaign = useCampaignStore
+                .getState()
+                .campaigns.find((item) => item.id === operation.currentCampaignId);
+              if (!campaign) return null;
+              const leads = campaign.leadIds
+                .map((leadId) => findLead(leadId))
+                .filter(Boolean) as Lead[];
+              return buildCampaignDeduplicationPreview(campaign, leads);
+            })()
+          : null,
         message: null,
       };
       setPreparation(profileId, current);
@@ -496,6 +577,44 @@ export function useAgentThreeRunner() {
               candidate.id === item.campaignId &&
               candidate.campaignProfileId === profileId
           );
+        const lead = findLead(item.leadId);
+        const immediatePreview = campaign
+          ? buildCampaignDeduplicationPreview(
+              campaign,
+              lead ? [lead] : [],
+              lead ? 1 : 0
+            )
+          : null;
+        const immediateDecision = immediatePreview?.decisions[0];
+        if (!immediateDecision?.included) {
+          useAgentThreeStore.getState().blockClaimed(
+            profileId,
+            item.id,
+            immediateDecision?.reason ?? "Destinatário bloqueado pela verificação global.",
+            immediateDecision?.reason === "Descadastrado"
+              ? "unsubscribed"
+              : immediateDecision?.reason === "Bounce permanente"
+                ? "permanent_bounce"
+                : immediateDecision?.reason === "Contato bloqueado"
+                  ? "contact_blocked"
+                  : "already_contacted"
+          );
+          continue;
+        }
+        const sendLock = acquireGlobalEmailSendLock({
+          operation: profileId,
+          email: item.normalizedEmail ?? item.originalEmail,
+          owner: `${item.campaignId ?? "campaign"}:${item.id}`,
+        });
+        if (!sendLock.acquired) {
+          useAgentThreeStore.getState().blockClaimed(
+            profileId,
+            item.id,
+            "Outro envio para este destinatário já está em processamento.",
+            "send_locked"
+          );
+          continue;
+        }
         const requestBuild = campaign
           ? buildAgentThreeSendRequest(
               profileId,
@@ -508,6 +627,7 @@ export function useAgentThreeRunner() {
               errorMessage: AGENT_THREE_SMTP_MESSAGES.invalid_request,
             };
         if (!requestBuild.request) {
+          sendLock.release();
           useAgentThreeStore.getState().applyDeliveryResult(
             profileId,
             item.id,
@@ -521,19 +641,29 @@ export function useAgentThreeRunner() {
           setStatus(profileId, "request_error");
           break;
         }
-        const smtpResult = await requestAgentThreeSmtpSend(
-          requestBuild.request
-        );
+        let smtpResult: Awaited<ReturnType<typeof requestAgentThreeSmtpSend>>;
+        try {
+          smtpResult = await requestAgentThreeSmtpSend(requestBuild.request);
+        } finally {
+          sendLock.release();
+        }
         const occurredAt = new Date().toISOString();
         const application = useAgentThreeStore
           .getState()
           .applyDeliveryResult(profileId, item.id, smtpResult);
+        const confirmedSmtpSend =
+          smtpResult.status === "sent" &&
+          isRealDeliveryMessageId(smtpResult.messageId);
         setStatus(
           profileId,
-          smtpResult.status === "sent" ? "connected" : smtpResult.status
+          confirmedSmtpSend
+            ? "connected"
+            : smtpResult.status === "sent"
+              ? "transient_error"
+              : smtpResult.status
         );
 
-        if (campaign && smtpResult.status === "sent") {
+        if (campaign && confirmedSmtpSend) {
           useCampaignStore.getState().updateCampaign(
             campaign.id,
             patchCampaignDelivery(
@@ -547,7 +677,8 @@ export function useAgentThreeRunner() {
         } else if (
           campaign &&
           (smtpResult.status === "transient_error" ||
-            smtpResult.status === "permanent_error")
+            smtpResult.status === "permanent_error" ||
+            smtpResult.status === "sent")
         ) {
           useCampaignStore.getState().updateCampaign(
             campaign.id,
@@ -557,21 +688,25 @@ export function useAgentThreeRunner() {
               "failed",
               occurredAt,
               undefined,
-              smtpResult.message
+              smtpResult.status === "sent"
+                ? "O provedor não confirmou o envio com providerMessageId."
+                : smtpResult.message
             )
           );
         }
 
-        if (application.shouldPause) break;
+        if (application.shouldPause) {
+          // Systemic / consecutive-failure circuit breaker — do not claim more recipients.
+          break;
+        }
         const nextOperation =
           useAgentThreeStore.getState().operations[profileId];
-        const hasAnotherItem =
-          nextOperation.status === "running" &&
-          nextOperation.queue.some(
-            (candidate) =>
-              candidate.campaignId === nextOperation.currentCampaignId &&
-              candidate.queueStatus === "ready"
-          );
+        if (nextOperation.status !== "running") break;
+        const hasAnotherItem = nextOperation.queue.some(
+          (candidate) =>
+            candidate.campaignId === nextOperation.currentCampaignId &&
+            candidate.queueStatus === "ready"
+        );
         if (!hasAnotherItem) {
           useAgentThreeStore.getState().finish(profileId);
           break;
@@ -622,10 +757,18 @@ export function useAgentThreeRunner() {
         return { started: false, message: preparation.message };
       }
       setStatus(profileId, "lead_ready");
-      const availability = await checkAgentThreeSmtpAvailability(profileId);
+      // Live SMTP auth/connection check before the first real send.
+      const availability = await checkAgentThreeSmtpAvailability(profileId, {
+        verify: true,
+      });
       setStatus(profileId, availability.status);
       if (availability.status !== "connected") {
-        return { started: false, message: availability.message };
+        return {
+          started: false,
+          message:
+            availability.message ||
+            "SMTP indisponível ou mal configurado. Corrija a configuração antes de enviar.",
+        };
       }
       const result = useAgentThreeStore.getState().start(profileId, true);
       if (result.started) void run(profileId);
@@ -649,10 +792,17 @@ export function useAgentThreeRunner() {
     if (activeLoops.current.has(profileId)) {
       return { started: false, message: "Aguarde a pausa ser concluída." };
     }
-    const availability = await checkAgentThreeSmtpAvailability(profileId);
+    const availability = await checkAgentThreeSmtpAvailability(profileId, {
+      verify: true,
+    });
     setStatus(profileId, availability.status);
     if (availability.status !== "connected") {
-      return { started: false, message: availability.message };
+      return {
+        started: false,
+        message:
+          availability.message ||
+          "SMTP indisponível ou mal configurado. Corrija a configuração antes de retomar.",
+      };
     }
     const result = useAgentThreeStore.getState().resume(profileId, true);
     if (result.started) void run(profileId);

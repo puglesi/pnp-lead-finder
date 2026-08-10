@@ -20,6 +20,20 @@ export type AgentThreeQueueStatus =
   | "blocked"
   | "skipped";
 
+export type AgentThreeExclusionReason =
+  | "no_email"
+  | "invalid_syntax"
+  | "domain_not_found"
+  | "no_mx_records"
+  | "duplicate"
+  | "suppressed"
+  | "invalid_request"
+  | "already_contacted"
+  | "unsubscribed"
+  | "permanent_bounce"
+  | "contact_blocked"
+  | "send_locked";
+
 export type AgentThreeStatus =
   | "idle"
   | "running"
@@ -60,14 +74,7 @@ export interface AgentThreeQueueItem {
   validationReason: string;
   emailDomain?: string;
   hasMxRecords?: boolean;
-  exclusionReason?:
-    | "no_email"
-    | "invalid_syntax"
-    | "domain_not_found"
-    | "no_mx_records"
-    | "duplicate"
-    | "suppressed"
-    | "invalid_request";
+  exclusionReason?: AgentThreeExclusionReason;
   queueStatus: AgentThreeQueueStatus;
   createdAt: string;
   updatedAt: string;
@@ -122,6 +129,11 @@ export interface AgentThreeOperationState {
   history: AgentThreeHistoryEntry[];
   lastActivityAt: string | null;
   errorMessage: string | null;
+  /** Circuit breaker: last consecutive SMTP failure status. */
+  consecutiveFailureStatus: string | null;
+  consecutiveFailureCount: number;
+  /** Human-readable reason when the run was auto-stopped. */
+  stopReason: string | null;
 }
 
 export interface AgentThreeSnapshot {
@@ -216,6 +228,11 @@ const EXCLUSION_REASONS = new Set<
   "duplicate",
   "suppressed",
   "invalid_request",
+  "already_contacted",
+  "unsubscribed",
+  "permanent_bounce",
+  "contact_blocked",
+  "send_locked",
 ]);
 
 const VALIDATION_STATUSES = new Set<EmailValidationStatus>([
@@ -260,6 +277,9 @@ function createInitialOperation(
     history: [],
     lastActivityAt: null,
     errorMessage: null,
+    consecutiveFailureStatus: null,
+    consecutiveFailureCount: 0,
+    stopReason: null,
   };
 }
 
@@ -734,7 +754,16 @@ function leadEvidenceForItem(
 function getAgentThreeExclusionReason(
   item: AgentThreeQueueItem
 ): AgentThreeQueueItem["exclusionReason"] {
-  if (item.exclusionReason === "suppressed") return "suppressed";
+  if (
+    item.exclusionReason === "suppressed" ||
+    item.exclusionReason === "already_contacted" ||
+    item.exclusionReason === "unsubscribed" ||
+    item.exclusionReason === "permanent_bounce" ||
+    item.exclusionReason === "contact_blocked" ||
+    item.exclusionReason === "send_locked"
+  ) {
+    return item.exclusionReason;
+  }
   if (!item.normalizedEmail) return "no_email";
   if (!isEmailSyntaxValid(item.normalizedEmail)) return "invalid_syntax";
   if (item.validationStatus === "no_email") return "no_email";
@@ -1013,6 +1042,9 @@ export function startAgentThree(
       currentItemId: null,
       processedCount: 0,
       errorMessage: null,
+      consecutiveFailureStatus: null,
+      consecutiveFailureCount: 0,
+      stopReason: null,
     },
     "started",
     occurredAt,
@@ -1068,6 +1100,10 @@ export function resumeAgentThree(
       ...operation,
       status: "running",
       currentItemId: null,
+      consecutiveFailureStatus: null,
+      consecutiveFailureCount: 0,
+      stopReason: null,
+      errorMessage: null,
       queue: operation.queue.map((item) =>
         item.queueStatus === "sending"
           ? { ...item, queueStatus: "ready" as const, updatedAt: occurredAt }
@@ -1164,7 +1200,7 @@ export function blockAgentThreeSendingItem(
   itemId: string,
   message: string,
   occurredAt: string,
-  exclusionReason: "suppressed" | "invalid_request"
+  exclusionReason: AgentThreeExclusionReason
 ): AgentThreeSnapshot {
   const operation = snapshot.operations[profileId];
   const item = operation.queue.find(
@@ -1781,6 +1817,14 @@ function normalizeOperation(
     history,
     lastActivityAt: nullableString(value.lastActivityAt),
     errorMessage: nullableString(value.errorMessage),
+    consecutiveFailureStatus: nullableString(value.consecutiveFailureStatus),
+    consecutiveFailureCount:
+      typeof value.consecutiveFailureCount === "number" &&
+      Number.isFinite(value.consecutiveFailureCount) &&
+      value.consecutiveFailureCount >= 0
+        ? Math.floor(value.consecutiveFailureCount)
+        : 0,
+    stopReason: nullableString(value.stopReason),
   };
 }
 

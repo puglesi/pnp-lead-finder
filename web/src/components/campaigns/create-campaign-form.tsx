@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import {
   Eye,
   EyeOff,
-  FileText,
   MapPin,
   Megaphone,
   Sparkles,
@@ -32,7 +31,6 @@ import {
 import {
   DEFAULT_BODY_HTML,
   DEFAULT_SUBJECT,
-  EMAIL_TEMPLATE_PRESETS,
   hasValidEmail,
 } from "@/lib/email-templates";
 import { inferLeadSource } from "@/lib/campaign-leads";
@@ -71,6 +69,13 @@ import {
   type CampaignProfileId,
 } from "@/types/campaign-profile";
 import { useBatchPipelineStore } from "@/store/batch-pipeline-store";
+import {
+  getDefaultEmailTemplate,
+  getEmailTemplatesForOperation,
+  getEmailTemplateSenderName,
+  type EmailTemplate,
+} from "@/lib/email-template-library";
+import { useEmailTemplateStore } from "@/store/email-template-store";
 
 export function CreateCampaignForm({
   reuseFromId = null,
@@ -125,6 +130,13 @@ function CreateCampaignFormContent({
   const batchLoaded = useRef<string | null>(null);
   const reuseSourceName = reuseSource?.name ?? null;
   const batchMeta = batchId ? getBatch(batchId) : null;
+  const emailTemplates = useEmailTemplateStore((state) => state.templates);
+  const initialEmailTemplate = reuseSource
+    ? undefined
+    : getDefaultEmailTemplate(
+        useEmailTemplateStore.getState().templates,
+        "panek-puglesi"
+      );
 
   const [name, setName] = useState(() =>
     reuseSource
@@ -138,10 +150,10 @@ function CreateCampaignFormContent({
       reuseSource?.campaignProfileId ?? "panek-puglesi"
     );
   const [subject, setSubject] = useState<string>(
-    reuseSource?.subject ?? DEFAULT_SUBJECT
+    reuseSource?.subject ?? initialEmailTemplate?.subject ?? DEFAULT_SUBJECT
   );
   const [body, setBody] = useState<string>(
-    reuseSource?.body ?? DEFAULT_BODY_HTML
+    reuseSource?.body ?? initialEmailTemplate?.body ?? DEFAULT_BODY_HTML
   );
   const [sendConfig, setSendConfig] = useState(() =>
     reuseSource
@@ -151,7 +163,19 @@ function CreateCampaignFormContent({
           replyTo: reuseSource.replyTo,
           unsubscribeLink: reuseSource.unsubscribeLink,
         }
-      : { ...DEFAULT_CAMPAIGN_SEND_CONFIG }
+      : {
+          ...DEFAULT_CAMPAIGN_SEND_CONFIG,
+          fromName: initialEmailTemplate
+            ? getEmailTemplateSenderName(initialEmailTemplate.operation)
+            : DEFAULT_CAMPAIGN_SEND_CONFIG.fromName,
+          fromEmail:
+            initialEmailTemplate?.sender ?? DEFAULT_CAMPAIGN_SEND_CONFIG.fromEmail,
+          replyTo:
+            initialEmailTemplate?.replyTo ?? DEFAULT_CAMPAIGN_SEND_CONFIG.replyTo,
+        }
+  );
+  const [selectedTemplateId, setSelectedTemplateId] = useState(
+    reuseSource ? "" : initialEmailTemplate?.id ?? ""
   );
   const [followUp, setFollowUp] = useState<CampaignFollowUp>(() =>
     reuseSource ? { ...reuseSource.followUp } : { ...DEFAULT_FOLLOW_UP }
@@ -186,6 +210,10 @@ function CreateCampaignFormContent({
   const selectedLeads = useMemo(
     () => allLeads.filter((l) => selectedIds.includes(l.id)),
     [allLeads, selectedIds]
+  );
+  const operationTemplates = useMemo(
+    () => getEmailTemplatesForOperation(emailTemplates, campaignProfileId),
+    [emailTemplates, campaignProfileId]
   );
 
   useEffect(() => {
@@ -227,12 +255,23 @@ function CreateCampaignFormContent({
     });
   }, [reuseFromId, reuseSource, setEmailProvider]);
 
-  const applyPreset = (presetId: string) => {
-    const preset = EMAIL_TEMPLATE_PRESETS.find((p) => p.id === presetId);
-    if (!preset) return;
-    setSubject(preset.subject);
-    setBody(preset.body);
-    toast.success(`Template "${preset.label}" aplicado`);
+  const applyEmailTemplate = (template: EmailTemplate, notify = true) => {
+    setSelectedTemplateId(template.id);
+    setSubject(template.subject);
+    setBody(template.body);
+    setSendConfig((current) => ({
+      ...current,
+      fromName: getEmailTemplateSenderName(template.operation),
+      fromEmail: template.sender,
+      replyTo: template.replyTo,
+    }));
+    if (notify) toast.success(`Modelo "${template.name}" aplicado`);
+  };
+
+  const changeCampaignOperation = (value: CampaignProfileId) => {
+    setCampaignProfileId(value);
+    const defaultTemplate = getDefaultEmailTemplate(emailTemplates, value);
+    if (defaultTemplate) applyEmailTemplate(defaultTemplate, false);
   };
 
   const handleImport = (leads: import("@/types/lead").Lead[]) => {
@@ -258,8 +297,17 @@ function CreateCampaignFormContent({
       return;
     }
 
+    const selectedEmailTemplate = emailTemplates.find(
+      (template) => template.id === selectedTemplateId
+    );
     const campaign = createCampaign({
       campaignProfileId,
+      emailTemplateId:
+        selectedEmailTemplate?.id ?? reuseSource?.emailTemplateId,
+      contactKind:
+        selectedEmailTemplate?.contactKind ??
+        reuseSource?.contactKind ??
+        "first_contact",
       name: name.trim(),
       subject: subject.trim(),
       body: body.trim(),
@@ -335,20 +383,25 @@ function CreateCampaignFormContent({
 
           {/* 3. Templates */}
           <div className="space-y-1.5">
-            <Label>Template</Label>
-            <div className="flex flex-wrap gap-2">
-              {EMAIL_TEMPLATE_PRESETS.map((preset) => (
-                <button
-                  key={preset.id}
-                  type="button"
-                  onClick={() => applyPreset(preset.id)}
-                  className="rounded-lg border border-border/60 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary"
-                >
-                  <FileText className="mr-1 inline size-3" />
-                  {preset.label}
-                </button>
-              ))}
-            </div>
+            <Label>Modelo de e-mail</Label>
+            <Select
+              value={selectedTemplateId}
+              onValueChange={(id) => {
+                const template = operationTemplates.find((item) => item.id === id);
+                if (template) applyEmailTemplate(template);
+              }}
+            >
+              <SelectTrigger className="h-9 bg-background/50">
+                <SelectValue placeholder="Selecione um modelo" />
+              </SelectTrigger>
+              <SelectContent>
+                {operationTemplates.map((template) => (
+                  <SelectItem key={template.id} value={template.id}>
+                    {template.name}{template.isDefault ? " · Padrão" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           {/* 4. Sender one line */}
@@ -470,7 +523,7 @@ function CreateCampaignFormContent({
                 <Select
                   value={campaignProfileId}
                   onValueChange={(value: CampaignProfileId) =>
-                    setCampaignProfileId(value)
+                    changeCampaignOperation(value)
                   }
                 >
                   <SelectTrigger
@@ -577,7 +630,7 @@ function CreateCampaignFormContent({
               <Select
                 value={campaignProfileId}
                 onValueChange={(value: CampaignProfileId) =>
-                  setCampaignProfileId(value)
+                  changeCampaignOperation(value)
                 }
               >
                 <SelectTrigger id="campaign-profile" className="bg-background/50">
@@ -607,20 +660,25 @@ function CreateCampaignFormContent({
             </div>
 
             <div className="space-y-2">
-              <Label>Templates rápidos</Label>
-              <div className="flex flex-wrap gap-2">
-                {EMAIL_TEMPLATE_PRESETS.map((preset) => (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    onClick={() => applyPreset(preset.id)}
-                    className="rounded-lg border border-border/60 px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary"
-                  >
-                    <FileText className="mr-1 inline size-3" />
-                    {preset.label}
-                  </button>
-                ))}
-              </div>
+              <Label>Modelo de e-mail</Label>
+              <Select
+                value={selectedTemplateId}
+                onValueChange={(id) => {
+                  const template = operationTemplates.find((item) => item.id === id);
+                  if (template) applyEmailTemplate(template);
+                }}
+              >
+                <SelectTrigger className="bg-background/50">
+                  <SelectValue placeholder="Selecione um modelo" />
+                </SelectTrigger>
+                <SelectContent>
+                  {operationTemplates.map((template) => (
+                    <SelectItem key={template.id} value={template.id}>
+                      {template.name}{template.isDefault ? " · Padrão" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </CardContent>
         </Card>

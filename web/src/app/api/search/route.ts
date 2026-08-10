@@ -15,12 +15,17 @@ export async function POST(request: NextRequest) {
     const searchProfile =
       body.searchProfile === "autonomous-24h" ? "autonomous-24h" : "serpapi";
     const useMaxLeads = Boolean(body.useMaxLeads);
-    const maxResults = resolveEffectiveMaxResults(
-      Number(body.maxResults) || DEFAULT_LEADS_PER_SECTOR,
-      useMaxLeads,
-      provider,
-      searchProfile
-    );
+    const requestedMaxResults =
+      Number(body.maxResults) || DEFAULT_LEADS_PER_SECTOR;
+    const maxResults =
+      body.strictMaxResults === true
+        ? Math.min(200, Math.max(1, Math.floor(requestedMaxResults)))
+        : resolveEffectiveMaxResults(
+            requestedMaxResults,
+            useMaxLeads,
+            provider,
+            searchProfile
+          );
     const delayMs = Math.min(5000, Math.max(0, Number(body.delayMs) || 0));
 
     if (!keyword || !location) {
@@ -36,6 +41,7 @@ export async function POST(request: NextRequest) {
       keyword,
       location,
       maxResults,
+      strictMaxResults: body.strictMaxResults === true,
       delayMs,
       provider,
       sectorIndex,

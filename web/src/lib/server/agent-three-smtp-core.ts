@@ -49,6 +49,8 @@ export interface AgentThreeSmtpTransport {
   sendMail(
     options: AgentThreeSmtpMailOptions
   ): Promise<{ messageId?: string }>;
+  /** Optional live auth/connection check (no message is sent). */
+  verify?: () => Promise<true | void>;
 }
 
 export type AgentThreeSmtpTransportFactory = (
@@ -286,11 +288,14 @@ export function classifyAgentThreeSmtpError(
     (responseCode >= 400 && responseCode < 500) ||
     new Set([
       "ECONNECTION",
+      "ECONNREFUSED",
       "ETIMEDOUT",
       "ECONNRESET",
       "EHOSTUNREACH",
       "ENETUNREACH",
       "EDNS",
+      "ESOCKET",
+      "EENVELOPE",
     ]).has(code)
   ) {
     return "transient_error";
@@ -311,6 +316,46 @@ export function getAgentThreeSmtpAvailability(
   return resolveSmtpConfig(operation, environment)
     ? result("connected")
     : result("configuration_error");
+}
+
+/**
+ * Live SMTP connection + auth check without sending a message.
+ * Uses transport.verify() when available; otherwise falls back to config-only check.
+ */
+export async function verifyAgentThreeSmtpConnection(
+  operation: unknown,
+  dependencies: Pick<
+    AgentThreeSmtpDependencies,
+    "environment" | "createTransport"
+  >
+): Promise<AgentThreeSmtpResult> {
+  const availability = getAgentThreeSmtpAvailability(
+    operation,
+    dependencies.environment
+  );
+  if (availability.status !== "connected") return availability;
+  if (!isCampaignProfileId(operation)) return result("invalid_request");
+
+  const config = resolveSmtpConfig(operation, dependencies.environment);
+  if (!config) return result("configuration_error");
+
+  try {
+    const transport = dependencies.createTransport({
+      host: config.host,
+      port: config.port,
+      secure: config.secure,
+      auth: {
+        user: config.user,
+        pass: config.password,
+      },
+    });
+    if (typeof transport.verify === "function") {
+      await transport.verify();
+    }
+    return result("connected");
+  } catch (error) {
+    return result(classifyAgentThreeSmtpError(error));
+  }
 }
 
 export async function sendAgentThreeSmtp(

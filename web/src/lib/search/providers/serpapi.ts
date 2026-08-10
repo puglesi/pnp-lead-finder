@@ -238,6 +238,7 @@ export const serpApiProvider: SearchProvider = {
       maxResults,
       delayMs,
       serpApiKey,
+      strictMaxResults = false,
       serpapiDeepPagination = false,
       useMaxLeads = false,
     } = params;
@@ -249,14 +250,25 @@ export const serpApiProvider: SearchProvider = {
     const apiKey = getSerpApiKey(serpApiKey);
 
     if (!apiKey) {
+      if (params.allowArtificialResults === false) {
+        return {
+          leads: [],
+          source: "serpapi-no-key-no-results",
+          provider: "serpapi",
+          isLive: false,
+          apiCallConsumed: false,
+        };
+      }
       return autonomousFallback(params, "serpapi-no-key");
     }
 
-    const maxPages = getSerpApiPagesPerSector({
-      useMaxLeads,
-      deepPagination: serpapiDeepPagination,
-      leadsPerSector: maxResults,
-    });
+    const maxPages = strictMaxResults
+      ? 1
+      : getSerpApiPagesPerSector({
+          useMaxLeads,
+          deepPagination: serpapiDeepPagination,
+          leadsPerSector: maxResults,
+        });
 
     try {
       const query = `${keyword} in ${location}, UK`;
@@ -267,6 +279,16 @@ export const serpApiProvider: SearchProvider = {
       );
 
       if (places.length === 0) {
+        if (params.allowArtificialResults === false) {
+          return {
+            leads: [],
+            source: "serpapi-empty-no-results",
+            provider: "serpapi",
+            isLive: false,
+            apiCallConsumed: true,
+            apiCallsUsed,
+          };
+        }
         return autonomousFallback(params, "serpapi-empty");
       }
 
@@ -275,7 +297,7 @@ export const serpApiProvider: SearchProvider = {
       );
 
       const { leads, supplemented } =
-        serpLeads.length < maxResults
+        serpLeads.length < maxResults && params.allowArtificialResults !== false
           ? await supplementVolume(params, serpLeads)
           : { leads: serpLeads.slice(0, maxResults), supplemented: false };
 
@@ -305,6 +327,16 @@ export const serpApiProvider: SearchProvider = {
         isSerpApiCreditError(err instanceof Error ? err.message : String(err));
 
       if (creditExhausted) {
+        if (params.allowArtificialResults === false) {
+          return {
+            leads: [],
+            source: "serpapi-quota-no-results",
+            provider: "serpapi",
+            isLive: false,
+            apiCallConsumed: true,
+            creditExhausted: true,
+          };
+        }
         return autonomousFallback(params, "serpapi-quota", true);
       }
 

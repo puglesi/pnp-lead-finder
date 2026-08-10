@@ -4,6 +4,7 @@ import type { Lead } from "@/types/lead";
 import type { CampaignProfileId } from "@/types/campaign-profile";
 import {
   claimNextAgentThreeItem,
+  blockAgentThreeSendingItem,
   finishAgentThree,
   configureAgentThreeIntervals,
   configureAgentThreeLimit,
@@ -21,9 +22,11 @@ import {
   type AgentThreeLoadResult,
   type AgentThreePreparationResult,
   type AgentThreeQueueItem,
+  type AgentThreeExclusionReason,
   type AgentThreeSnapshot,
   type AgentThreeStartResult,
 } from "@/lib/agent-three-queue";
+import type { GlobalDeduplicationPreview } from "@/lib/global-email-deduplication";
 import {
   applyAgentThreeSmtpResult,
   type AgentThreeDeliveryApplication,
@@ -68,6 +71,17 @@ interface AgentThreeStore extends AgentThreeSnapshot {
   ) => AgentThreeStartResult;
   stop: (profileId: CampaignProfileId) => void;
   claimNext: (profileId: CampaignProfileId) => AgentThreeQueueItem | null;
+  applyDeduplicationPreview: (
+    profileId: CampaignProfileId,
+    campaignId: string,
+    preview: GlobalDeduplicationPreview
+  ) => void;
+  blockClaimed: (
+    profileId: CampaignProfileId,
+    itemId: string,
+    message: string,
+    reason: AgentThreeExclusionReason
+  ) => void;
   applyDeliveryResult: (
     profileId: CampaignProfileId,
     itemId: string,
@@ -218,10 +232,85 @@ export const useAgentThreeStore = create<AgentThreeStore>()(
         return item;
       },
 
+      applyDeduplicationPreview: (profileId, campaignId, preview) =>
+        set((state) => {
+          const operation = state.operations[profileId];
+          const byLead = new Map(
+            preview.decisions.map((decision) => [decision.leadId, decision])
+          );
+          const byEmail = new Map(
+            preview.decisions
+              .filter((decision) => decision.normalizedEmail)
+              .map((decision) => [decision.normalizedEmail!, decision])
+          );
+          const globalReasons = new Set<AgentThreeExclusionReason>([
+            "already_contacted",
+            "unsubscribed",
+            "permanent_bounce",
+            "contact_blocked",
+            "send_locked",
+          ]);
+          const queue = operation.queue.map((item) => {
+            if (item.campaignId !== campaignId || item.queueStatus === "sent") {
+              return item;
+            }
+            const decision =
+              byLead.get(item.leadId) ??
+              (item.normalizedEmail
+                ? byEmail.get(item.normalizedEmail)
+                : undefined);
+            if (!decision) return item;
+            if (decision.included) {
+              if (!item.exclusionReason || !globalReasons.has(item.exclusionReason)) {
+                return item;
+              }
+              return {
+                ...item,
+                queueStatus: "pending" as const,
+                exclusionReason: undefined,
+                errorMessage: undefined,
+              };
+            }
+            let exclusionReason: AgentThreeExclusionReason = "already_contacted";
+            if (decision.code === "duplicate_in_batch") exclusionReason = "duplicate";
+            if (decision.reason === "Descadastrado") exclusionReason = "unsubscribed";
+            if (decision.reason === "Bounce permanente") exclusionReason = "permanent_bounce";
+            if (decision.reason === "Contato bloqueado") exclusionReason = "contact_blocked";
+            if (decision.code === "invalid_email") exclusionReason = "invalid_request";
+            return {
+              ...item,
+              queueStatus: "blocked" as const,
+              exclusionReason,
+              errorMessage: decision.reason,
+            };
+          });
+          return {
+            ...state,
+            operations: {
+              ...state.operations,
+              [profileId]: { ...operation, queue },
+            },
+          };
+        }),
+
+      blockClaimed: (profileId, itemId, message, reason) =>
+        set((state) =>
+          blockAgentThreeSendingItem(
+            state,
+            profileId,
+            itemId,
+            message,
+            nowIso(),
+            reason
+          )
+        ),
+
       applyDeliveryResult: (profileId, itemId, smtpResult) => {
         let application: AgentThreeDeliveryApplication = {
           snapshot: createInitialAgentThreeSnapshot(),
           shouldPause: false,
+          stopReason: null,
+          isSystemic: false,
         };
         set((state) => {
           application = applyAgentThreeSmtpResult(

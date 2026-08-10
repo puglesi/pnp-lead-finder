@@ -9,6 +9,7 @@ import { applyTrackingEventsToCampaign } from "@/lib/campaign-tracking";
 import { isAutonomousProvider } from "@/lib/email-provider-utils";
 import type { CampaignTrackingEvent } from "@/types/campaign-tracking";
 import type { CampaignProfileId } from "@/types/campaign-profile";
+import type { EmailContactKind } from "@/lib/global-email-deduplication";
 import {
   DEFAULT_AUTONOMOUS_BATCH_CONFIG,
   DEFAULT_BATCH_SEND_CONFIG,
@@ -21,7 +22,6 @@ import {
   type CampaignFollowUp,
   type CampaignSignature,
   type CampaignLeadSource,
-  type CampaignLeadStatus,
   type CampaignSendingProgress,
   type CampaignStats,
   type CampaignStatus,
@@ -39,6 +39,8 @@ interface CampaignStore {
   sendPaused: boolean;
   createCampaign: (data: {
     campaignProfileId?: CampaignProfileId;
+    emailTemplateId?: string;
+    contactKind?: EmailContactKind;
     name: string;
     subject: string;
     body: string;
@@ -93,6 +95,8 @@ export const useCampaignStore = create<CampaignStore>()(
         const campaign: Campaign = {
           id: `camp-${Date.now()}`,
           campaignProfileId: data.campaignProfileId ?? "panek-puglesi",
+          emailTemplateId: data.emailTemplateId,
+          contactKind: data.contactKind ?? "first_contact",
           name: data.name,
           subject: data.subject,
           body: data.body,
@@ -150,6 +154,8 @@ export const useCampaignStore = create<CampaignStore>()(
         const copy: Campaign = {
           id: `camp-${Date.now()}`,
           campaignProfileId: source.campaignProfileId,
+          emailTemplateId: source.emailTemplateId,
+          contactKind: source.contactKind ?? "first_contact",
           name: copyName,
           subject: source.subject,
           body: source.body,
@@ -453,8 +459,8 @@ export const useCampaignStore = create<CampaignStore>()(
     }),
     {
       name: "pnp-campaigns",
-      // v12: force list metrics to ignore legacy sentCount/failed progress.
-      version: 12,
+      // v13: persist explicit first-contact/follow-up classification.
+      version: 13,
       migrate: (persisted, fromVersion) => {
         const state = persisted as { campaigns?: Campaign[] };
         if (!state?.campaigns) return persisted;
@@ -484,6 +490,8 @@ export const useCampaignStore = create<CampaignStore>()(
                 c.campaignProfileId === "modeclean"
                   ? "modeclean"
                   : "panek-puglesi",
+              emailTemplateId: c.emailTemplateId,
+              contactKind: c.contactKind ?? "first_contact",
               leadSource: c.leadSource ?? "saved",
               fromName: c.fromName ?? SEND_DEFAULTS.fromName,
               fromEmail: c.fromEmail ?? SEND_DEFAULTS.fromEmail,

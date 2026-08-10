@@ -1,6 +1,7 @@
 import {
   getServerAgentThreeSmtpAvailability,
   sendServerAgentThreeSmtp,
+  verifyServerAgentThreeSmtp,
 } from "@/lib/server/agent-three-smtp";
 
 export const runtime = "nodejs";
@@ -29,8 +30,14 @@ function responseStatus(status: string): number {
 }
 
 export async function GET(request: Request) {
-  const operation = new URL(request.url).searchParams.get("operation");
-  const result = getServerAgentThreeSmtpAvailability(operation);
+  const url = new URL(request.url);
+  const operation = url.searchParams.get("operation");
+  const verify =
+    url.searchParams.get("verify") === "1" ||
+    url.searchParams.get("verify") === "true";
+  const result = verify
+    ? await verifyServerAgentThreeSmtp(operation)
+    : getServerAgentThreeSmtpAvailability(operation);
   return Response.json(result, {
     status: responseStatus(result.status),
     headers: { "Cache-Control": "no-store" },

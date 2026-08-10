@@ -1287,6 +1287,20 @@ test("SMTP 14. confirmação SMTP marca sent", async () => {
   );
 });
 
+test("SMTP 14b. resposta sent sem providerMessageId permanece retomável", () => {
+  const claimed = claimReady(readySnapshot());
+  const applied = applyAgentThreeSmtpResult(
+    claimed.snapshot,
+    "panek-puglesi",
+    claimed.item.id,
+    { status: "sent", message: "Resposta sem confirmação do provedor." },
+    finalTime
+  );
+  const operation = applied.snapshot.operations["panek-puglesi"];
+  assert.equal(operation.queue[0].queueStatus, "failed");
+  assert.equal(operation.sentIndex.length, 0);
+});
+
 test("SMTP 15. falha SMTP não marca sent", async () => {
   const claimed = claimReady(readySnapshot());
   const mock = smtpMock({ error: { responseCode: 550 } });

@@ -41,16 +41,16 @@ async function readResult(response: Response): Promise<AgentThreeSmtpResult> {
 }
 
 export async function checkAgentThreeSmtpAvailability(
-  operation: CampaignProfileId
+  operation: CampaignProfileId,
+  options: { verify?: boolean } = {}
 ): Promise<AgentThreeSmtpResult> {
   try {
-    const response = await fetch(
-      `/api/agent-3/send?operation=${encodeURIComponent(operation)}`,
-      {
-        method: "GET",
-        cache: "no-store",
-      }
-    );
+    const params = new URLSearchParams({ operation });
+    if (options.verify) params.set("verify", "1");
+    const response = await fetch(`/api/agent-3/send?${params.toString()}`, {
+      method: "GET",
+      cache: "no-store",
+    });
     return readResult(response);
   } catch {
     return {

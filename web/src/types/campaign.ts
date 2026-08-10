@@ -1,6 +1,7 @@
 import type { EmailProviderId } from "@/types/email-provider";
 import type { CampaignProfileId } from "@/types/campaign-profile";
 import { DEFAULT_SIGNATURE_HTML } from "@/lib/signature-template";
+import type { EmailContactKind } from "@/lib/global-email-deduplication";
 
 export type CampaignStatus = "draft" | "active" | "paused" | "completed";
 export type CampaignLeadSource = "saved" | "recent" | "mixed" | "imported";
@@ -98,6 +99,8 @@ export interface CampaignSignature {
 export interface Campaign {
   id: string;
   campaignProfileId: CampaignProfileId;
+  emailTemplateId?: string;
+  contactKind: EmailContactKind;
   name: string;
   subject: string;
   body: string;

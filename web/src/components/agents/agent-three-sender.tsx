@@ -7,6 +7,7 @@ import {
   Play,
   RotateCcw,
   Send,
+  ShieldCheck,
   Square,
 } from "lucide-react";
 import toast from "react-hot-toast";
@@ -44,6 +45,7 @@ import {
 } from "@/hooks/use-agent-three-runner";
 import { useAgentThreeStore } from "@/store/agent-three-store";
 import { useCampaignStore } from "@/store/campaign-store";
+import { GlobalDeduplicationPreviewPanel } from "@/components/campaigns/global-deduplication-preview";
 import {
   CAMPAIGN_PROFILES,
   getCampaignProfileName,
@@ -132,6 +134,12 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
   const preparation = runner.preparations[profileId];
   const isLoadingCampaign = runner.loadingCampaign[profileId] === true;
   const [clockNow, setClockNow] = useState(() => Date.now());
+  const [confirmedPreviewCampaignId, setConfirmedPreviewCampaignId] =
+    useState<string | null>(null);
+  const deduplicationPreview = preparation?.deduplicationPreview ?? null;
+  const previewConfirmed =
+    Boolean(currentCampaign) &&
+    confirmedPreviewCampaignId === currentCampaign?.id;
   useEffect(() => {
     if (nextSendAt === null) return;
     const interval = window.setInterval(() => setClockNow(Date.now()), 250);
@@ -324,16 +332,25 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
 
   async function handleCampaignChange(value: string) {
     const campaignId = value === "none" ? null : value;
+    setConfirmedPreviewCampaignId(null);
     selectCampaign(profileId, campaignId);
     await runner.loadCampaign(profileId, campaignId);
   }
 
   async function handleStart() {
+    if (!previewConfirmed) {
+      toast.error("Confirme a prévia global antes de iniciar o envio.");
+      return;
+    }
     const result = await runner.start(profileId);
     if (result.message) toast.error(result.message);
   }
 
   async function handleResume() {
+    if (!previewConfirmed) {
+      toast.error("Confirme novamente a prévia global antes de retomar.");
+      return;
+    }
     const result = await runner.resume(profileId);
     if (result.message) toast.error(result.message);
   }
@@ -358,9 +375,10 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
             <Select
               value={profileId}
               disabled={controlsLocked}
-              onValueChange={(value) =>
-                selectProfile(value as CampaignProfileId)
-              }
+              onValueChange={(value) => {
+                setConfirmedPreviewCampaignId(null);
+                selectProfile(value as CampaignProfileId);
+              }}
             >
               <SelectTrigger id="agent-three-profile">
                 <SelectValue />
@@ -512,10 +530,23 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
         </div>
 
         <div className="flex flex-wrap gap-2">
+          {deduplicationPreview && operation.status !== "running" && (
+            <Button
+              variant={previewConfirmed ? "secondary" : "outline"}
+              onClick={() =>
+                setConfirmedPreviewCampaignId(currentCampaign?.id ?? null)
+              }
+              disabled={deduplicationPreview.finalSendCount === 0}
+            >
+              <ShieldCheck className="size-4" />
+              {previewConfirmed ? "Prévia confirmada" : "Confirmar prévia"}
+            </Button>
+          )}
           <Button
             onClick={() => void handleStart()}
             disabled={
               controlsLocked ||
+              !previewConfirmed ||
               campaignFullyDelivered ||
               (readyCount === 0 && !isPreparing)
             }
@@ -547,7 +578,7 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
           <Button
             variant="outline"
             onClick={() => void handleResume()}
-            disabled={operation.status !== "paused"}
+            disabled={operation.status !== "paused" || !previewConfirmed}
           >
             <RotateCcw className="size-4" />
             Resume
@@ -561,6 +592,10 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
             Stop
           </Button>
         </div>
+
+        {deduplicationPreview && (
+          <GlobalDeduplicationPreviewPanel preview={deduplicationPreview} />
+        )}
 
         {emptyQueueReason && (
           <p className="text-sm text-amber-200/90" role="status">

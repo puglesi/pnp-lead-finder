@@ -30,6 +30,10 @@ import {
 } from "@/lib/lead-batch";
 import type { LeadBatch } from "@/types/batch";
 import { useBatchPipelineStore } from "@/store/batch-pipeline-store";
+import {
+  assessRealSearchResponse,
+  REAL_SEARCH_UNAVAILABLE_MESSAGE,
+} from "@/lib/search/live-search-result";
 
 const FULL_HISTORY_LIMIT = 200;
 
@@ -49,6 +53,8 @@ const INITIAL_BULK: BulkSearchProgress = {
 interface BulkSearchOptions {
   allowArtificialResults?: boolean;
   autoSaveResults?: boolean;
+  requireLiveResults?: boolean;
+  maxResultsOverride?: number;
 }
 
 interface LeadStore {
@@ -143,7 +149,8 @@ async function fetchSector(
       keyword: sector,
       location,
       sectorIndex,
-      maxResults: settings.maxResults,
+      maxResults: options.maxResultsOverride ?? settings.maxResults,
+      strictMaxResults: options.maxResultsOverride !== undefined,
       useMaxLeads: settings.useMaxLeads,
       allowArtificialResults: options.allowArtificialResults !== false,
       delayMs: config.delayMs,
@@ -161,7 +168,21 @@ async function fetchSector(
     }),
   });
   if (!res.ok) throw new Error(`Falha ao buscar ${sector}`);
-  return res.json();
+  const data = (await res.json()) as SearchApiResponse;
+  if (options.requireLiveResults) {
+    const assessment = assessRealSearchResponse(data);
+    if (!assessment.available) {
+      console.error("[one-click/search]", {
+        sector,
+        source: data.source,
+        isLive: data.isLive,
+        resultsCount: data.leads.length,
+        reason: assessment.reason,
+      });
+      throw new Error(REAL_SEARCH_UNAVAILABLE_MESSAGE);
+    }
+  }
+  return data;
 }
 
 function autoSaveAllLeads(
@@ -499,6 +520,29 @@ export const useLeadStore = create<LeadStore>()(
 
         const finalLeads = dedupeLeads(allLeads);
         const elapsedMs = Date.now() - startedAt;
+        const realSearchFailed =
+          options.requireLiveResults &&
+          (!anyLive ||
+            finalLeads.length === 0 ||
+            get().bulkProgress.sectors.some(
+              (sector) => sector.status === "error"
+            ));
+        if (realSearchFailed) {
+          set((state) => ({
+            isSearching: false,
+            currentLeads: [],
+            lastSearchIsLive: false,
+            lastSearchSource: lastSource,
+            bulkProgress: {
+              ...state.bulkProgress,
+              active: false,
+              runningSectors: [],
+              elapsedMs,
+              estimatedRemainingMs: 0,
+            },
+          }));
+          throw new Error(REAL_SEARCH_UNAVAILABLE_MESSAGE);
+        }
         const searchRecordId = `${Date.now()}`;
         const searchDate = new Date().toISOString();
         const batch = useBatchPipelineStore.getState().registerSearchBatch({

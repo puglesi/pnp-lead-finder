@@ -9,6 +9,7 @@ export interface SearchParams {
   keyword: string;
   location: string;
   maxResults: number;
+  strictMaxResults?: boolean;
   delayMs: number;
   sectorIndex?: number;
   serpApiKey?: string;

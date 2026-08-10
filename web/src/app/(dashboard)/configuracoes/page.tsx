@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { LocalProductionPanel } from "@/components/dashboard/local-production-panel";
 import { SearchSettingsForm } from "@/components/settings/search-settings-form";
+import { EmailTemplateLibrary } from "@/components/settings/email-template-library";
 
 export default function ConfiguracoesPage() {
   return (
@@ -48,6 +49,8 @@ export default function ConfiguracoesPage() {
       </Card>
 
       <SearchSettingsForm />
+
+      <EmailTemplateLibrary />
 
       <CollapsibleCard storageKey="settings-company" className="border-border/60">
         <CollapsibleCardHeader>

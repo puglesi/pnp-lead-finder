@@ -120,6 +120,16 @@ export function describeAgentThreeExclusionReason(
       return "suprimido";
     case "invalid_request":
       return "pedido inválido";
+    case "already_contacted":
+      return "já contatado pela mesma operação";
+    case "unsubscribed":
+      return "descadastrado";
+    case "permanent_bounce":
+      return "bounce permanente";
+    case "contact_blocked":
+      return "contato bloqueado";
+    case "send_locked":
+      return "envio já reservado por outra execução";
     default:
       return reason ?? "excluído";
   }
