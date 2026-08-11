@@ -7,6 +7,7 @@ import { useLeadStore } from "@/store/lead-store";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SerpApiQuotaBadge } from "@/components/layout/serpapi-quota-badge";
+import { ThemeSwitcher } from "@/components/layout/theme-switcher";
 import {
   CLEAR_UI_TOAST,
   clearUiSessionState,
@@ -36,13 +37,15 @@ export function Navbar() {
       </div>
 
       <div className="flex items-center gap-2 sm:gap-3">
+        <ThemeSwitcher compact />
+
         <Button
           type="button"
           variant="outline"
           size="sm"
           onClick={() => void handleClearInterface()}
           className="h-8 gap-1.5 border-border/70 text-xs"
-          title="Limpa formulários e lote ativo. Não apaga leads, campanhas nem envios."
+          title="Limpa formulários e lote ativo. Não apaga leads, campanhas, templates, blocklist nem envios."
         >
           <Eraser className="size-3.5" />
           <span className="hidden sm:inline">Limpar interface</span>

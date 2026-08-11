@@ -1,76 +1,176 @@
 "use client";
 
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { Building2, Mail, Megaphone, Users } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { useLeadStore } from "@/store/lead-store";
 import { useCampaignStore } from "@/store/campaign-store";
+import { useLifetimeStatsStore } from "@/store/lifetime-stats-store";
+import { computeLifetimeStats } from "@/lib/lifetime-stats";
 import { cn } from "@/lib/utils";
 
+const subscribe = () => () => {};
+const client = () => true;
+const server = () => false;
+
 export function StatsCards() {
-  const { savedLeads, recentSearches } = useLeadStore();
-  const { getStats } = useCampaignStore();
-  const campaignStats = getStats();
+  const hydrated = useSyncExternalStore(subscribe, client, server);
+  const fullSearchHistory = useLeadStore((s) => s.fullSearchHistory);
+  const recentSearches = useLeadStore((s) => s.recentSearches);
+  const savedLeads = useLeadStore((s) => s.savedLeads);
+  const importedLeads = useLeadStore((s) => s.importedLeads);
+  const campaigns = useCampaignStore((s) => s.campaigns);
+  const floors = useLifetimeStatsStore((s) => ({
+    companiesFound: s.companiesFound,
+    leadsFound: s.leadsFound,
+    validEmailsFound: s.validEmailsFound,
+    campaignsSent: s.campaignsSent,
+  }));
+  const syncFromPersistedData = useLifetimeStatsStore(
+    (s) => s.syncFromPersistedData
+  );
 
-  const emailsValid = savedLeads.filter((l) => l.email).length;
-  const totalFound = recentSearches.reduce((s, r) => s + r.resultsCount, 0);
+  // Keep high-water floors aligned with durable persisted data (never resets UI).
+  useEffect(() => {
+    if (!hydrated) return;
+    syncFromPersistedData({
+      fullSearchHistory,
+      recentSearches,
+      savedLeads,
+      importedLeads,
+      campaigns,
+    });
+  }, [
+    hydrated,
+    fullSearchHistory,
+    recentSearches,
+    savedLeads,
+    importedLeads,
+    campaigns,
+    syncFromPersistedData,
+  ]);
 
-  const stats = [
+  const stats = useMemo(() => {
+    if (!hydrated) {
+      return {
+        companiesFound: 0,
+        leadsFound: 0,
+        validEmailsFound: 0,
+        campaignsSent: 0,
+        campaignsActive: 0,
+      };
+    }
+    return computeLifetimeStats({
+      fullSearchHistory,
+      recentSearches,
+      savedLeads,
+      importedLeads,
+      campaigns,
+      floors,
+    });
+  }, [
+    hydrated,
+    fullSearchHistory,
+    recentSearches,
+    savedLeads,
+    importedLeads,
+    campaigns,
+    floors,
+  ]);
+
+  const cards = [
     {
-      label: "Empresas Encontradas",
-      value: totalFound.toLocaleString("pt-BR"),
+      label: "Empresas encontradas",
+      value: stats.companiesFound.toLocaleString("pt-BR"),
+      hint: "Lifetime · todas as buscas",
       icon: Building2,
       color: "text-blue-400",
       bg: "bg-blue-500/10",
     },
     {
-      label: "Leads Salvos",
-      value: savedLeads.length.toLocaleString("pt-BR"),
+      label: "Leads encontrados/salvos",
+      value: stats.leadsFound.toLocaleString("pt-BR"),
+      hint: "Lifetime · união de registros",
       icon: Users,
       color: "text-emerald-400",
       bg: "bg-emerald-500/10",
     },
     {
-      label: "Emails Válidos",
-      value: emailsValid.toLocaleString("pt-BR"),
+      label: "E-mails válidos encontrados",
+      value: stats.validEmailsFound.toLocaleString("pt-BR"),
+      hint: "Lifetime · com endereço",
       icon: Mail,
       color: "text-cyan-400",
       bg: "bg-cyan-500/10",
     },
     {
-      label: "Campanhas Ativas",
-      value: campaignStats.active.toLocaleString("pt-BR"),
+      label: "Campanhas enviadas",
+      value: stats.campaignsSent.toLocaleString("pt-BR"),
+      hint: "Lifetime · com envio confirmado",
       icon: Megaphone,
       color: "text-amber-400",
       bg: "bg-amber-500/10",
+      extra:
+        stats.campaignsActive > 0
+          ? `${stats.campaignsActive} ativa${stats.campaignsActive !== 1 ? "s" : ""}`
+          : null,
     },
   ];
 
   return (
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-      {stats.map((stat) => {
-        const Icon = stat.icon;
-        return (
-          <Card
-            key={stat.label}
-            className="border-border/60 bg-card/80 transition-all hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5"
-          >
-            <CardContent className="flex items-center gap-4 p-6">
-              <div
-                className={cn(
-                  "flex size-12 items-center justify-center rounded-xl",
-                  stat.bg
-                )}
-              >
-                <Icon className={cn("size-6", stat.color)} />
-              </div>
-              <div>
-                <p className="text-sm text-muted-foreground">{stat.label}</p>
-                <p className="text-2xl font-bold tracking-tight">{stat.value}</p>
-              </div>
-            </CardContent>
-          </Card>
-        );
-      })}
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge
+          variant="outline"
+          className="border-emerald-500/40 bg-emerald-500/10 text-[10px] uppercase tracking-wide text-emerald-300"
+        >
+          Lifetime
+        </Badge>
+        <p className="text-xs text-muted-foreground">
+          Totais acumulados desde o primeiro registro persistido. Não resetam
+          ao limpar a interface ou trocar de lote.
+        </p>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {cards.map((stat) => {
+          const Icon = stat.icon;
+          return (
+            <Card
+              key={stat.label}
+              className="border-border/60 bg-card/80 transition-all hover:border-primary/30 hover:shadow-lg hover:shadow-primary/5"
+            >
+              <CardContent className="flex items-center gap-4 p-6">
+                <div
+                  className={cn(
+                    "flex size-12 items-center justify-center rounded-xl",
+                    stat.bg
+                  )}
+                >
+                  <Icon className={cn("size-6", stat.color)} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm text-muted-foreground">{stat.label}</p>
+                  <p className="text-2xl font-bold tracking-tight tabular-nums">
+                    {stat.value}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground/80">
+                    {stat.hint}
+                  </p>
+                  {stat.extra && (
+                    <Badge
+                      variant="secondary"
+                      className="mt-1 text-[10px] tabular-nums"
+                    >
+                      {stat.extra} (separado)
+                    </Badge>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
     </div>
   );
 }

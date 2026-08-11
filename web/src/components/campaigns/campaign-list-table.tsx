@@ -2,7 +2,17 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, MessageSquare, Users, UsersRound } from "lucide-react";
+import {
+  Archive,
+  ArrowRight,
+  Copy,
+  MessageSquare,
+  Save,
+  Trash2,
+  Users,
+  UsersRound,
+} from "lucide-react";
+import toast from "react-hot-toast";
 import { Button } from "@/components/ui/button";
 import { getCampaignEffectiveStatus } from "@/lib/campaign-completion";
 import { CampaignStatusBadge } from "./campaign-status-badge";
@@ -14,18 +24,73 @@ import { formatDistanceToNow } from "@/lib/date-utils";
 import { buildReuseCampaignUrl } from "@/lib/campaign-reuse";
 import type { Campaign } from "@/types/campaign";
 import { cn } from "@/lib/utils";
+import { useCampaignStore } from "@/store/campaign-store";
 
 export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
   const router = useRouter();
+  const duplicateCampaign = useCampaignStore((s) => s.duplicateCampaign);
+  const deleteCampaign = useCampaignStore((s) => s.deleteCampaign);
+  const setCampaignStatus = useCampaignStore((s) => s.setCampaignStatus);
+  const updateCampaign = useCampaignStore((s) => s.updateCampaign);
 
   const handleReuse = (campaign: Campaign) => {
     router.push(buildReuseCampaignUrl(campaign.id));
   };
 
+  const handleSave = (campaign: Campaign) => {
+    const status = getCampaignEffectiveStatus(campaign);
+    if (status === "completed" || status === "archived") {
+      updateCampaign(campaign.id, {});
+      toast.success("Campanha já persistida.");
+      return;
+    }
+    if (status === "draft") {
+      setCampaignStatus(campaign.id, "saved");
+    } else {
+      updateCampaign(campaign.id, {});
+    }
+    toast.success("Campanha salva.");
+  };
+
+  const handleDuplicate = (campaign: Campaign) => {
+    const copy = duplicateCampaign(campaign.id);
+    if (!copy) {
+      toast.error("Não foi possível duplicar.");
+      return;
+    }
+    toast.success(`Cópia criada: ${copy.name}`);
+  };
+
+  const handleArchive = (campaign: Campaign) => {
+    setCampaignStatus(campaign.id, "archived");
+    toast.success("Campanha arquivada.");
+  };
+
+  const handleDelete = (campaign: Campaign) => {
+    if (
+      !window.confirm(
+        `Apagar permanentemente a campanha “${campaign.name}”? Esta ação não remove o histórico de envios já confirmados em outras estruturas, mas remove a campanha da lista.`
+      )
+    ) {
+      return;
+    }
+    deleteCampaign(campaign.id);
+    toast.success("Campanha apagada.");
+  };
+
+  if (campaigns.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-border/60 px-6 py-12 text-center text-sm text-muted-foreground">
+        Nenhuma campanha salva ainda. Crie uma nova — ela permanecerá após reload
+        e limpar interface.
+      </div>
+    );
+  }
+
   return (
     <div className="overflow-hidden rounded-xl border border-border/60 bg-card/50">
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[720px] text-sm">
+        <table className="w-full min-w-[960px] text-sm">
           <thead>
             <tr className="border-b border-border/60 bg-muted/30 text-left text-xs uppercase tracking-wide text-muted-foreground">
               <th className="px-5 py-3 font-medium">Campanha</th>
@@ -52,6 +117,7 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
                 confirmedSent === 0
                   ? 0
                   : Math.round((replied / confirmedSent) * 100);
+              const effective = getCampaignEffectiveStatus(campaign);
 
               return (
                 <tr
@@ -63,7 +129,7 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
                       {campaign.name}
                     </p>
                     <p className="mt-0.5 max-w-xs truncate text-xs text-muted-foreground">
-                      {campaign.subject}
+                      {campaign.subject || "(sem assunto)"}
                     </p>
                   </td>
                   <td className="px-5 py-4">
@@ -73,9 +139,7 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
                     </span>
                   </td>
                   <td className="px-5 py-4">
-                    <CampaignStatusBadge
-                      status={getCampaignEffectiveStatus(campaign)}
-                    />
+                    <CampaignStatusBadge status={effective} />
                   </td>
                   <td className="px-5 py-4 tabular-nums">
                     <span className="font-medium text-emerald-400">
@@ -124,11 +188,57 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
                         type="button"
                         variant="outline"
                         size="sm"
+                        className="h-8 gap-1 text-xs"
+                        onClick={() => handleSave(campaign)}
+                        title="Salvar"
+                      >
+                        <Save className="size-3.5" />
+                        Salvar
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1 text-xs"
+                        onClick={() => handleDuplicate(campaign)}
+                        title="Duplicar"
+                      >
+                        <Copy className="size-3.5" />
+                        Duplicar
+                      </Button>
+                      {effective !== "archived" && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-8 gap-1 text-xs"
+                          onClick={() => handleArchive(campaign)}
+                          title="Arquivar"
+                        >
+                          <Archive className="size-3.5" />
+                          Arquivar
+                        </Button>
+                      )}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-8 gap-1 text-xs text-red-300"
+                        onClick={() => handleDelete(campaign)}
+                        title="Apagar"
+                      >
+                        <Trash2 className="size-3.5" />
+                        Apagar
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
                         className="h-8 gap-1.5 text-xs"
                         onClick={() => handleReuse(campaign)}
                       >
                         <UsersRound className="size-3.5" />
-                        Reutilizar para nova lista
+                        Reutilizar
                       </Button>
                       <Button
                         variant="ghost"

@@ -8,10 +8,12 @@ import {
   BarChart3,
   Eye,
   EyeOff,
+  FilePlus2,
   LineChart,
   Save,
   Send,
   Settings2,
+  Star,
   Trash2,
   Users,
   UsersRound,
@@ -37,6 +39,7 @@ import { RichEmailEditor } from "./rich-email-editor";
 import { SendConfigForm } from "./send-config-form";
 import { CampaignAttachmentField } from "./campaign-attachment";
 import { CampaignSignatureSettings } from "./campaign-signature-settings";
+import { SaveAsTemplateDialog } from "./save-as-template-dialog";
 import { getTrackingPollInterval } from "@/lib/local-production";
 import { buildReuseCampaignUrl } from "@/lib/campaign-reuse";
 import { useSettingsStore } from "@/store/settings-store";
@@ -45,6 +48,7 @@ import { useLeadStore } from "@/store/lead-store";
 import { useCampaignStore } from "@/store/campaign-store";
 import { useAgentThreeStore } from "@/store/agent-three-store";
 import { useBatchPipelineStore } from "@/store/batch-pipeline-store";
+import { useEmailTemplateStore } from "@/store/email-template-store";
 import {
   DEFAULT_SIGNATURE,
   type Campaign,
@@ -172,6 +176,10 @@ function CampaignDetailContent({
   const [showPreview, setShowPreview] = useState(false);
   const [previewLeadId, setPreviewLeadId] = useState<string | null>(null);
   const [draft, setDraft] = useState(() => buildCampaignDraft(campaign));
+  const [saveState, setSaveState] = useState<"clean" | "dirty" | "saved">(
+    "clean"
+  );
+  const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
 
   const leads = useMemo(
     () =>
@@ -199,7 +207,10 @@ function CampaignDetailContent({
 
   const effectiveStatus = getCampaignEffectiveStatus(campaign);
   const isEditable =
-    effectiveStatus === "draft" || effectiveStatus === "paused";
+    effectiveStatus === "draft" ||
+    effectiveStatus === "saved" ||
+    effectiveStatus === "paused" ||
+    effectiveStatus === "active";
   const previewLead =
     leads.find((l) => l.id === previewLeadId) ?? leads[0] ?? null;
 
@@ -208,6 +219,15 @@ function CampaignDetailContent({
     fromEmail: draft.fromEmail,
     replyTo: draft.replyTo,
     unsubscribeLink: draft.unsubscribeLink,
+  };
+
+  const patchDraft = (
+    updater: (d: ReturnType<typeof buildCampaignDraft>) => ReturnType<
+      typeof buildCampaignDraft
+    >
+  ) => {
+    setDraft((d) => updater(d));
+    setSaveState("dirty");
   };
 
   const handleSave = () => {
@@ -221,8 +241,13 @@ function CampaignDetailContent({
       followUp: draft.followUp,
       signature: draft.signature,
       attachment: campaign.attachment ?? null,
+      status:
+        campaign.status === "draft" || campaign.status === "saved"
+          ? "saved"
+          : campaign.status,
     });
-    toast.success("Campanha salva");
+    setSaveState("saved");
+    toast.success("Salvo");
   };
 
   const handleOpenInAgentThree = () => {
@@ -260,7 +285,17 @@ function CampaignDetailContent({
           </p>
         </div>
 
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {saveState === "dirty" && (
+            <Badge variant="warning" className="text-[10px]">
+              Alterações não salvas
+            </Badge>
+          )}
+          {saveState === "saved" && (
+            <Badge variant="success" className="text-[10px]">
+              Salvo
+            </Badge>
+          )}
           <Button
             variant="outline"
             onClick={() => router.push(buildReuseCampaignUrl(campaign.id))}
@@ -269,11 +304,41 @@ function CampaignDetailContent({
             Reutilizar para nova lista
           </Button>
           {isEditable && (
-            <Button variant="outline" onClick={handleSave}>
+            <Button
+              variant={saveState === "dirty" ? "default" : "outline"}
+              onClick={handleSave}
+            >
               <Save className="size-4" />
-              Salvar
+              Salvar alterações
             </Button>
           )}
+          <Button
+            variant="outline"
+            onClick={() => setTemplateDialogOpen(true)}
+          >
+            <FilePlus2 className="size-4" />
+            Salvar como modelo
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              const saveAs = useEmailTemplateStore.getState().saveAsTemplate;
+              const result = saveAs({
+                name: `${campaign.name} (padrão)`,
+                operation: campaign.campaignProfileId,
+                subject: draft.subject,
+                body: draft.body,
+                sender: draft.fromEmail,
+                replyTo: draft.replyTo,
+                setAsDefault: true,
+              });
+              if (result) toast.success("Definido como modelo padrão.");
+              else toast.error("Não foi possível definir o padrão.");
+            }}
+          >
+            <Star className="size-4" />
+            Definir como padrão
+          </Button>
           <Button
             onClick={handleOpenInAgentThree}
             className="bg-emerald-600 hover:bg-emerald-500"
@@ -281,14 +346,35 @@ function CampaignDetailContent({
             <Send className="size-4" />
             Abrir no Agente 3
           </Button>
-          <Button variant="outline" onClick={() => {
-            deleteCampaign(campaign.id);
-            router.push("/campanhas");
-          }}>
+          <Button
+            variant="outline"
+            onClick={() => {
+              if (
+                !window.confirm(
+                  `Apagar a campanha “${campaign.name}”?`
+                )
+              ) {
+                return;
+              }
+              deleteCampaign(campaign.id);
+              router.push("/campanhas");
+            }}
+          >
             <Trash2 className="size-4" />
+            Apagar
           </Button>
         </div>
       </div>
+
+      <SaveAsTemplateDialog
+        open={templateDialogOpen}
+        onOpenChange={setTemplateDialogOpen}
+        operation={campaign.campaignProfileId}
+        subject={draft.subject}
+        body={draft.body}
+        sender={draft.fromEmail}
+        replyTo={draft.replyTo}
+      />
 
       <div className="flex flex-wrap gap-1 rounded-xl border border-border/60 bg-muted/20 p-1">
         {TABS.map((t) => {
@@ -388,7 +474,7 @@ function CampaignDetailContent({
             </div>
             <RichEmailEditor
               value={draft.body}
-              onChange={(body) => setDraft((d) => ({ ...d, body }))}
+              onChange={(body) => patchDraft((d) => ({ ...d, body }))}
               disabled={!isEditable && campaign.status === "completed"}
               layout="full"
               minHeight={560}
@@ -403,7 +489,7 @@ function CampaignDetailContent({
                   signature={draft.signature}
                   disabled={!isEditable}
                   onChange={(patch) =>
-                    setDraft((d) => ({
+                    patchDraft((d) => ({
                       ...d,
                       signature: { ...d.signature, ...patch },
                     }))
@@ -476,18 +562,20 @@ function CampaignDetailContent({
             subject={draft.subject}
             disabled={!isEditable && campaign.status === "completed"}
             onConfigChange={(patch) =>
-              setDraft((d) => ({ ...d, ...patch }))
+              patchDraft((d) => ({ ...d, ...patch }))
             }
-            onSubjectChange={(subject) => setDraft((d) => ({ ...d, subject }))}
+            onSubjectChange={(subject) =>
+              patchDraft((d) => ({ ...d, subject }))
+            }
             onInsertVariable={(v) =>
-              setDraft((d) => ({ ...d, subject: d.subject + v }))
+              patchDraft((d) => ({ ...d, subject: d.subject + v }))
             }
           />
           <FollowUpSettings
             followUp={draft.followUp}
             disabled={!isEditable && campaign.status === "completed"}
             onChange={(patch) =>
-              setDraft((d) => ({
+              patchDraft((d) => ({
                 ...d,
                 followUp: { ...d.followUp, ...patch },
               }))

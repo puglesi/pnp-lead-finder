@@ -3,7 +3,13 @@ import type { CampaignProfileId } from "@/types/campaign-profile";
 import { DEFAULT_SIGNATURE_HTML } from "@/lib/signature-template";
 import type { EmailContactKind } from "@/lib/global-email-deduplication";
 
-export type CampaignStatus = "draft" | "active" | "paused" | "completed";
+export type CampaignStatus =
+  | "draft"
+  | "saved"
+  | "active"
+  | "paused"
+  | "completed"
+  | "archived";
 export type CampaignLeadSource = "saved" | "recent" | "mixed" | "imported";
 
 export interface CampaignAttachment {

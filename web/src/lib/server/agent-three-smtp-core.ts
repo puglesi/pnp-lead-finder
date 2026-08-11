@@ -84,13 +84,49 @@ interface SmtpErrorShape {
 
 function result(
   status: AgentThreeSmtpStatus,
-  messageId?: string
+  options?: {
+    messageId?: string;
+    message?: string;
+    diagnostics?: AgentThreeSmtpResult["diagnostics"];
+  }
 ): AgentThreeSmtpResult {
   return {
     status,
-    message: AGENT_THREE_SMTP_MESSAGES[status],
-    ...(messageId ? { messageId } : {}),
+    message: options?.message ?? AGENT_THREE_SMTP_MESSAGES[status],
+    ...(options?.messageId ? { messageId: options.messageId } : {}),
+    ...(options?.diagnostics ? { diagnostics: options.diagnostics } : {}),
   };
+}
+
+/** Lists required env var *names* that are empty/invalid — never values. */
+export function listMissingAgentThreeSmtpEnvVars(
+  operation: CampaignProfileId,
+  environment: AgentThreeServerEnvironment
+): string[] {
+  const prefix = getEnvironmentPrefix(operation);
+  const missing: string[] = [];
+  const host = trimmed(environment, `${prefix}_SMTP_HOST`);
+  const portRaw = trimmed(environment, `${prefix}_SMTP_PORT`);
+  const secureRaw = trimmed(environment, `${prefix}_SMTP_SECURE`);
+  const user = trimmed(environment, `${prefix}_SMTP_USER`);
+  const password = trimmed(environment, `${prefix}_SMTP_APP_PASSWORD`);
+  const fromName = trimmed(environment, `${prefix}_FROM_NAME`);
+  const replyTo = trimmed(environment, `${prefix}_REPLY_TO`);
+
+  if (!host) missing.push(`${prefix}_SMTP_HOST`);
+  if (parsePort(portRaw) === null) missing.push(`${prefix}_SMTP_PORT`);
+  if (parseSecure(secureRaw) === null) missing.push(`${prefix}_SMTP_SECURE`);
+  if (!EMAIL_PATTERN.test(user)) missing.push(`${prefix}_SMTP_USER`);
+  if (!password) missing.push(`${prefix}_SMTP_APP_PASSWORD`);
+  if (!fromName) missing.push(`${prefix}_FROM_NAME`);
+  if (!EMAIL_PATTERN.test(replyTo)) missing.push(`${prefix}_REPLY_TO`);
+  return missing;
+}
+
+export function isAgentThreeRealSendEnabled(
+  environment: AgentThreeServerEnvironment
+): boolean {
+  return trimmed(environment, "AGENT3_REAL_SEND_ENABLED").toLowerCase() === "true";
 }
 
 function trimmed(
@@ -308,14 +344,34 @@ export function getAgentThreeSmtpAvailability(
   environment: AgentThreeServerEnvironment
 ): AgentThreeSmtpResult {
   if (!isCampaignProfileId(operation)) return result("invalid_request");
-  if (
-    trimmed(environment, "AGENT3_REAL_SEND_ENABLED").toLowerCase() !== "true"
-  ) {
-    return result("real_send_disabled");
+  const realSendEnabled = isAgentThreeRealSendEnabled(environment);
+  const missingEnvVars = realSendEnabled
+    ? listMissingAgentThreeSmtpEnvVars(operation, environment)
+    : [];
+  const baseDiagnostics = {
+    realSendEnabled,
+    missingEnvVars,
+    operation,
+  };
+
+  if (!realSendEnabled) {
+    return result("real_send_disabled", {
+      message: AGENT_THREE_SMTP_MESSAGES.real_send_disabled,
+      diagnostics: { ...baseDiagnostics, missingEnvVars: [] },
+    });
   }
-  return resolveSmtpConfig(operation, environment)
-    ? result("connected")
-    : result("configuration_error");
+  if (resolveSmtpConfig(operation, environment)) {
+    return result("connected", {
+      diagnostics: baseDiagnostics,
+    });
+  }
+  return result("configuration_error", {
+    message:
+      missingEnvVars.length > 0
+        ? `Configuração SMTP incompleta. Variáveis ausentes no servidor: ${missingEnvVars.join(", ")}.`
+        : AGENT_THREE_SMTP_MESSAGES.configuration_error,
+    diagnostics: baseDiagnostics,
+  });
 }
 
 /**
@@ -337,7 +393,23 @@ export async function verifyAgentThreeSmtpConnection(
   if (!isCampaignProfileId(operation)) return result("invalid_request");
 
   const config = resolveSmtpConfig(operation, dependencies.environment);
-  if (!config) return result("configuration_error");
+  if (!config) {
+    const missing = listMissingAgentThreeSmtpEnvVars(
+      operation,
+      dependencies.environment
+    );
+    return result("configuration_error", {
+      message:
+        missing.length > 0
+          ? `Configuração SMTP incompleta. Variáveis ausentes no servidor: ${missing.join(", ")}.`
+          : AGENT_THREE_SMTP_MESSAGES.configuration_error,
+      diagnostics: {
+        realSendEnabled: true,
+        missingEnvVars: missing,
+        operation,
+      },
+    });
+  }
 
   try {
     const transport = dependencies.createTransport({
@@ -352,9 +424,25 @@ export async function verifyAgentThreeSmtpConnection(
     if (typeof transport.verify === "function") {
       await transport.verify();
     }
-    return result("connected");
+    return result("connected", {
+      message: "✓ Pronto para envio real (SMTP autenticado, sem mensagem enviada).",
+      diagnostics: {
+        realSendEnabled: true,
+        missingEnvVars: [],
+        operation,
+        verifiedLive: true,
+      },
+    });
   } catch (error) {
-    return result(classifyAgentThreeSmtpError(error));
+    const status = classifyAgentThreeSmtpError(error);
+    return result(status, {
+      diagnostics: {
+        realSendEnabled: true,
+        missingEnvVars: [],
+        operation,
+        verifiedLive: false,
+      },
+    });
   }
 }
 
@@ -414,7 +502,7 @@ export async function sendAgentThreeSmtp(
           ]
         : undefined,
     });
-    return result("sent", info.messageId);
+    return result("sent", { messageId: info.messageId });
   } catch (error) {
     return result(classifyAgentThreeSmtpError(error));
   }

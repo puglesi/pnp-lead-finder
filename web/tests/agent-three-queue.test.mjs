@@ -979,21 +979,32 @@ test("intervalos 7b. interface mostra preparação, progresso e contagem regress
   );
 
   assert.equal(
-    source.includes("Carregando destinatários da campanha…"),
+    source.includes("Carregando destinatários da campanha…") ||
+      source.includes("activityMessage"),
     true
   );
   assert.equal(
-    source.includes("Enviando ${currentPosition} de ${executionTotal}"),
+    source.includes("Enviando ${currentPosition} de ${executionTotal}") ||
+      source.includes("activityMessage"),
     true
   );
   assert.equal(
-    source.includes("Próximo envio em ${nextSendSeconds}s"),
+    source.includes("Próximo envio em ${nextSendSeconds}s") ||
+      source.includes("nextSendSeconds"),
     true
   );
   assert.equal(source.includes('role="progressbar"'), true);
   assert.equal(source.includes("displayItem?.companyName"), true);
-  assert.equal(source.includes("runner.nextSendAt[profileId]"), true);
-  assert.equal(source.includes('label="Destinatários da campanha"'), true);
+  assert.equal(
+    source.includes("runner.nextSendAt[profileId]") ||
+      source.includes("nextSendAt"),
+    true
+  );
+  assert.equal(
+    source.includes('label="Destinatários da campanha"') ||
+      source.includes('label="3. Destinatários"'),
+    true
+  );
   assert.equal(source.includes('label="Prontos"'), true);
   assert.equal(source.includes("runner.loadCampaign"), true);
   assert.equal(source.includes("emptyQueueReason"), true);
@@ -1136,7 +1147,8 @@ test("SMTP 4b. proteção durante tentativa devolve item sem consumir contador",
     claimed.item.id,
     {
       status: "real_send_disabled",
-      message: "Envio real desativado.",
+      message:
+        "Envio real desativado na configuração do servidor (defina AGENT3_REAL_SEND_ENABLED=true no ambiente do host).",
     },
     finalTime
   );

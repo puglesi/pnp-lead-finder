@@ -20,6 +20,8 @@ import { Slider } from "@/components/ui/slider";
 import { hasValidEmail } from "@/lib/email-templates";
 import type { Lead } from "@/types/lead";
 import { cn } from "@/lib/utils";
+import { useEmailBlocklistStore } from "@/store/email-blocklist-store";
+import { isEmailBlocked } from "@/lib/email-blocklist";
 
 export type LeadPickerSource = "saved" | "recent" | "imported";
 
@@ -48,6 +50,7 @@ export function LeadPicker({
   const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [minScore, setMinScore] = useState(0);
+  const blockedEntries = useEmailBlocklistStore((s) => s.entries);
 
   const pool =
     source === "saved"
@@ -65,6 +68,15 @@ export function LeadPicker({
     const q = query.trim().toLowerCase();
     return pool.filter((lead) => {
       if (!hasValidEmail(lead.email)) return false;
+      // Blocked contacts stay in history but never enter campaign prospect queues.
+      if (
+        isEmailBlocked(
+          blockedEntries,
+          lead.normalizedEmail ?? lead.email
+        )
+      ) {
+        return false;
+      }
       if (lead.aiScore < minScore) return false;
       if (categoryFilter !== "all" && lead.category !== categoryFilter) {
         return false;
@@ -77,7 +89,7 @@ export function LeadPicker({
         lead.address.toLowerCase().includes(q)
       );
     });
-  }, [pool, query, categoryFilter, minScore]);
+  }, [pool, query, categoryFilter, minScore, blockedEntries]);
 
   const toggleLead = (id: string) => {
     onSelectionChange(

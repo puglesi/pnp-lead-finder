@@ -19,7 +19,9 @@ test("collapsible card persists an independent state and exposes accessible cont
 test("main pages and agents use unique collapsible card keys", async () => {
   const paths = [
     "src/components/dashboard/dashboard-tabs.tsx",
-    "src/app/(dashboard)/busca/page.tsx",
+    "src/components/dashboard/global-history-search.tsx",
+    "src/components/dashboard/blocked-emails-panel.tsx",
+    "src/components/agents/agent-one-search-modes.tsx",
     "src/components/agents/agent-one-garimpeiro.tsx",
     "src/components/agents/agent-two-validator.tsx",
     "src/components/agents/agent-three-sender.tsx",

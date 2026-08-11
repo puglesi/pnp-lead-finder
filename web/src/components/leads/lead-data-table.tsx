@@ -20,6 +20,8 @@ import { LeadRowActions } from "./lead-row-actions";
 import { cn } from "@/lib/utils";
 import { resolveSafeWebsite } from "@/lib/website-url";
 import type { Lead } from "@/types/lead";
+import { useEmailBlocklistStore } from "@/store/email-blocklist-store";
+import { isEmailBlocked } from "@/lib/email-blocklist";
 
 const thClass =
   "px-5 py-4 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground whitespace-nowrap";
@@ -46,6 +48,7 @@ export function LeadDataTable({
 }: LeadDataTableProps) {
   const selectedSet = new Set(selectedIds);
   const colSpan = showSelection ? 10 : 9;
+  const blockedEntries = useEmailBlocklistStore((s) => s.entries);
 
   return (
     <div className="relative">
@@ -105,13 +108,18 @@ export function LeadDataTable({
               leads.map((lead) => {
                 const isSelected = selectedSet.has(lead.id);
                 const website = resolveSafeWebsite(lead.website);
+                const blocked = isEmailBlocked(
+                  blockedEntries,
+                  lead.normalizedEmail ?? lead.email
+                );
                 return (
                   <tr
                     key={lead.id}
                     className={cn(
                       "group border-b border-border/40 transition-colors hover:bg-accent/25",
                       isSelected &&
-                        "border-l-2 border-l-primary bg-primary/5 hover:bg-primary/10"
+                        "border-l-2 border-l-primary bg-primary/5 hover:bg-primary/10",
+                      blocked && "bg-red-500/[0.04]"
                     )}
                   >
                     {showSelection && (
@@ -170,14 +178,28 @@ export function LeadDataTable({
                     </td>
 
                     <td className={tdClass}>
-                      <div className="flex min-w-0 items-start gap-2">
-                        <EmailStatus email={lead.email} className="mt-0.5" />
-                        {lead.email ? (
-                          <span className="min-w-0 break-all text-emerald-400/90 leading-snug">
-                            {lead.email}
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
+                      <div className="flex min-w-0 flex-col items-start gap-1">
+                        <div className="flex min-w-0 items-start gap-2">
+                          <EmailStatus email={lead.email} className="mt-0.5" />
+                          {lead.email ? (
+                            <span
+                              className={cn(
+                                "min-w-0 break-all leading-snug",
+                                blocked
+                                  ? "text-red-300/90"
+                                  : "text-emerald-400/90"
+                              )}
+                            >
+                              {lead.email}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </div>
+                        {blocked && (
+                          <Badge variant="danger" className="text-[10px]">
+                            Bloqueado — não será prospectado
+                          </Badge>
                         )}
                       </div>
                     </td>

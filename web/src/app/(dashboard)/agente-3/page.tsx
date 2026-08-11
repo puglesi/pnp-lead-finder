@@ -1,5 +1,6 @@
 import { Send } from "lucide-react";
 import { AgentThreeSender } from "@/components/agents/agent-three-sender";
+import { AgentThreeImportList } from "@/components/agents/agent-three-import-list";
 
 export default function AgentThreePage() {
   return (
@@ -13,6 +14,7 @@ export default function AgentThreePage() {
           Execute filas independentes por operação com proteção server-side.
         </p>
       </div>
+      <AgentThreeImportList />
       <AgentThreeSender />
     </div>
   );

@@ -32,6 +32,11 @@ export function getClearUiPreserveContract(): string[] {
     "smtp",
     "templates",
     "deliveryMetrics",
+    "emailBlocklist",
+    "lifetimeStats",
+    "theme",
+    "collapsibleCards",
+    "providerMessageIds",
   ];
 }
 

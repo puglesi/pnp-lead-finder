@@ -18,6 +18,8 @@ export function isCampaignFullyDelivered(campaign: Campaign): boolean {
 export function getCampaignEffectiveStatus(
   campaign: Campaign
 ): CampaignStatus {
+  // Archived stays archived even if deliveries were complete.
+  if (campaign.status === "archived") return "archived";
   if (isCampaignFullyDelivered(campaign)) return "completed";
   return campaign.status;
 }

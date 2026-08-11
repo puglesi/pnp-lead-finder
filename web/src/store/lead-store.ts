@@ -30,6 +30,7 @@ import {
 } from "@/lib/lead-batch";
 import type { LeadBatch } from "@/types/batch";
 import { useBatchPipelineStore } from "@/store/batch-pipeline-store";
+import { useLifetimeStatsStore } from "@/store/lifetime-stats-store";
 import {
   assessRealSearchResponse,
   REAL_SEARCH_UNAVAILABLE_MESSAGE,
@@ -637,6 +638,16 @@ export const useLeadStore = create<LeadStore>()(
               RECENT_SEARCHES_LIMIT
             ),
           };
+        });
+
+        // Lifetime floors only rise (never reset on UI clear / batch switch).
+        const after = get();
+        useLifetimeStatsStore.getState().syncFromPersistedData({
+          fullSearchHistory: after.fullSearchHistory,
+          recentSearches: after.recentSearches,
+          savedLeads: after.savedLeads,
+          importedLeads: after.importedLeads,
+          campaigns: [],
         });
       },
 

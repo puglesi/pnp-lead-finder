@@ -16,6 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   getDefaultEmailTemplate,
   getEmailTemplatesForOperation,
+  isBuiltInEmailTemplateId,
   type EmailTemplate,
   type EmailTemplateInput,
 } from "@/lib/email-template-library";
@@ -44,9 +45,11 @@ export function EmailTemplateLibrary() {
   const duplicateTemplate = useEmailTemplateStore((state) => state.duplicateTemplate);
   const deleteTemplate = useEmailTemplateStore((state) => state.deleteTemplate);
   const setDefaultTemplate = useEmailTemplateStore((state) => state.setDefaultTemplate);
+  const restoreOriginal = useEmailTemplateStore((state) => state.restoreOriginal);
   const [operation, setOperation] = useState<CampaignProfileId>("panek-puglesi");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<EmailTemplateInput | null>(null);
+  const [templateDirty, setTemplateDirty] = useState(false);
 
   const visibleTemplates = useMemo(
     () => getEmailTemplatesForOperation(templates, operation),
@@ -56,11 +59,13 @@ export function EmailTemplateLibrary() {
   const closeEditor = () => {
     setEditingId(null);
     setDraft(null);
+    setTemplateDirty(false);
   };
 
   const openNew = () => {
     setEditingId(null);
     setDraft(emptyDraft(operation, getDefaultEmailTemplate(templates, operation)));
+    setTemplateDirty(false);
   };
 
   const openEdit = (template: EmailTemplate) => {
@@ -75,6 +80,7 @@ export function EmailTemplateLibrary() {
       contactKind: template.contactKind,
       isDefault: template.isDefault,
     });
+    setTemplateDirty(false);
   };
 
   const save = () => {
@@ -93,12 +99,13 @@ export function EmailTemplateLibrary() {
     };
     if (editingId) {
       updateTemplate(editingId, input);
-      toast.success("Modelo atualizado.");
+      toast.success("Salvo");
     } else {
       addTemplate(input);
       toast.success("Modelo criado.");
     }
     setOperation(input.operation);
+    setTemplateDirty(false);
     closeEditor();
   };
 
@@ -159,6 +166,20 @@ export function EmailTemplateLibrary() {
                       const copy = duplicateTemplate(template.id);
                       if (copy) toast.success(`Modelo “${copy.name}” criado.`);
                     }}><Copy className="size-4" /></Button>
+                    {isBuiltInEmailTemplateId(template.id) && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          if (!window.confirm("Restaurar a versão original deste modelo?")) return;
+                          if (restoreOriginal(template.id)) toast.success("Versão original restaurada.");
+                          else toast.error("Modelo sem original configurado.");
+                        }}
+                      >
+                        Restaurar original
+                      </Button>
+                    )}
                     <Button type="button" size="icon" variant="ghost" aria-label={`Excluir ${template.name}`} className="text-red-300 hover:text-red-200" onClick={() => remove(template)}><Trash2 className="size-4" /></Button>
                   </div>
                 </div>
@@ -179,11 +200,11 @@ export function EmailTemplateLibrary() {
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="template-name">Nome</Label>
-                  <Input id="template-name" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+                  <Input id="template-name" value={draft.name} onChange={(event) => { setDraft({ ...draft, name: event.target.value }); setTemplateDirty(true); }} />
                 </div>
                 <div className="space-y-2">
                   <Label>Operação</Label>
-                  <Select value={draft.operation} onValueChange={(value) => setDraft({ ...draft, operation: value as CampaignProfileId })}>
+                  <Select value={draft.operation} onValueChange={(value) => { setDraft({ ...draft, operation: value as CampaignProfileId }); setTemplateDirty(true); }}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>{CAMPAIGN_PROFILES.map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name}</SelectItem>)}</SelectContent>
                   </Select>
@@ -191,22 +212,22 @@ export function EmailTemplateLibrary() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="template-subject">Assunto</Label>
-                <Input id="template-subject" value={draft.subject} onChange={(event) => setDraft({ ...draft, subject: event.target.value })} />
+                <Input id="template-subject" value={draft.subject} onChange={(event) => { setDraft({ ...draft, subject: event.target.value }); setTemplateDirty(true); }} />
               </div>
               <div className="space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <Label htmlFor="template-body">Corpo</Label>
                   <div className="flex flex-wrap gap-1">
                     {VARIABLES.map((variable) => (
-                      <button key={variable} type="button" className="rounded border border-border/60 px-2 py-1 font-mono text-xs text-muted-foreground hover:text-foreground" onClick={() => setDraft({ ...draft, body: `${draft.body}${variable}` })}>{variable}</button>
+                      <button key={variable} type="button" className="rounded border border-border/60 px-2 py-1 font-mono text-xs text-muted-foreground hover:text-foreground" onClick={() => { setDraft({ ...draft, body: `${draft.body}${variable}` }); setTemplateDirty(true); }}>{variable}</button>
                     ))}
                   </div>
                 </div>
-                <Textarea id="template-body" value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} className="min-h-64 font-mono text-sm" />
+                <Textarea id="template-body" value={draft.body} onChange={(event) => { setDraft({ ...draft, body: event.target.value }); setTemplateDirty(true); }} className="min-h-64 font-mono text-sm" />
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2"><Label htmlFor="template-sender">Remetente</Label><Input id="template-sender" type="email" value={draft.sender} onChange={(event) => setDraft({ ...draft, sender: event.target.value })} /></div>
-                <div className="space-y-2"><Label htmlFor="template-reply-to">Reply-To</Label><Input id="template-reply-to" type="email" value={draft.replyTo} onChange={(event) => setDraft({ ...draft, replyTo: event.target.value })} /></div>
+                <div className="space-y-2"><Label htmlFor="template-sender">Remetente</Label><Input id="template-sender" type="email" value={draft.sender} onChange={(event) => { setDraft({ ...draft, sender: event.target.value }); setTemplateDirty(true); }} /></div>
+                <div className="space-y-2"><Label htmlFor="template-reply-to">Reply-To</Label><Input id="template-reply-to" type="email" value={draft.replyTo} onChange={(event) => { setDraft({ ...draft, replyTo: event.target.value }); setTemplateDirty(true); }} /></div>
               </div>
               <div className="space-y-2">
                 <Label>Classificação do contato</Label>
@@ -227,12 +248,17 @@ export function EmailTemplateLibrary() {
                 </Select>
               </div>
               <label className="flex items-center gap-2 text-sm">
-                <Checkbox checked={draft.isDefault} onCheckedChange={(checked) => setDraft({ ...draft, isDefault: checked === true })} />
+                <Checkbox checked={draft.isDefault} onCheckedChange={(checked) => { setDraft({ ...draft, isDefault: checked === true }); setTemplateDirty(true); }} />
                 Definir como padrão desta operação
               </label>
-              <div className="flex justify-end gap-2">
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {templateDirty && (
+                  <Badge variant="warning" className="text-[10px]">
+                    Alterações não salvas
+                  </Badge>
+                )}
                 <Button type="button" variant="outline" onClick={closeEditor}>Cancelar</Button>
-                <Button type="button" onClick={save}>Salvar modelo</Button>
+                <Button type="button" onClick={save}>Salvar alterações</Button>
               </div>
             </div>
           )}

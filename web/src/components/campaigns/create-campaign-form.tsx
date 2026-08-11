@@ -16,6 +16,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -28,11 +29,7 @@ import {
   CollapsibleCardContent,
   CollapsibleCardHeader,
 } from "@/components/ui/collapsible-card";
-import {
-  DEFAULT_BODY_HTML,
-  DEFAULT_SUBJECT,
-  hasValidEmail,
-} from "@/lib/email-templates";
+import { hasValidEmail } from "@/lib/email-templates";
 import { inferLeadSource } from "@/lib/campaign-leads";
 import {
   DEFAULT_CAMPAIGN_SEND_CONFIG,
@@ -76,6 +73,7 @@ import {
   type EmailTemplate,
 } from "@/lib/email-template-library";
 import { useEmailTemplateStore } from "@/store/email-template-store";
+import { SaveAsTemplateDialog } from "./save-as-template-dialog";
 
 export function CreateCampaignForm({
   reuseFromId = null,
@@ -119,6 +117,7 @@ function CreateCampaignFormContent({
     }))
   );
   const createCampaign = useCampaignStore((s) => s.createCampaign);
+  const setCampaignStatus = useCampaignStore((s) => s.setCampaignStatus);
   const getCampaign = useCampaignStore((s) => s.getCampaign);
   const attachCampaign = useBatchPipelineStore((s) => s.attachCampaign);
   const setActiveBatch = useBatchPipelineStore((s) => s.setActiveBatch);
@@ -131,12 +130,6 @@ function CreateCampaignFormContent({
   const reuseSourceName = reuseSource?.name ?? null;
   const batchMeta = batchId ? getBatch(batchId) : null;
   const emailTemplates = useEmailTemplateStore((state) => state.templates);
-  const initialEmailTemplate = reuseSource
-    ? undefined
-    : getDefaultEmailTemplate(
-        useEmailTemplateStore.getState().templates,
-        "panek-puglesi"
-      );
 
   const [name, setName] = useState(() =>
     reuseSource
@@ -149,12 +142,9 @@ function CreateCampaignFormContent({
     useState<CampaignProfileId>(
       reuseSource?.campaignProfileId ?? "panek-puglesi"
     );
-  const [subject, setSubject] = useState<string>(
-    reuseSource?.subject ?? initialEmailTemplate?.subject ?? DEFAULT_SUBJECT
-  );
-  const [body, setBody] = useState<string>(
-    reuseSource?.body ?? initialEmailTemplate?.body ?? DEFAULT_BODY_HTML
-  );
+  // New campaigns (manual or batch) start empty — user picks a template if wanted.
+  const [subject, setSubject] = useState<string>(reuseSource?.subject ?? "");
+  const [body, setBody] = useState<string>(reuseSource?.body ?? "");
   const [sendConfig, setSendConfig] = useState(() =>
     reuseSource
       ? {
@@ -165,17 +155,10 @@ function CreateCampaignFormContent({
         }
       : {
           ...DEFAULT_CAMPAIGN_SEND_CONFIG,
-          fromName: initialEmailTemplate
-            ? getEmailTemplateSenderName(initialEmailTemplate.operation)
-            : DEFAULT_CAMPAIGN_SEND_CONFIG.fromName,
-          fromEmail:
-            initialEmailTemplate?.sender ?? DEFAULT_CAMPAIGN_SEND_CONFIG.fromEmail,
-          replyTo:
-            initialEmailTemplate?.replyTo ?? DEFAULT_CAMPAIGN_SEND_CONFIG.replyTo,
         }
   );
   const [selectedTemplateId, setSelectedTemplateId] = useState(
-    reuseSource ? "" : initialEmailTemplate?.id ?? ""
+    reuseSource?.emailTemplateId ?? ""
   );
   const [followUp, setFollowUp] = useState<CampaignFollowUp>(() =>
     reuseSource ? { ...reuseSource.followUp } : { ...DEFAULT_FOLLOW_UP }
@@ -192,6 +175,8 @@ function CreateCampaignFormContent({
   const [batchSend, setBatchSend] = useState<CampaignBatchSendConfig>({
     ...(reuseSource?.batchSend ?? DEFAULT_BATCH_SEND_CONFIG),
   });
+  const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
+  const [formDirty, setFormDirty] = useState(false);
 
   const allLeads = useMemo(() => {
     const map = new Map<string, (typeof savedLeads)[0]>();
@@ -270,8 +255,13 @@ function CreateCampaignFormContent({
 
   const changeCampaignOperation = (value: CampaignProfileId) => {
     setCampaignProfileId(value);
-    const defaultTemplate = getDefaultEmailTemplate(emailTemplates, value);
-    if (defaultTemplate) applyEmailTemplate(defaultTemplate, false);
+    // Do not auto-fill subject/body on new campaigns — user picks a template.
+    if (reuseSource || selectedTemplateId) {
+      const defaultTemplate = getDefaultEmailTemplate(emailTemplates, value);
+      if (defaultTemplate && selectedTemplateId) {
+        applyEmailTemplate(defaultTemplate, false);
+      }
+    }
   };
 
   const handleImport = (leads: import("@/types/lead").Lead[]) => {
@@ -333,8 +323,10 @@ function CreateCampaignFormContent({
     if (batchId) {
       attachCampaign(batchId, campaign.id);
     }
+    // Explicit save → status Salva (persiste; limpar UI não apaga).
+    setCampaignStatus(campaign.id, "saved");
 
-    toast.success(`Campanha "${campaign.name}" criada!`, { icon: "📣" });
+    toast.success(`Campanha "${campaign.name}" salva!`, { icon: "📣" });
     router.push(`/campanhas/${campaign.id}`);
   };
 
@@ -388,11 +380,14 @@ function CreateCampaignFormContent({
               value={selectedTemplateId}
               onValueChange={(id) => {
                 const template = operationTemplates.find((item) => item.id === id);
-                if (template) applyEmailTemplate(template);
+                if (template) {
+                  applyEmailTemplate(template);
+                  setFormDirty(true);
+                }
               }}
             >
               <SelectTrigger className="h-9 bg-background/50">
-                <SelectValue placeholder="Selecione um modelo" />
+                <SelectValue placeholder="Selecione um modelo (opcional)" />
               </SelectTrigger>
               <SelectContent>
                 {operationTemplates.map((template) => (
@@ -402,7 +397,52 @@ function CreateCampaignFormContent({
                 ))}
               </SelectContent>
             </Select>
+            <div className="flex flex-wrap gap-2 pt-1">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setTemplateDialogOpen(true)}
+              >
+                Salvar como modelo
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  const result = useEmailTemplateStore.getState().saveAsTemplate({
+                    name: name.trim() || "Modelo do lote",
+                    operation: campaignProfileId,
+                    subject,
+                    body,
+                    sender: sendConfig.fromEmail,
+                    replyTo: sendConfig.replyTo,
+                    setAsDefault: true,
+                  });
+                  if (result) toast.success("Definido como padrão.");
+                  else toast.error("Preencha assunto e corpo antes.");
+                }}
+              >
+                Definir como padrão
+              </Button>
+              {formDirty && (
+                <Badge variant="warning" className="text-[10px]">
+                  Alterações não salvas — use Criar campanha para persistir
+                </Badge>
+              )}
+            </div>
           </div>
+
+          <SaveAsTemplateDialog
+            open={templateDialogOpen}
+            onOpenChange={setTemplateDialogOpen}
+            operation={campaignProfileId}
+            subject={subject}
+            body={body}
+            sender={sendConfig.fromEmail}
+            replyTo={sendConfig.replyTo}
+          />
 
           {/* 4. Sender one line */}
           <div className="space-y-1.5">
@@ -455,7 +495,10 @@ function CreateCampaignFormContent({
             <Input
               id="batch-subject"
               value={subject}
-              onChange={(e) => setSubject(e.target.value)}
+              onChange={(e) => {
+                setSubject(e.target.value);
+                setFormDirty(true);
+              }}
               className="h-9 bg-background/50"
             />
           </div>

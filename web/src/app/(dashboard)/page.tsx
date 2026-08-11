@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { Suspense, useSyncExternalStore } from "react";
 import { DashboardTabs } from "@/components/dashboard/dashboard-tabs";
 import { ActiveModeBanner } from "@/components/dashboard/active-mode-banner";
 import { LocalProductionPanel } from "@/components/dashboard/local-production-panel";
@@ -34,7 +34,13 @@ export default function DashboardPage() {
         <ActiveModeBadge hydrated={hydrated} />
         <ProviderStatusBadge hydrated={hydrated} />
       </div>
-      <DashboardTabs />
+      <Suspense
+        fallback={
+          <p className="text-sm text-muted-foreground">Carregando dashboard…</p>
+        }
+      >
+        <DashboardTabs />
+      </Suspense>
     </div>
   );
 }

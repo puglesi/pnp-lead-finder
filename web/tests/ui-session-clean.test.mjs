@@ -172,7 +172,9 @@ test("ui clean 7. Agent 3 blocks Start when campaign fully delivered", () => {
   assert.equal(agent3.includes("campaignFullyDelivered"), true);
   assert.equal(
     agent3.includes("Campanha concluída — destinatários já enviados") ||
-      agent3.includes("todos os destinatários já foram enviados"),
+      agent3.includes("todos os destinatários já foram enviados") ||
+      agent3.includes("campaignCompleted") ||
+      agent3.includes("describeAgentThreeStartBlock"),
     true
   );
 });

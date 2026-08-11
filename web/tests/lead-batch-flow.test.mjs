@@ -243,9 +243,13 @@ test("batch flow 7. handoff resultados → Agente 1 preserva batchId e 99 leads"
   assert.equal(bulk.includes("ensureCurrentSearchBatch"), true);
   assert.equal(bulk.includes("setActiveBatch(batchId)"), true);
 
-  // 2) Agent 1 page wraps component in Suspense (required for useSearchParams)
+  // 2) Agent 1 page wraps modes (incl. Garimpeiro) in Suspense (useSearchParams)
   assert.equal(agent1Page.includes("Suspense"), true);
-  assert.equal(agent1Page.includes("AgentOneGarimpeiro"), true);
+  assert.equal(
+    agent1Page.includes("AgentOneSearchModes") ||
+      agent1Page.includes("AgentOneGarimpeiro"),
+    true
+  );
 
   // 3) Agent 1 reads URL batchId and enters exclusive lote mode
   assert.equal(agent1.includes('searchParams.get("batchId")'), true);

@@ -1,6 +1,8 @@
 @import "tailwindcss";
 
-:root {
+/* Dark theme (default / .dark) */
+:root,
+html.dark {
   --background: 222 47% 6%;
   --foreground: 210 40% 98%;
   --card: 222 47% 9%;
@@ -26,6 +28,32 @@
   --font-geist-mono:
     "Cascadia Mono", "Segoe UI Mono", "Roboto Mono", Consolas, "Courier New",
     monospace;
+  --neon-cyan: 187 92% 45%;
+  --neon-emerald: 160 84% 39%;
+}
+
+/* Light theme */
+html.light {
+  --background: 210 40% 98%;
+  --foreground: 222 47% 11%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 47% 11%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222 47% 11%;
+  --primary: 217 91% 45%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 214 32% 91%;
+  --secondary-foreground: 222 47% 11%;
+  --muted: 210 40% 96%;
+  --muted-foreground: 215 16% 40%;
+  --accent: 214 32% 94%;
+  --accent-foreground: 222 47% 11%;
+  --destructive: 0 72% 51%;
+  --border: 214 32% 88%;
+  --input: 214 32% 88%;
+  --ring: 217 91% 45%;
+  --neon-cyan: 187 85% 35%;
+  --neon-emerald: 160 70% 32%;
 }
 
 @theme inline {
@@ -63,6 +91,10 @@ html {
   color-scheme: dark;
 }
 
+html.light {
+  color-scheme: light;
+}
+
 body {
   background: hsl(var(--background));
   color: hsl(var(--foreground));
@@ -78,6 +110,27 @@ body::before {
     radial-gradient(ellipse 60% 40% at 100% 100%, hsl(160 84% 39% / 0.08), transparent);
   pointer-events: none;
   z-index: -1;
+}
+
+html.light body::before {
+  background:
+    radial-gradient(ellipse 80% 50% at 50% -20%, hsl(217 91% 50% / 0.1), transparent),
+    radial-gradient(ellipse 60% 40% at 100% 100%, hsl(160 70% 40% / 0.08), transparent);
+}
+
+/* Light-mode readability for hard-coded dark-only text utilities used in agents */
+html.light .text-amber-100,
+html.light .text-amber-100\/90,
+html.light .text-emerald-200,
+html.light .text-cyan-100,
+html.light .text-cyan-300,
+html.light .text-emerald-300,
+html.light .text-amber-300 {
+  color: hsl(var(--foreground));
+}
+
+html.light .text-muted-foreground {
+  color: hsl(var(--muted-foreground));
 }
 
 ::-webkit-scrollbar {

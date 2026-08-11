@@ -1,5 +1,5 @@
-import { hasValidEmail } from "@/lib/email-templates";
-import type { Lead } from "@/types/lead";
+import { hasValidEmail } from "./email-templates.ts";
+import type { Lead } from "../types/lead.ts";
 
 export interface ImportLeadsResult {
   leads: Lead[];
@@ -65,7 +65,7 @@ export function parseEmailList(text: string): ImportLeadsResult {
   return { leads, skipped, errors };
 }
 
-function parseCsvLine(line: string): string[] {
+export function parseCsvLine(line: string): string[] {
   const cells: string[] = [];
   let current = "";
   let inQuotes = false;

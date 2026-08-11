@@ -10,8 +10,12 @@ const config: Record<
     label: "Rascunho",
     className: "border-slate-500/40 bg-slate-500/15 text-slate-300",
   },
+  saved: {
+    label: "Salva",
+    className: "border-sky-500/40 bg-sky-500/15 text-sky-300",
+  },
   active: {
-    label: "Ativa",
+    label: "Em andamento",
     className: "border-blue-500/40 bg-blue-500/15 text-blue-300",
   },
   paused: {
@@ -22,10 +26,15 @@ const config: Record<
     label: "Concluída",
     className: "border-emerald-500/40 bg-emerald-500/15 text-emerald-300",
   },
+  archived: {
+    label: "Arquivada",
+    className: "border-zinc-500/40 bg-zinc-500/15 text-zinc-300",
+  },
 };
 
 export function CampaignStatusBadge({ status }: { status: CampaignStatus }) {
-  const { label, className } = config[status];
+  const entry = config[status] ?? config.draft;
+  const { label, className } = entry;
   return (
     <Badge variant="outline" className={cn("font-medium", className)}>
       {label}

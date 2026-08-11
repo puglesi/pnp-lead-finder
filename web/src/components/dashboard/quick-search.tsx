@@ -264,7 +264,7 @@ function QuickSearchContent({
           <div>
             <CardTitle className="flex items-center gap-2 text-xl">
               <Sparkles className="size-5 text-emerald-400" />
-              Busca em Volume V2
+              Busca em Massa
             </CardTitle>
             <p className="mt-1 text-sm text-muted-foreground">
               {isAutonomous
@@ -279,7 +279,7 @@ function QuickSearchContent({
             <Button variant="outline" size="sm" asChild>
               <Link href="/configuracoes/avancadas">
                 <Settings2 className="size-3.5" />
-                Avançadas
+                Configurações avançadas
               </Link>
             </Button>
           </div>
@@ -450,7 +450,20 @@ function QuickSearchContent({
           </div>
         )}
 
-        <QuickConfigBar hydrated={hydrated} />
+        <details className="rounded-xl border border-border/50 bg-background/30">
+          <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
+            Configurações avançadas
+          </summary>
+          <div className="space-y-3 border-t border-border/40 px-4 py-3">
+            <QuickConfigBar hydrated={hydrated} />
+            <Button variant="outline" size="sm" asChild>
+              <Link href="/configuracoes/avancadas">
+                <Settings2 className="size-3.5" />
+                Abrir painel completo
+              </Link>
+            </Button>
+          </div>
+        </details>
         <div className="space-y-2">
           <label className="text-sm font-medium text-muted-foreground">
             Fila de setores (vírgula ou →)

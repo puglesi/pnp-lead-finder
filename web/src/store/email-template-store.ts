@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 import {
   configureExistingEmailTemplates,
   createInitialEmailTemplates,
+  getOriginalEmailTemplateContent,
   normalizeEmailTemplateDefaults,
   type EmailTemplate,
   type EmailTemplateInput,
@@ -17,10 +18,35 @@ interface EmailTemplateStore {
   duplicateTemplate: (id: string) => EmailTemplate | null;
   deleteTemplate: (id: string) => boolean;
   setDefaultTemplate: (id: string) => void;
+  restoreOriginal: (id: string) => boolean;
+  saveAsTemplate: (input: {
+    name: string;
+    operation: EmailTemplate["operation"];
+    subject: string;
+    body: string;
+    sender?: string;
+    replyTo?: string;
+    contactKind?: EmailTemplate["contactKind"];
+    replaceId?: string | null;
+    setAsDefault?: boolean;
+  }) => EmailTemplate | null;
 }
 
 function makeId() {
   return `email-template-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getDefaultSenderForOperation(operation: EmailTemplate["operation"]) {
+  if (operation === "modeclean") {
+    return {
+      sender: "outreach@modeclean.co.uk",
+      replyTo: "info@modeclean.co.uk",
+    };
+  }
+  return {
+    sender: "outreach@panekpuglesi.co.uk",
+    replyTo: "info@panekpuglesi.co.uk",
+  };
 }
 
 export const useEmailTemplateStore = create<EmailTemplateStore>()(
@@ -93,10 +119,59 @@ export const useEmailTemplateStore = create<EmailTemplateStore>()(
         set((state) => ({
           templates: normalizeEmailTemplateDefaults(state.templates, id),
         })),
+
+      restoreOriginal: (id) => {
+        const original = getOriginalEmailTemplateContent(id);
+        if (!original) return false;
+        set((state) => ({
+          templates: state.templates.map((template) =>
+            template.id === id
+              ? {
+                  ...template,
+                  ...original,
+                  updatedAt: new Date().toISOString(),
+                }
+              : template
+          ),
+        }));
+        return true;
+      },
+
+      saveAsTemplate: (input) => {
+        const name = input.name.trim();
+        if (!name || !input.subject.trim() || !input.body.trim()) return null;
+        const defaults = getDefaultSenderForOperation(input.operation);
+        if (input.replaceId) {
+          const existing = get().templates.find((t) => t.id === input.replaceId);
+          if (!existing || existing.operation !== input.operation) return null;
+          get().updateTemplate(input.replaceId, {
+            name,
+            operation: input.operation,
+            subject: input.subject,
+            body: input.body,
+            sender: input.sender?.trim() || existing.sender || defaults.sender,
+            replyTo: input.replyTo?.trim() || existing.replyTo || defaults.replyTo,
+            contactKind: input.contactKind ?? existing.contactKind,
+            isDefault: input.setAsDefault ? true : existing.isDefault,
+          });
+          if (input.setAsDefault) get().setDefaultTemplate(input.replaceId);
+          return get().templates.find((t) => t.id === input.replaceId) ?? null;
+        }
+        return get().addTemplate({
+          name,
+          operation: input.operation,
+          subject: input.subject,
+          body: input.body,
+          sender: input.sender?.trim() || defaults.sender,
+          replyTo: input.replyTo?.trim() || defaults.replyTo,
+          contactKind: input.contactKind ?? "first_contact",
+          isDefault: Boolean(input.setAsDefault),
+        });
+      },
     }),
     {
       name: "pnp-email-templates",
-      version: 3,
+      version: 4,
       partialize: (state) => ({ templates: state.templates }),
       migrate: (persisted, version) => {
         const state = persisted as Partial<EmailTemplateStore> | undefined;
@@ -108,7 +183,10 @@ export const useEmailTemplateStore = create<EmailTemplateStore>()(
             templates: configureExistingEmailTemplates(state.templates),
           };
         }
-        return { templates: normalizeEmailTemplateDefaults(state.templates) };
+        // v4+: still ensure missing stock templates exist, never wipe edits.
+        return {
+          templates: configureExistingEmailTemplates(state.templates),
+        };
       },
       onRehydrateStorage: () => (state) => state?.markHydrated(),
     }

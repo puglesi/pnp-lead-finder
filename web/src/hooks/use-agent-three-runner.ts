@@ -24,6 +24,7 @@ import {
 } from "@/lib/agent-three-send-request";
 import {
   AGENT_THREE_SMTP_MESSAGES,
+  type AgentThreeSmtpResult,
   type AgentThreeSmtpStatus,
 } from "@/lib/agent-three-smtp-contract";
 import { waitForAgentThreeInterval } from "@/lib/agent-three-execution";
@@ -45,6 +46,11 @@ import {
   buildPermanentContactBlocks,
   type GlobalDeduplicationPreview,
 } from "@/lib/global-email-deduplication";
+import {
+  emailBlocklistToPermanentBlocks,
+  mergePermanentBlocks,
+} from "@/lib/email-blocklist";
+import { useEmailBlocklistStore } from "@/store/email-blocklist-store";
 
 export type AgentThreeUiConnectionStatus =
   | AgentThreeSmtpStatus
@@ -153,6 +159,9 @@ function buildCampaignDeduplicationPreview(
   const operations = useAgentThreeStore.getState().operations;
   const leads = getAllKnownLeads();
   const evidence = { campaigns, operations, leads };
+  const manualBlocks = emailBlocklistToPermanentBlocks(
+    useEmailBlocklistStore.getState().entries
+  );
   return auditGlobalEmailRecipients({
     operation: campaign.campaignProfileId,
     campaignId: campaign.id,
@@ -164,7 +173,11 @@ function buildCampaignDeduplicationPreview(
       email: lead.normalizedEmail ?? lead.email,
     })),
     history: buildGlobalEmailHistory(evidence),
-    permanentBlocks: buildPermanentContactBlocks(evidence),
+    // Same suppression list for global dedupe + Agent 3.
+    permanentBlocks: mergePermanentBlocks(
+      buildPermanentContactBlocks(evidence),
+      manualBlocks
+    ),
   });
 }
 
@@ -390,7 +403,8 @@ function patchCampaignDelivery(
 }
 
 export function connectionStatusMessage(
-  status: AgentThreeUiConnectionStatus
+  status: AgentThreeUiConnectionStatus,
+  smtpMessage?: string | null
 ): string | null {
   if (status === "validating") return AGENT_THREE_VALIDATING_MESSAGE;
   if (status === "lead_ready") return AGENT_THREE_LEAD_READY_MESSAGE;
@@ -401,19 +415,37 @@ export function connectionStatusMessage(
     return AGENT_THREE_TRACKING_ERROR_MESSAGE;
   }
   if (status === "paused") return "Envio pausado.";
-  if (status === "sent" || status === "connected") return "Conectado.";
-  if (status === "real_send_disabled") return "Envio real desativado.";
-  if (status === "configuration_error") {
-    return "Configuração de envio incompleta.";
+  if (status === "sent" || status === "connected") {
+    return smtpMessage?.trim() || "✓ Pronto para envio real";
   }
-  if (status === "authentication_error") return "Erro de autenticação.";
+  // Prefer specific server message for known failure statuses.
+  if (
+    status === "real_send_disabled" ||
+    status === "configuration_error" ||
+    status === "authentication_error" ||
+    status === "provider_rate_limit" ||
+    status === "provider_account_blocked" ||
+    status === "transient_error" ||
+    status === "permanent_error"
+  ) {
+    if (smtpMessage?.trim()) return smtpMessage.trim();
+  }
+  if (status === "real_send_disabled") {
+    return AGENT_THREE_SMTP_MESSAGES.real_send_disabled;
+  }
+  if (status === "configuration_error") {
+    return AGENT_THREE_SMTP_MESSAGES.configuration_error;
+  }
+  if (status === "authentication_error") {
+    return AGENT_THREE_SMTP_MESSAGES.authentication_error;
+  }
   if (
     status === "provider_rate_limit" ||
     status === "provider_account_blocked"
   ) {
-    return "Conta limitada.";
+    return "Conta limitada pelo provedor.";
   }
-  return null;
+  return smtpMessage?.trim() || null;
 }
 
 export function useAgentThreeRunner() {
@@ -427,6 +459,12 @@ export function useAgentThreeRunner() {
   );
   const [statuses, setStatuses] = useState<
     Record<CampaignProfileId, AgentThreeUiConnectionStatus>
+  >({
+    "panek-puglesi": null,
+    modeclean: null,
+  });
+  const [smtpResults, setSmtpResults] = useState<
+    Record<CampaignProfileId, AgentThreeSmtpResult | null>
   >({
     "panek-puglesi": null,
     modeclean: null,
@@ -455,6 +493,30 @@ export function useAgentThreeRunner() {
     status: AgentThreeUiConnectionStatus
   ) {
     setStatuses((current) => ({ ...current, [profileId]: status }));
+  }
+
+  function setSmtpResult(
+    profileId: CampaignProfileId,
+    result: AgentThreeSmtpResult | null
+  ) {
+    setSmtpResults((current) => ({ ...current, [profileId]: result }));
+    if (result) setStatus(profileId, result.status);
+  }
+
+  /**
+   * Preflight only — never sends a message.
+   * Live verify when verify=true.
+   */
+  async function verifySend(
+    profileId: CampaignProfileId,
+    options: { verify?: boolean } = { verify: true }
+  ): Promise<AgentThreeSmtpResult> {
+    setStatus(profileId, "validating");
+    const result = await checkAgentThreeSmtpAvailability(profileId, {
+      verify: options.verify !== false,
+    });
+    setSmtpResult(profileId, result);
+    return result;
   }
 
   function setProfileNextSendAt(
@@ -757,11 +819,8 @@ export function useAgentThreeRunner() {
         return { started: false, message: preparation.message };
       }
       setStatus(profileId, "lead_ready");
-      // Live SMTP auth/connection check before the first real send.
-      const availability = await checkAgentThreeSmtpAvailability(profileId, {
-        verify: true,
-      });
-      setStatus(profileId, availability.status);
+      // Live SMTP auth/connection check before the first real send (no message).
+      const availability = await verifySend(profileId, { verify: true });
       if (availability.status !== "connected") {
         return {
           started: false,
@@ -792,10 +851,7 @@ export function useAgentThreeRunner() {
     if (activeLoops.current.has(profileId)) {
       return { started: false, message: "Aguarde a pausa ser concluída." };
     }
-    const availability = await checkAgentThreeSmtpAvailability(profileId, {
-      verify: true,
-    });
-    setStatus(profileId, availability.status);
+    const availability = await verifySend(profileId, { verify: true });
     if (availability.status !== "connected") {
       return {
         started: false,
@@ -818,10 +874,12 @@ export function useAgentThreeRunner() {
 
   return {
     statuses,
+    smtpResults,
     nextSendAt,
     preparations,
     loadingCampaign,
     loadCampaign,
+    verifySend,
     start,
     pause,
     resume,

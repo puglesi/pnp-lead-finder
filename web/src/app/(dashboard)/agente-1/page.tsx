@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { Pickaxe } from "lucide-react";
-import { AgentOneGarimpeiro } from "@/components/agents/agent-one-garimpeiro";
+import { AgentOneSearchModes } from "@/components/agents/agent-one-search-modes";
 
 export default function AgentOnePage() {
   return (
@@ -11,11 +11,16 @@ export default function AgentOnePage() {
           Agente 1 — Garimpeiro
         </h2>
         <p className="text-muted-foreground">
-          Abra um lote da busca ou monte uma fila de setores sequencial.
+          Toda busca e prospecção centralizada: Garimpeiro, One-Click e Busca
+          em Massa.
         </p>
       </div>
-      <Suspense fallback={<p className="text-sm text-muted-foreground">Carregando lote…</p>}>
-        <AgentOneGarimpeiro />
+      <Suspense
+        fallback={
+          <p className="text-sm text-muted-foreground">Carregando modos…</p>
+        }
+      >
+        <AgentOneSearchModes />
       </Suspense>
     </div>
   );

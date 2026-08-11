@@ -106,7 +106,7 @@ test("modelos 5. área de configurações expõe CRUD e padrão", () => {
   }
 });
 
-test("modelos 6. configuração automática atualiza os seis e preserva contactos", () => {
+test("modelos 6. configuração preserva edições do usuário e preenche faltantes", () => {
   const old = createInitialEmailTemplates("2026-08-01T00:00:00.000Z").map(
     (template) => ({
       ...template,
@@ -118,19 +118,25 @@ test("modelos 6. configuração automática atualiza os seis e preserva contacto
       isDefault: template.id.endsWith("follow-up"),
     })
   );
-  const configured = configureExistingEmailTemplates(old, now);
+  // Drop one stock template — configure should re-add without wiping edits.
+  const incomplete = old.filter((t) => t.id !== "modeclean-follow-up");
+  const configured = configureExistingEmailTemplates(incomplete, now);
 
   assert.equal(configured.length, 6);
   for (const operation of ["panek-puglesi", "modeclean"]) {
     const scoped = getEmailTemplatesForOperation(configured, operation);
     assert.equal(scoped.length, 3);
     assert.equal(scoped.filter((template) => template.isDefault).length, 1);
-    assert.equal(getDefaultEmailTemplate(configured, operation)?.id.endsWith("partnership"), true);
-    assert.equal(scoped.every((template) => template.sender.endsWith("@sender.example")), true);
-    assert.equal(scoped.every((template) => template.replyTo.endsWith("@reply.example")), true);
-    assert.equal(scoped.every((template) => template.subject !== "Old subject"), true);
-    assert.equal(scoped.every((template) => template.body !== "Old body"), true);
   }
+  // Existing edits must survive configure (no silent overwrite).
+  const edited = configured.find((t) => t.id === "panek-puglesi-partnership");
+  assert.equal(edited?.subject, "Old subject");
+  assert.equal(edited?.body, "Old body");
+  assert.equal(edited?.sender.endsWith("@sender.example"), true);
+  // Missing stock template re-added from original content
+  const restored = configured.find((t) => t.id === "modeclean-follow-up");
+  assert.ok(restored);
+  assert.notEqual(restored.subject, "Old subject");
 });
 
 test("modelos 7. relatório One-Click mostra assunto e corpo completos", () => {

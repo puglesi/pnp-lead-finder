@@ -224,42 +224,47 @@ function OneClickFlowPanel() {
               />
             </div>
 
-            <div className="space-y-2 sm:col-span-2">
-              <Label>Template</Label>
-              <Select value={templateId} onValueChange={setTemplateId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Template de e-mail" />
-                </SelectTrigger>
-                <SelectContent>
-                  {templateOptions.map((template) => (
-                    <SelectItem key={template.id} value={template.id}>
-                      {template.name}
-                      {template.isDefault ? " · Padrão" : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Intervalo mín. (s)</Label>
-              <Input
-                type="number"
-                min={0}
-                value={minInterval}
-                onChange={(e) => setMinInterval(Number(e.target.value) || 0)}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label>Intervalo máx. (s)</Label>
-              <Input
-                type="number"
-                min={0}
-                value={maxInterval}
-                onChange={(e) => setMaxInterval(Number(e.target.value) || 0)}
-              />
-            </div>
+            <details className="sm:col-span-2 rounded-xl border border-border/50 bg-background/30">
+              <summary className="cursor-pointer select-none px-4 py-3 text-sm font-medium text-muted-foreground hover:text-foreground">
+                Configurações avançadas
+              </summary>
+              <div className="grid gap-4 border-t border-border/40 px-4 py-3 sm:grid-cols-2">
+                <div className="space-y-2 sm:col-span-2">
+                  <Label>Template</Label>
+                  <Select value={templateId} onValueChange={setTemplateId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Template de e-mail" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {templateOptions.map((template) => (
+                        <SelectItem key={template.id} value={template.id}>
+                          {template.name}
+                          {template.isDefault ? " · Padrão" : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Intervalo mín. (s)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={minInterval}
+                    onChange={(e) => setMinInterval(Number(e.target.value) || 0)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Intervalo máx. (s)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={maxInterval}
+                    onChange={(e) => setMaxInterval(Number(e.target.value) || 0)}
+                  />
+                </div>
+              </div>
+            </details>
 
             <div className="sm:col-span-2">
               <Button

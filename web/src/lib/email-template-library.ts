@@ -146,39 +146,49 @@ export function createInitialEmailTemplates(
   );
 }
 
+/**
+ * Ensure the six stock templates exist, without overwriting user edits.
+ * Previously this rewrote subject/body on every migrate and wiped edits.
+ */
 export function configureExistingEmailTemplates(
   templates: readonly EmailTemplate[],
   now = new Date().toISOString()
 ): EmailTemplate[] {
   const configured = createInitialEmailTemplates(now);
-  const configuredById = new Map(
-    configured.map((template) => [template.id, template])
-  );
   const existingIds = new Set(templates.map((template) => template.id));
 
-  const updated = templates.map((template) => {
-    const replacement = configuredById.get(template.id);
-    if (!replacement) {
-      return {
-        ...template,
-        contactKind: template.contactKind ?? "first_contact",
-        isDefault: false,
-      };
-    }
-    return {
-      ...template,
-      name: replacement.name,
-      operation: replacement.operation,
-      subject: replacement.subject,
-      body: replacement.body,
-      contactKind: replacement.contactKind,
-      isDefault: replacement.isDefault,
-      updatedAt: now,
-    };
-  });
+  const preserved = templates.map((template) => ({
+    ...template,
+    contactKind: template.contactKind ?? "first_contact",
+  }));
 
   const missing = configured.filter((template) => !existingIds.has(template.id));
-  return normalizeEmailTemplateDefaults([...updated, ...missing]);
+  return normalizeEmailTemplateDefaults([...preserved, ...missing]);
+}
+
+/** Built-in original content for restore (never silently mutates store). */
+export function getOriginalEmailTemplateContent(
+  templateId: string
+): Pick<EmailTemplate, "name" | "subject" | "body" | "contactKind"> | null {
+  for (const operation of ["panek-puglesi", "modeclean"] as const) {
+    for (const content of CONFIGURED_CONTENT[operation]) {
+      const id = `${operation}-${content.key}`;
+      if (id === templateId) {
+        return {
+          name: content.name,
+          subject: content.subject,
+          body: content.body,
+          contactKind:
+            content.key === "follow-up" ? "follow_up" : "first_contact",
+        };
+      }
+    }
+  }
+  return null;
+}
+
+export function isBuiltInEmailTemplateId(templateId: string): boolean {
+  return getOriginalEmailTemplateContent(templateId) !== null;
 }
 
 export function normalizeEmailTemplateDefaults(
