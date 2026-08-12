@@ -6,6 +6,7 @@ import {
   type LifetimeStats,
   type LifetimeStatsInput,
 } from "@/lib/lifetime-stats";
+import { normalizeLifetimePersistSlice } from "@/lib/store-rehydrate";
 
 interface LifetimeStatsStore {
   /** High-water floors — never decrease when UI/session is cleared. */
@@ -43,12 +44,33 @@ export const useLifetimeStatsStore = create<LifetimeStatsStore>()(
       },
 
       syncFromPersistedData: (input) => {
-        const derived = computeLifetimeStats({
-          ...input,
-          floors: get().getFloors(),
-        });
-        const raised = raiseLifetimeFloors(get().getFloors(), derived);
-        set(raised);
+        const current = get().getFloors();
+        let derived: LifetimeStats;
+        try {
+          derived = computeLifetimeStats({
+            ...input,
+            floors: current,
+          });
+        } catch {
+          // Nested legacy campaign/lead fields must never abort Dashboard sync.
+          derived = {
+            companiesFound: current.companiesFound,
+            leadsFound: current.leadsFound,
+            validEmailsFound: current.validEmailsFound,
+            campaignsSent: current.campaignsSent,
+            campaignsActive: 0,
+          };
+        }
+        const raised = raiseLifetimeFloors(current, derived);
+        // Avoid set() when unchanged — prevents re-render churn on Dashboard.
+        if (
+          raised.companiesFound !== current.companiesFound ||
+          raised.leadsFound !== current.leadsFound ||
+          raised.validEmailsFound !== current.validEmailsFound ||
+          raised.campaignsSent !== current.campaignsSent
+        ) {
+          set(raised);
+        }
         return {
           ...derived,
           ...raised,
@@ -86,6 +108,17 @@ export const useLifetimeStatsStore = create<LifetimeStatsStore>()(
         }));
       },
     }),
-    { name: "pnp-lifetime-stats" }
+    {
+      name: "pnp-lifetime-stats",
+      version: 1,
+      migrate: (persisted) => normalizeLifetimePersistSlice(persisted),
+      merge: (persisted, current) => {
+        const normalized = normalizeLifetimePersistSlice(persisted);
+        return {
+          ...current,
+          ...normalized,
+        };
+      },
+    }
   )
 );

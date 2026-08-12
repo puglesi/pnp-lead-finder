@@ -8,6 +8,7 @@ import { ActiveModeBadge } from "@/components/dashboard/active-mode-badge";
 import { ProviderStatusBadge } from "@/components/dashboard/provider-status-badge";
 import { SerpApiPlanBanner } from "@/components/dashboard/serpapi-plan-banner";
 import { SerpApiActiveStatus } from "@/components/dashboard/serpapi-active-status";
+import { DashboardSectionBoundary } from "@/components/dashboard/dashboard-section-boundary";
 import { useSettingsStore } from "@/store/settings-store";
 
 const subscribeToHydration = () => () => {};
@@ -26,20 +27,38 @@ export default function DashboardPage() {
 
   return (
     <div className="mx-auto max-w-7xl space-y-8">
-      <ActiveModeBanner />
-      <LocalProductionPanel compact />
-      {isPremium && <SerpApiActiveStatus />}
-      {isPremium ? <SerpApiPlanBanner /> : null}
+      <DashboardSectionBoundary name="ActiveModeBanner">
+        <ActiveModeBanner />
+      </DashboardSectionBoundary>
+      <DashboardSectionBoundary name="LocalProductionPanel">
+        <LocalProductionPanel compact />
+      </DashboardSectionBoundary>
+      {isPremium && (
+        <DashboardSectionBoundary name="SerpApiActiveStatus">
+          <SerpApiActiveStatus />
+        </DashboardSectionBoundary>
+      )}
+      {isPremium ? (
+        <DashboardSectionBoundary name="SerpApiPlanBanner">
+          <SerpApiPlanBanner />
+        </DashboardSectionBoundary>
+      ) : null}
       <div className="flex flex-wrap items-center gap-2">
-        <ActiveModeBadge hydrated={hydrated} />
-        <ProviderStatusBadge hydrated={hydrated} />
+        <DashboardSectionBoundary name="ActiveModeBadge">
+          <ActiveModeBadge hydrated={hydrated} />
+        </DashboardSectionBoundary>
+        <DashboardSectionBoundary name="ProviderStatusBadge">
+          <ProviderStatusBadge hydrated={hydrated} />
+        </DashboardSectionBoundary>
       </div>
       <Suspense
         fallback={
           <p className="text-sm text-muted-foreground">Carregando dashboard…</p>
         }
       >
-        <DashboardTabs />
+        <DashboardSectionBoundary name="DashboardTabs">
+          <DashboardTabs />
+        </DashboardSectionBoundary>
       </Suspense>
     </div>
   );

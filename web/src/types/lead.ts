@@ -11,6 +11,8 @@ export interface Lead {
   aiScore: number;
   /** Search/handoff batch this lead belongs to (never mix without explicit action). */
   batchId?: string;
+  /** Per-file import batch — campaign membership uses only the current upload. */
+  importBatchId?: string;
   savedAt?: string;
   emailValidationStatus?: EmailValidationStatus;
   emailValidationReason?: string;

@@ -20,13 +20,14 @@ import { RECENT_SEARCHES_LIMIT } from "@/lib/mode-labels";
 
 export function RecentSearches() {
   const router = useRouter();
-  const {
-    recentSearches,
-    fullSearchHistory,
-    loadSearchFromHistory,
-    openSearchBatchInAgentOne,
-    clearRecentSearches,
-  } = useLeadStore();
+  // Never destructure the whole store — partial rehydrate can leave null arrays.
+  const recentSearches = useLeadStore((s) => s.recentSearches ?? []);
+  const fullSearchHistory = useLeadStore((s) => s.fullSearchHistory ?? []);
+  const loadSearchFromHistory = useLeadStore((s) => s.loadSearchFromHistory);
+  const openSearchBatchInAgentOne = useLeadStore(
+    (s) => s.openSearchBatchInAgentOne
+  );
+  const clearRecentSearches = useLeadStore((s) => s.clearRecentSearches);
 
   const handleRowClick = (id: string, keyword: string, location: string) => {
     if (!loadSearchFromHistory(id)) {

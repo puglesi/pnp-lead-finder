@@ -1,16 +1,17 @@
 "use client";
 
+import { useState } from "react";
 import { PenLine, RotateCcw } from "lucide-react";
 import toast from "react-hot-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { RichEmailEditor } from "./rich-email-editor";
-import {
-  DEFAULT_SIGNATURE,
-  type CampaignSignature,
-} from "@/types/campaign";
+import { SignatureHtmlEditor } from "@/components/settings/signature-html-editor";
+import type { CampaignSignature } from "@/types/campaign";
+import type { CampaignProfileId } from "@/types/campaign-profile";
+import { getOperationSendAccount } from "@/lib/operation-identity";
+import { sanitizeSignatureHtml } from "@/lib/signature-html";
 import { cn } from "@/lib/utils";
 
 interface CampaignSignatureSettingsProps {
@@ -18,17 +19,35 @@ interface CampaignSignatureSettingsProps {
   onChange: (patch: Partial<CampaignSignature>) => void;
   disabled?: boolean;
   className?: string;
+  operation?: CampaignProfileId;
 }
 
+/**
+ * Campaign-level signature editor. Paste from Gmail is preserved.
+ * “Descartar alterações” returns to the last value passed as props (saved campaign).
+ */
 export function CampaignSignatureSettings({
   signature,
   onChange,
   disabled = false,
   className,
+  operation = "panek-puglesi",
 }: CampaignSignatureSettingsProps) {
-  const resetToDefault = () => {
-    onChange({ body: DEFAULT_SIGNATURE.body });
-    toast.success("Assinatura padrão restaurada");
+  const account = getOperationSendAccount(operation);
+  const savedKey = `${signature.enabled}::${signature.body}`;
+  const [baselineKey, setBaselineKey] = useState(savedKey);
+  const [baseline, setBaseline] = useState(signature);
+  const [dirty, setDirty] = useState(false);
+
+  if (baselineKey !== savedKey && !dirty) {
+    setBaselineKey(savedKey);
+    setBaseline(signature);
+  }
+
+  const discard = () => {
+    onChange({ body: baseline.body, enabled: baseline.enabled });
+    setDirty(false);
+    toast.success("Alterações descartadas — última assinatura salva.");
   };
 
   return (
@@ -37,10 +56,10 @@ export function CampaignSignatureSettings({
         <div className="space-y-1">
           <CardTitle className="flex items-center gap-2 text-base">
             <PenLine className="size-4 text-emerald-400" />
-            Assinatura
+            Assinatura ({account.signatureLabel})
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Inserida automaticamente no final de cada email enviado
+            Cole a assinatura do Gmail. Layout, logo e estilos são preservados.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -49,9 +68,15 @@ export function CampaignSignatureSettings({
               id="signature-enabled"
               checked={signature.enabled}
               disabled={disabled}
-              onCheckedChange={(v) => onChange({ enabled: v === true })}
+              onCheckedChange={(v) => {
+                onChange({ enabled: v === true });
+                setDirty(true);
+              }}
             />
-            <Label htmlFor="signature-enabled" className="cursor-pointer text-sm font-medium">
+            <Label
+              htmlFor="signature-enabled"
+              className="cursor-pointer text-sm font-medium"
+            >
               Ativar assinatura
             </Label>
           </div>
@@ -59,31 +84,39 @@ export function CampaignSignatureSettings({
             type="button"
             variant="outline"
             size="sm"
-            disabled={disabled}
-            onClick={resetToDefault}
+            disabled={disabled || !dirty}
+            onClick={discard}
           >
             <RotateCcw className="size-3.5" />
-            Padrão Panek Pugliesi
+            Descartar alterações
           </Button>
         </div>
       </CardHeader>
 
-      <CardContent className={cn(!signature.enabled && "opacity-50")}>
-        <RichEmailEditor
+      <CardContent className={cn("space-y-4", !signature.enabled && "opacity-50")}>
+        <SignatureHtmlEditor
           value={signature.body}
-          onChange={(body) => onChange({ body })}
-          placeholder="Edite sua assinatura..."
-          layout="full"
-          variant="compact"
-          minHeight={320}
           disabled={disabled || !signature.enabled}
-          showVariables={false}
+          minHeight={260}
+          onChange={(body) => {
+            onChange({ body: sanitizeSignatureHtml(body) });
+            setDirty(true);
+          }}
         />
-        <p className="mt-2 text-xs text-muted-foreground">
-          PANE K&amp;PUGLIESI · London Property Services · Carlos Pugliesi — Director ·
-          Lettings | Property Management | Investments | Relocation. Editável; inserida
-          automaticamente no final do email.
-        </p>
+        <div className="rounded-lg border border-border/50 bg-white p-3 dark:bg-background/30">
+          <p className="mb-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            Preview
+          </p>
+          <div
+            data-signature-preview="true"
+            className="overflow-x-auto text-sm"
+            dangerouslySetInnerHTML={{
+              __html: signature.enabled
+                ? sanitizeSignatureHtml(signature.body)
+                : "<span style='color:#9ca3af'>(desativada)</span>",
+            }}
+          />
+        </div>
       </CardContent>
     </Card>
   );

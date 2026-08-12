@@ -1,4 +1,5 @@
 import type { Lead } from "@/types/lead";
+import { sanitizeSignatureHtml } from "./signature-html.ts";
 
 export const DEFAULT_FROM_NAME = "Panek Pugliesi";
 export const DEFAULT_FROM_EMAIL = "outreach@panekpuglesi.co.uk";
@@ -176,7 +177,12 @@ export function renderFullCampaignEmail(
 ): string {
   const main = renderEmailHtml(body, lead);
   if (!signature?.enabled || !signature.body.trim()) return main;
-  const sig = renderEmailHtml(signature.body, lead);
+  // Signature HTML is user-owned (Gmail paste). Soft-sanitize only; never
+  // rewrite tables/divs/images the way the body editor normalizer does.
+  const safeSig = sanitizeSignatureHtml(signature.body);
+  if (!safeSig.trim()) return main;
+  // Variable substitution only — preserve layout markup.
+  const sig = renderEmailTemplate(safeSig, lead);
   return `${main}<div data-email-signature="true" style="margin-top:8px;">${sig}</div>`;
 }
 

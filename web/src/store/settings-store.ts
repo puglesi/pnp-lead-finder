@@ -272,7 +272,9 @@ export const useSettingsStore = create<SettingsStore>()(
         set({ serpapiDeepPagination }),
 
       toggleAutonomousSource: (sourceId) => {
-        const current = get().autonomousSources;
+        const current = Array.isArray(get().autonomousSources)
+          ? get().autonomousSources
+          : [...DEFAULT_AUTONOMOUS_SOURCES];
         const next = current.includes(sourceId)
           ? current.filter((s) => s !== sourceId)
           : [...current, sourceId];
@@ -300,12 +302,17 @@ export const useSettingsStore = create<SettingsStore>()(
       getActiveAutonomousSources: () => {
         const { autonomousSources, autonomousSourceStrategy, autonomousSingleSource } =
           get();
+        // Exact incompatible field: autonomousSources may be null in legacy storage
+        // when merge was the default shallow spread (no custom merge).
+        const sources = Array.isArray(autonomousSources)
+          ? autonomousSources
+          : [...DEFAULT_AUTONOMOUS_SOURCES];
         if (autonomousSourceStrategy === "single") {
-          return autonomousSources.includes(autonomousSingleSource)
+          return sources.includes(autonomousSingleSource)
             ? [autonomousSingleSource]
-            : [autonomousSources[0] ?? DEFAULT_AUTONOMOUS_SINGLE_SOURCE];
+            : [sources[0] ?? DEFAULT_AUTONOMOUS_SINGLE_SOURCE];
         }
-        return sortSourcesByUkPriority(autonomousSources);
+        return sortSourcesByUkPriority(sources);
       },
 
       setMode24h: (enabled) => {
@@ -634,7 +641,53 @@ export const useSettingsStore = create<SettingsStore>()(
             next.nightScheduleEnd ?? DEFAULT_NIGHT_SCHEDULE.endHour;
         }
 
+        // Always repair array fields (not only on version bumps).
+        next.autonomousSources = Array.isArray(next.autonomousSources)
+          ? sanitizeAutonomousSources(next.autonomousSources)
+          : [...DEFAULT_AUTONOMOUS_SOURCES];
+
         return next;
+      },
+      merge: (persisted, current) => {
+        const state =
+          persisted && typeof persisted === "object"
+            ? (persisted as Partial<SettingsStore>)
+            : {};
+        // Exact field: autonomousSources null/undefined crashes .includes/.map on Dashboard.
+        const autonomousSources = Array.isArray(state.autonomousSources)
+          ? sanitizeAutonomousSources(state.autonomousSources)
+          : current.autonomousSources;
+        return {
+          ...current,
+          ...state,
+          autonomousSources,
+          autonomousSourceStrategy:
+            state.autonomousSourceStrategy === "parallel" ||
+            state.autonomousSourceStrategy === "rotate" ||
+            state.autonomousSourceStrategy === "single"
+              ? state.autonomousSourceStrategy
+              : current.autonomousSourceStrategy,
+          nightScheduleStart:
+            typeof state.nightScheduleStart === "number"
+              ? state.nightScheduleStart
+              : current.nightScheduleStart,
+          nightScheduleEnd:
+            typeof state.nightScheduleEnd === "number"
+              ? state.nightScheduleEnd
+              : current.nightScheduleEnd,
+          localProductionEnabled:
+            typeof state.localProductionEnabled === "boolean"
+              ? state.localProductionEnabled
+              : current.localProductionEnabled,
+          nightModeAuto:
+            typeof state.nightModeAuto === "boolean"
+              ? state.nightModeAuto
+              : current.nightModeAuto,
+          nightModeActive:
+            typeof state.nightModeActive === "boolean"
+              ? state.nightModeActive
+              : current.nightModeActive,
+        };
       },
     }
   )

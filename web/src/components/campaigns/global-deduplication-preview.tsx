@@ -53,14 +53,16 @@ export function GlobalDeduplicationPreviewPanel({
       </div>
 
       {crossOperation.length > 0 && (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+        <div className="rounded-lg border border-sky-500/35 bg-sky-500/10 p-3 text-sm text-sky-100">
           <p className="flex items-center gap-2 font-medium">
-            <AlertTriangle className="size-4" />
-            Contato anterior pela outra operação — alerta apenas, sem bloqueio automático
+            <AlertTriangle className="size-4 text-sky-300" />
+            Alerta: já contatado pela outra operação — não é erro de envio nem
+            bloqueio automático
           </p>
           {crossOperation.map((decision) => (
-            <p key={`${decision.leadId}-cross`} className="mt-1 text-xs">
-              {decision.company} · {decision.normalizedEmail} — campanha {decision.otherOperationContact?.campaignName}
+            <p key={`${decision.leadId}-cross`} className="mt-1 text-xs text-sky-50/90">
+              {decision.company} · {decision.normalizedEmail} — campanha{" "}
+              {decision.otherOperationContact?.campaignName}
             </p>
           ))}
         </div>
@@ -71,14 +73,40 @@ export function GlobalDeduplicationPreviewPanel({
           <div className="sticky top-0 grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-3 bg-muted px-3 py-2 text-xs font-medium uppercase text-muted-foreground">
             <span>Contato</span><span>Motivo da exclusão</span>
           </div>
-          {excluded.map((decision) => (
-            <div key={`${decision.leadId}-${decision.code}`} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-3 border-t border-border/40 px-3 py-2 text-xs">
-              <span className="min-w-0 truncate" title={decision.normalizedEmail ?? decision.company}>
-                {decision.company} · {decision.normalizedEmail ?? "sem e-mail"}
-              </span>
-              <span className="text-amber-100">{decision.reason}</span>
-            </div>
-          ))}
+          {excluded.map((decision) => {
+            const isBlock =
+              decision.code === "permanently_blocked" ||
+              decision.code === "invalid_email";
+            const isDup =
+              decision.code === "duplicate_in_batch" ||
+              decision.code === "same_operation_contacted" ||
+              decision.code === "already_sent_current_campaign";
+            return (
+              <div
+                key={`${decision.leadId}-${decision.code}`}
+                className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-3 border-t border-border/40 px-3 py-2 text-xs"
+              >
+                <span
+                  className="min-w-0 truncate"
+                  title={decision.normalizedEmail ?? decision.company}
+                >
+                  {decision.company} ·{" "}
+                  {decision.normalizedEmail ?? "sem e-mail"}
+                </span>
+                <span
+                  className={
+                    isBlock
+                      ? "text-red-300"
+                      : isDup
+                        ? "text-orange-200"
+                        : "text-muted-foreground"
+                  }
+                >
+                  {decision.reason}
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
 

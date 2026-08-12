@@ -16,31 +16,47 @@ const server = () => false;
 
 export function StatsCards() {
   const hydrated = useSyncExternalStore(subscribe, client, server);
-  const fullSearchHistory = useLeadStore((s) => s.fullSearchHistory);
-  const recentSearches = useLeadStore((s) => s.recentSearches);
-  const savedLeads = useLeadStore((s) => s.savedLeads);
-  const importedLeads = useLeadStore((s) => s.importedLeads);
-  const campaigns = useCampaignStore((s) => s.campaigns);
-  const floors = useLifetimeStatsStore((s) => ({
-    companiesFound: s.companiesFound,
-    leadsFound: s.leadsFound,
-    validEmailsFound: s.validEmailsFound,
-    campaignsSent: s.campaignsSent,
-  }));
+  const fullSearchHistory = useLeadStore((s) => s.fullSearchHistory ?? []);
+  const recentSearches = useLeadStore((s) => s.recentSearches ?? []);
+  const savedLeads = useLeadStore((s) => s.savedLeads ?? []);
+  const importedLeads = useLeadStore((s) => s.importedLeads ?? []);
+  const campaigns = useCampaignStore((s) => s.campaigns ?? []);
+  // CRITICAL: never select a fresh object from Zustand without useShallow —
+  // that causes Maximum update depth exceeded and kills only the Dashboard.
+  const floorCompanies = useLifetimeStatsStore((s) => s.companiesFound ?? 0);
+  const floorLeads = useLifetimeStatsStore((s) => s.leadsFound ?? 0);
+  const floorEmails = useLifetimeStatsStore((s) => s.validEmailsFound ?? 0);
+  const floorCampaignsSent = useLifetimeStatsStore((s) => s.campaignsSent ?? 0);
   const syncFromPersistedData = useLifetimeStatsStore(
     (s) => s.syncFromPersistedData
+  );
+
+  const floors = useMemo(
+    () => ({
+      companiesFound: floorCompanies,
+      leadsFound: floorLeads,
+      validEmailsFound: floorEmails,
+      campaignsSent: floorCampaignsSent,
+    }),
+    [floorCompanies, floorLeads, floorEmails, floorCampaignsSent]
   );
 
   // Keep high-water floors aligned with durable persisted data (never resets UI).
   useEffect(() => {
     if (!hydrated) return;
-    syncFromPersistedData({
-      fullSearchHistory,
-      recentSearches,
-      savedLeads,
-      importedLeads,
-      campaigns,
-    });
+    try {
+      syncFromPersistedData({
+        fullSearchHistory,
+        recentSearches,
+        savedLeads,
+        importedLeads,
+        campaigns,
+      });
+    } catch (err) {
+      if (process.env.NODE_ENV !== "production") {
+        console.error("[StatsCards] syncFromPersistedData failed", err);
+      }
+    }
   }, [
     hydrated,
     fullSearchHistory,
@@ -61,14 +77,28 @@ export function StatsCards() {
         campaignsActive: 0,
       };
     }
-    return computeLifetimeStats({
-      fullSearchHistory,
-      recentSearches,
-      savedLeads,
-      importedLeads,
-      campaigns,
-      floors,
-    });
+    try {
+      return computeLifetimeStats({
+        fullSearchHistory,
+        recentSearches,
+        savedLeads,
+        importedLeads,
+        campaigns,
+        floors,
+      });
+    } catch (err) {
+      if (process.env.NODE_ENV !== "production") {
+        console.error("[StatsCards] computeLifetimeStats failed", err);
+      }
+      // Malformed historical campaign/lead → show floors/zeros, never crash page.
+      return {
+        companiesFound: floors.companiesFound,
+        leadsFound: floors.leadsFound,
+        validEmailsFound: floors.validEmailsFound,
+        campaignsSent: floors.campaignsSent,
+        campaignsActive: 0,
+      };
+    }
   }, [
     hydrated,
     fullSearchHistory,

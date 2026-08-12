@@ -110,15 +110,16 @@ export function operationMatchesBlock(
 }
 
 export function findEmailBlock(
-  entries: readonly EmailBlocklistEntry[],
+  entries: readonly EmailBlocklistEntry[] | null | undefined,
   email: string | null | undefined,
   profileId?: CampaignProfileId
 ): EmailBlocklistEntry | null {
   const normalized = normalizeEmail(email);
   if (!normalized) return null;
+  const list = Array.isArray(entries) ? entries : [];
   return (
-    entries.find((entry) => {
-      if (entry.normalizedEmail !== normalized) return false;
+    list.find((entry) => {
+      if (!entry || entry.normalizedEmail !== normalized) return false;
       if (!profileId) return true;
       return operationMatchesBlock(entry.operation, profileId);
     }) ?? null
@@ -126,7 +127,7 @@ export function findEmailBlock(
 }
 
 export function isEmailBlocked(
-  entries: readonly EmailBlocklistEntry[],
+  entries: readonly EmailBlocklistEntry[] | null | undefined,
   email: string | null | undefined,
   profileId?: CampaignProfileId
 ): boolean {
@@ -138,10 +139,11 @@ export function isEmailBlocked(
  * global deduplication and Agent 3 (same suppression source of truth).
  */
 export function emailBlocklistToPermanentBlocks(
-  entries: readonly EmailBlocklistEntry[]
+  entries: readonly EmailBlocklistEntry[] | null | undefined
 ): PermanentContactBlock[] {
   const blocks: PermanentContactBlock[] = [];
-  for (const entry of entries) {
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    if (!entry) continue;
     const reason: PermanentContactBlock["reason"] =
       entry.reason === "unsubscribe"
         ? "unsubscribed"

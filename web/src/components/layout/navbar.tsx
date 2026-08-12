@@ -15,7 +15,7 @@ import {
 
 export function Navbar() {
   const router = useRouter();
-  const { userName } = useLeadStore();
+  const userName = useLeadStore((s) => s.userName ?? "Panek Puglesi");
 
   async function handleClearInterface() {
     await clearUiSessionState();

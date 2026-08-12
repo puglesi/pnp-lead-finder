@@ -10,6 +10,7 @@ import {
   EyeOff,
   FilePlus2,
   LineChart,
+  Play,
   Save,
   Send,
   Settings2,
@@ -40,6 +41,7 @@ import { SendConfigForm } from "./send-config-form";
 import { CampaignAttachmentField } from "./campaign-attachment";
 import { CampaignSignatureSettings } from "./campaign-signature-settings";
 import { SaveAsTemplateDialog } from "./save-as-template-dialog";
+import { CampaignSendNowDialog } from "./campaign-send-now-dialog";
 import { getTrackingPollInterval } from "@/lib/local-production";
 import { buildReuseCampaignUrl } from "@/lib/campaign-reuse";
 import { useSettingsStore } from "@/store/settings-store";
@@ -50,11 +52,17 @@ import { useAgentThreeStore } from "@/store/agent-three-store";
 import { useBatchPipelineStore } from "@/store/batch-pipeline-store";
 import { useEmailTemplateStore } from "@/store/email-template-store";
 import {
-  DEFAULT_SIGNATURE,
   type Campaign,
   type CampaignFollowUp,
   type CampaignSignature,
 } from "@/types/campaign";
+import {
+  CollapsibleCard,
+  CollapsibleCardContent,
+  CollapsibleCardHeader,
+} from "@/components/ui/collapsible-card";
+import { CardTitle } from "@/components/ui/card";
+import { getDefaultOperationSignature } from "@/lib/operation-identity";
 
 import { cn } from "@/lib/utils";
 
@@ -78,6 +86,8 @@ function resolveInitialTab(
 }
 
 function buildCampaignDraft(campaign: Campaign | undefined) {
+  const op = campaign?.campaignProfileId ?? "panek-puglesi";
+  const defaultSig = getDefaultOperationSignature(op);
   return {
     subject: campaign?.subject ?? "",
     body: campaign?.body ?? "",
@@ -95,7 +105,7 @@ function buildCampaignDraft(campaign: Campaign | undefined) {
         } as CampaignFollowUp),
     signature: campaign?.signature
       ? { ...campaign.signature }
-      : ({ ...DEFAULT_SIGNATURE } as CampaignSignature),
+      : ({ ...defaultSig } as CampaignSignature),
   };
 }
 
@@ -180,6 +190,10 @@ function CampaignDetailContent({
     "clean"
   );
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
+  const [sendNowOpen, setSendNowOpen] = useState(false);
+  const setRecipientSourceMode = useAgentThreeStore(
+    (s) => s.setRecipientSourceMode
+  );
 
   const leads = useMemo(
     () =>
@@ -252,6 +266,7 @@ function CampaignDetailContent({
 
   const handleOpenInAgentThree = () => {
     if (isEditable) handleSave();
+    setRecipientSourceMode("campaign");
     selectProfile(campaign.campaignProfileId);
     selectCampaign(campaign.campaignProfileId, campaign.id);
     if (campaign.batchId) {
@@ -260,6 +275,11 @@ function CampaignDetailContent({
       updateBatchStage(campaign.batchId, "send");
     }
     router.push("/agente-3");
+  };
+
+  const handleSendNow = () => {
+    if (isEditable) handleSave();
+    setSendNowOpen(true);
   };
 
   return (
@@ -347,6 +367,14 @@ function CampaignDetailContent({
             Abrir no Agente 3
           </Button>
           <Button
+            variant="default"
+            onClick={handleSendNow}
+            className="bg-blue-600 hover:bg-blue-500"
+          >
+            <Play className="size-4" />
+            Enviar agora
+          </Button>
+          <Button
             variant="outline"
             onClick={() => {
               if (
@@ -374,6 +402,12 @@ function CampaignDetailContent({
         body={draft.body}
         sender={draft.fromEmail}
         replyTo={draft.replyTo}
+      />
+
+      <CampaignSendNowDialog
+        open={sendNowOpen}
+        onOpenChange={setSendNowOpen}
+        campaign={campaign}
       />
 
       <div className="flex flex-wrap gap-1 rounded-xl border border-border/60 bg-muted/20 p-1">
@@ -405,13 +439,33 @@ function CampaignDetailContent({
 
       {tab === "overview" && (
         <div className="space-y-6">
-          <CampaignOverview campaign={campaign} events={trackingEvents} />
+          <CollapsibleCard
+            storageKey={`campaign-detail-overview-${campaign.id}`}
+            defaultOpen
+          >
+            <CollapsibleCardHeader>
+              <CardTitle className="text-base">Overview / resumo</CardTitle>
+            </CollapsibleCardHeader>
+            <CollapsibleCardContent>
+              <CampaignOverview campaign={campaign} events={trackingEvents} />
+            </CollapsibleCardContent>
+          </CollapsibleCard>
           <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-100/90">
             Envio legado desativado nesta página. Use{" "}
-            <strong>Abrir no Agente 3</strong> para carregar e enviar os
-            destinatários elegíveis com proteção SMTP.
+            <strong>Abrir no Agente 3</strong> ou <strong>Enviar agora</strong>{" "}
+            (mesmo motor do Agente 3: preflight, dedupe, blocklist, fila).
           </div>
-          <CampaignSendErrorLog errors={campaign.sendErrors ?? []} />
+          <CollapsibleCard
+            storageKey={`campaign-detail-errors-${campaign.id}`}
+            defaultOpen={false}
+          >
+            <CollapsibleCardHeader>
+              <CardTitle className="text-base">Log de erros de envio</CardTitle>
+            </CollapsibleCardHeader>
+            <CollapsibleCardContent>
+              <CampaignSendErrorLog errors={campaign.sendErrors ?? []} />
+            </CollapsibleCardContent>
+          </CollapsibleCard>
           {campaign.followUp.enabled && (
             <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-100/90">
               Follow-up automático ativo — {campaign.followUp.delayDays} dias após
@@ -419,27 +473,47 @@ function CampaignDetailContent({
             </div>
           )}
           <div className="grid gap-6 xl:grid-cols-2">
-            <EmailPreviewPanel
-              subject={campaign.subject}
-              body={campaign.body}
-              signature={campaign.signature}
-              sendConfig={{
-                fromName: campaign.fromName,
-                fromEmail: campaign.fromEmail,
-                replyTo: campaign.replyTo,
-                unsubscribeLink: campaign.unsubscribeLink,
-              }}
-              previewLead={previewLead}
-              availableLeads={leads}
-              onPreviewLeadChange={setPreviewLeadId}
-              attachment={campaign.attachment}
-            />
-            <CampaignLeadsTable
-              campaign={campaign}
-              leads={leads}
-              onSelectLead={setPreviewLeadId}
-              selectedLeadId={previewLeadId}
-            />
+            <CollapsibleCard
+              storageKey={`campaign-detail-preview-${campaign.id}`}
+              defaultOpen
+            >
+              <CollapsibleCardHeader>
+                <CardTitle className="text-base">Preview do email</CardTitle>
+              </CollapsibleCardHeader>
+              <CollapsibleCardContent>
+                <EmailPreviewPanel
+                  subject={campaign.subject}
+                  body={campaign.body}
+                  signature={campaign.signature}
+                  sendConfig={{
+                    fromName: campaign.fromName,
+                    fromEmail: campaign.fromEmail,
+                    replyTo: campaign.replyTo,
+                    unsubscribeLink: campaign.unsubscribeLink,
+                  }}
+                  previewLead={previewLead}
+                  availableLeads={leads}
+                  onPreviewLeadChange={setPreviewLeadId}
+                  attachment={campaign.attachment}
+                />
+              </CollapsibleCardContent>
+            </CollapsibleCard>
+            <CollapsibleCard
+              storageKey={`campaign-detail-leads-overview-${campaign.id}`}
+              defaultOpen
+            >
+              <CollapsibleCardHeader>
+                <CardTitle className="text-base">Leads / destinatários</CardTitle>
+              </CollapsibleCardHeader>
+              <CollapsibleCardContent>
+                <CampaignLeadsTable
+                  campaign={campaign}
+                  leads={leads}
+                  onSelectLead={setPreviewLeadId}
+                  selectedLeadId={previewLeadId}
+                />
+              </CollapsibleCardContent>
+            </CollapsibleCard>
           </div>
         </div>
       )}
@@ -487,6 +561,7 @@ function CampaignDetailContent({
                 />
                 <CampaignSignatureSettings
                   signature={draft.signature}
+                  operation={campaign.campaignProfileId}
                   disabled={!isEditable}
                   onChange={(patch) =>
                     patchDraft((d) => ({
@@ -520,70 +595,100 @@ function CampaignDetailContent({
       )}
 
       {tab === "report" && (
-        <CampaignPerformanceReport
-          campaign={campaign}
-          events={trackingEvents}
-          onRefresh={refreshTracking}
-          refreshing={trackingRefreshing}
-        />
+        <CollapsibleCard
+          storageKey={`campaign-detail-report-${campaign.id}`}
+          defaultOpen
+        >
+          <CollapsibleCardHeader>
+            <CardTitle className="text-base">Relatório</CardTitle>
+          </CollapsibleCardHeader>
+          <CollapsibleCardContent>
+            <CampaignPerformanceReport
+              campaign={campaign}
+              events={trackingEvents}
+              onRefresh={refreshTracking}
+              refreshing={trackingRefreshing}
+            />
+          </CollapsibleCardContent>
+        </CollapsibleCard>
       )}
 
       {tab === "leads" && (
-        <CampaignLeadsTable
-          campaign={campaign}
-          leads={leads}
-          onSelectLead={(id) => {
-            setPreviewLeadId(id);
-            setTab("compose");
-          }}
-          selectedLeadId={previewLeadId}
-        />
+        <CollapsibleCard
+          storageKey={`campaign-detail-leads-tab-${campaign.id}`}
+          defaultOpen
+        >
+          <CollapsibleCardHeader>
+            <CardTitle className="text-base">Leads / destinatários</CardTitle>
+          </CollapsibleCardHeader>
+          <CollapsibleCardContent>
+            <CampaignLeadsTable
+              campaign={campaign}
+              leads={leads}
+              onSelectLead={(id) => {
+                setPreviewLeadId(id);
+                setTab("compose");
+              }}
+              selectedLeadId={previewLeadId}
+            />
+          </CollapsibleCardContent>
+        </CollapsibleCard>
       )}
 
       {tab === "settings" && (
         <div className="space-y-6">
-        <div className="grid gap-6 xl:grid-cols-2">
-          <BatchSendSettings
-            config={campaign.batchSend}
-            provider={campaign.emailProvider}
-            leadCount={campaign.leadIds.length}
-            disabled={!isEditable}
-            onChange={(patch) =>
-              updateCampaign(campaign.id, {
-                batchSend: { ...campaign.batchSend, ...patch },
-              })
-            }
-            onProviderChange={(id) =>
-              updateCampaign(campaign.id, { emailProvider: id })
-            }
-          />
-          <SendConfigForm
-            config={sendConfig}
-            subject={draft.subject}
-            disabled={!isEditable && campaign.status === "completed"}
-            onConfigChange={(patch) =>
-              patchDraft((d) => ({ ...d, ...patch }))
-            }
-            onSubjectChange={(subject) =>
-              patchDraft((d) => ({ ...d, subject }))
-            }
-            onInsertVariable={(v) =>
-              patchDraft((d) => ({ ...d, subject: d.subject + v }))
-            }
-          />
-          <FollowUpSettings
-            followUp={draft.followUp}
-            disabled={!isEditable && campaign.status === "completed"}
-            onChange={(patch) =>
-              patchDraft((d) => ({
-                ...d,
-                followUp: { ...d.followUp, ...patch },
-              }))
-            }
-          />
-        </div>
-        <EmailProviderSettings />
-        <SmtpAutonomousSettings />
+          <CollapsibleCard
+            storageKey={`campaign-detail-settings-${campaign.id}`}
+            defaultOpen
+          >
+            <CollapsibleCardHeader>
+              <CardTitle className="text-base">Settings / configurações</CardTitle>
+            </CollapsibleCardHeader>
+            <CollapsibleCardContent className="space-y-6">
+              <div className="grid gap-6 xl:grid-cols-2">
+                <BatchSendSettings
+                  config={campaign.batchSend}
+                  provider={campaign.emailProvider}
+                  leadCount={campaign.leadIds.length}
+                  disabled={!isEditable}
+                  onChange={(patch) =>
+                    updateCampaign(campaign.id, {
+                      batchSend: { ...campaign.batchSend, ...patch },
+                    })
+                  }
+                  onProviderChange={(id) =>
+                    updateCampaign(campaign.id, { emailProvider: id })
+                  }
+                />
+                <SendConfigForm
+                  config={sendConfig}
+                  subject={draft.subject}
+                  disabled={!isEditable && campaign.status === "completed"}
+                  onConfigChange={(patch) =>
+                    patchDraft((d) => ({ ...d, ...patch }))
+                  }
+                  onSubjectChange={(subject) =>
+                    patchDraft((d) => ({ ...d, subject }))
+                  }
+                  onInsertVariable={(v) =>
+                    patchDraft((d) => ({ ...d, subject: d.subject + v }))
+                  }
+                />
+                <FollowUpSettings
+                  followUp={draft.followUp}
+                  disabled={!isEditable && campaign.status === "completed"}
+                  onChange={(patch) =>
+                    patchDraft((d) => ({
+                      ...d,
+                      followUp: { ...d.followUp, ...patch },
+                    }))
+                  }
+                />
+              </div>
+              <EmailProviderSettings />
+              <SmtpAutonomousSettings />
+            </CollapsibleCardContent>
+          </CollapsibleCard>
         </div>
       )}
     </div>

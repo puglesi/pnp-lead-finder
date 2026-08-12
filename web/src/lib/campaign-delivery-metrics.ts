@@ -32,21 +32,30 @@ export function isRealDeliveryMessageId(
   return true;
 }
 
+function isLeadStatusRecord(
+  status: unknown
+): status is CampaignLeadStatus {
+  return Boolean(status) && typeof status === "object" && !Array.isArray(status);
+}
+
 /**
  * Confirmed delivery requires a non-simulate provider message id.
  * Engagement alone (opened/clicked/replied) without real SMTP evidence does not count.
+ * Null/undefined nested entries from legacy storage are treated as non-delivery.
  */
 export function isConfirmedCampaignDelivery(
-  status: CampaignLeadStatus
+  status: CampaignLeadStatus | null | undefined
 ): boolean {
+  if (!isLeadStatusRecord(status)) return false;
   if (!DELIVERY_STATUSES.has(status.status)) return false;
   return isRealDeliveryMessageId(status.providerMessageId);
 }
 
 /** Any pseudo-delivery that must return to pending for Agent 3. */
 export function isUnconfirmedCampaignSent(
-  status: CampaignLeadStatus
+  status: CampaignLeadStatus | null | undefined
 ): boolean {
+  if (!isLeadStatusRecord(status)) return false;
   return (
     DELIVERY_STATUSES.has(status.status) &&
     !isRealDeliveryMessageId(status.providerMessageId)
@@ -54,8 +63,9 @@ export function isUnconfirmedCampaignSent(
 }
 
 export function isNotConfiguredCampaignFailure(
-  status: CampaignLeadStatus
+  status: CampaignLeadStatus | null | undefined
 ): boolean {
+  if (!isLeadStatusRecord(status)) return false;
   if (status.status !== "failed") return false;
   if (status.errorCode === "NOT_CONFIGURED") return true;
   if (status.errorCode === "BAD_REQUEST") return true;
@@ -70,7 +80,10 @@ export function isNotConfiguredCampaignFailure(
 }
 
 /** Failures that never reached a real mailbox (no SMTP confirmation). */
-export function isNonSmtpLegacyFailure(status: CampaignLeadStatus): boolean {
+export function isNonSmtpLegacyFailure(
+  status: CampaignLeadStatus | null | undefined
+): boolean {
+  if (!isLeadStatusRecord(status)) return false;
   if (status.status !== "failed") return false;
   if (isNotConfiguredCampaignFailure(status)) return true;
   // No real provider message id ⇒ no confirmed SMTP hop.
@@ -90,15 +103,19 @@ export function isNonSmtpLegacyFailure(status: CampaignLeadStatus): boolean {
 }
 
 export function countConfirmedSent(
-  leadStatuses: readonly CampaignLeadStatus[]
+  leadStatuses: readonly CampaignLeadStatus[] | null | undefined
 ): number {
+  if (!Array.isArray(leadStatuses)) return 0;
   return leadStatuses.filter(isConfirmedCampaignDelivery).length;
 }
 
 export function countFailedDeliveries(
-  leadStatuses: readonly CampaignLeadStatus[]
+  leadStatuses: readonly CampaignLeadStatus[] | null | undefined
 ): number {
-  return leadStatuses.filter((status) => status.status === "failed").length;
+  if (!Array.isArray(leadStatuses)) return 0;
+  return leadStatuses.filter(
+    (status) => isLeadStatusRecord(status) && status.status === "failed"
+  ).length;
 }
 
 export function deriveCampaignDeliveryCounts(
@@ -116,6 +133,7 @@ export function deriveCampaignDeliveryCounts(
   let clickedCount = 0;
   let repliedCount = 0;
   for (const status of leadStatuses) {
+    if (!isLeadStatusRecord(status)) continue;
     if (status.status === "failed") {
       failedCount += 1;
       continue;
@@ -161,28 +179,33 @@ export function reconcileCampaignDelivery(campaign: Campaign): {
   const recoveredLeadIds = new Set<string>();
   const simulateCampaign = campaign.emailProvider === "simulate";
 
-  const leadStatuses = (campaign.leadStatuses ?? []).map((status) => {
-    if (isNotConfiguredCampaignFailure(status) || isNonSmtpLegacyFailure(status)) {
-      recoveredNotConfiguredCount += 1;
-      recoveredLeadIds.add(status.leadId);
-      return { leadId: status.leadId, status: "pending" as const };
-    }
-    // Simulate provider never produces real SMTP confirmations.
-    if (
-      simulateCampaign &&
-      (DELIVERY_STATUSES.has(status.status) || status.status === "failed")
-    ) {
-      demotedUnconfirmedSentCount += 1;
-      recoveredLeadIds.add(status.leadId);
-      return { leadId: status.leadId, status: "pending" as const };
-    }
-    if (isUnconfirmedCampaignSent(status)) {
-      demotedUnconfirmedSentCount += 1;
-      recoveredLeadIds.add(status.leadId);
-      return { leadId: status.leadId, status: "pending" as const };
-    }
-    return status;
-  });
+  const leadStatuses = (campaign.leadStatuses ?? [])
+    .filter(isLeadStatusRecord)
+    .map((status) => {
+      if (
+        isNotConfiguredCampaignFailure(status) ||
+        isNonSmtpLegacyFailure(status)
+      ) {
+        recoveredNotConfiguredCount += 1;
+        recoveredLeadIds.add(status.leadId);
+        return { leadId: status.leadId, status: "pending" as const };
+      }
+      // Simulate provider never produces real SMTP confirmations.
+      if (
+        simulateCampaign &&
+        (DELIVERY_STATUSES.has(status.status) || status.status === "failed")
+      ) {
+        demotedUnconfirmedSentCount += 1;
+        recoveredLeadIds.add(status.leadId);
+        return { leadId: status.leadId, status: "pending" as const };
+      }
+      if (isUnconfirmedCampaignSent(status)) {
+        demotedUnconfirmedSentCount += 1;
+        recoveredLeadIds.add(status.leadId);
+        return { leadId: status.leadId, status: "pending" as const };
+      }
+      return status;
+    });
 
   // Ensure every leadId has a status entry (legacy campaigns sometimes only stored counters).
   const statusByLeadId = new Map(leadStatuses.map((s) => [s.leadId, s]));
@@ -206,6 +229,7 @@ export function reconcileCampaignDelivery(campaign: Campaign): {
 
   const counts = deriveCampaignDeliveryCounts(normalizedLeadStatuses);
   const sendErrors = (campaign.sendErrors ?? []).filter((error) => {
+    if (!error || typeof error !== "object") return false;
     if (recoveredLeadIds.has(error.leadId)) return false;
     if (error.errorCode === "NOT_CONFIGURED") return false;
     if (simulateCampaign) return false;

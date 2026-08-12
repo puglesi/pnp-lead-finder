@@ -24,6 +24,7 @@ import { ArrowRight } from "lucide-react";
 import { useLeadStore } from "@/store/lead-store";
 import { useCampaignStore } from "@/store/campaign-store";
 import { useEmailBlocklistStore } from "@/store/email-blocklist-store";
+import { DashboardSectionBoundary } from "@/components/dashboard/dashboard-section-boundary";
 import { cn } from "@/lib/utils";
 
 type DashboardTab =
@@ -65,10 +66,10 @@ export function DashboardTabs() {
   // URL deep-link wins until the user clicks another tab in this session.
   const tab = manualTab ?? urlTab;
   const setTab = (next: DashboardTab) => setManualTab(next);
-  const savedLeadsCount = useLeadStore((s) => s.savedLeads.length);
-  const campaigns = useCampaignStore((s) => s.campaigns);
+  const savedLeadsCount = useLeadStore((s) => s.savedLeads?.length ?? 0);
+  const campaigns = useCampaignStore((s) => s.campaigns ?? []);
   const campaignCount = campaigns.length;
-  const blockedCount = useEmailBlocklistStore((s) => s.entries.length);
+  const blockedCount = useEmailBlocklistStore((s) => s.entries?.length ?? 0);
 
   return (
     <div className="space-y-6">
@@ -113,10 +114,18 @@ export function DashboardTabs() {
 
       {tab === "overview" && (
         <div className="space-y-8">
-          <StatsCards />
-          <GlobalHistorySearch />
-          <BlockedEmailsPanel />
-          <RecentSearches />
+          <DashboardSectionBoundary name="StatsCards">
+            <StatsCards />
+          </DashboardSectionBoundary>
+          <DashboardSectionBoundary name="GlobalHistorySearch">
+            <GlobalHistorySearch />
+          </DashboardSectionBoundary>
+          <DashboardSectionBoundary name="BlockedEmailsPanel">
+            <BlockedEmailsPanel />
+          </DashboardSectionBoundary>
+          <DashboardSectionBoundary name="RecentSearches">
+            <RecentSearches />
+          </DashboardSectionBoundary>
           <div className="rounded-xl border border-border/50 bg-card/40 p-4 text-sm text-muted-foreground">
             <p className="font-medium text-foreground">
               Busca e prospecção ficam no Agente 1
@@ -151,7 +160,9 @@ export function DashboardTabs() {
               </Link>
             </Button>
           </div>
-          <CampaignListTable campaigns={campaigns} />
+          <DashboardSectionBoundary name="CampaignListTable">
+            <CampaignListTable campaigns={campaigns} />
+          </DashboardSectionBoundary>
         </div>
       )}
 
@@ -163,7 +174,9 @@ export function DashboardTabs() {
               Mesmos dados de Meus Leads — agora dentro do Dashboard.
             </p>
           </div>
-          <SavedLeadsTable />
+          <DashboardSectionBoundary name="SavedLeadsTable">
+            <SavedLeadsTable />
+          </DashboardSectionBoundary>
         </div>
       )}
 
@@ -175,14 +188,20 @@ export function DashboardTabs() {
               Setores pesquisados e registro completo de buscas anteriores.
             </p>
           </div>
-          <SearchedSectorsHistory />
-          <FullSearchHistory />
+          <DashboardSectionBoundary name="SearchedSectorsHistory">
+            <SearchedSectorsHistory />
+          </DashboardSectionBoundary>
+          <DashboardSectionBoundary name="FullSearchHistory">
+            <FullSearchHistory />
+          </DashboardSectionBoundary>
         </div>
       )}
 
       {tab === "blocked" && (
         <div className="space-y-4">
-          <BlockedEmailsPanel />
+          <DashboardSectionBoundary name="BlockedEmailsPanel">
+            <BlockedEmailsPanel />
+          </DashboardSectionBoundary>
         </div>
       )}
     </div>

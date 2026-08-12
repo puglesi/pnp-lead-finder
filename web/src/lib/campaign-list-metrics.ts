@@ -30,9 +30,10 @@ export function countConfirmedSmtpSends(campaign: Campaign): number {
  */
 export function isListConfirmedSmtpDelivery(
   campaign: Campaign,
-  status: CampaignLeadStatus
+  status: CampaignLeadStatus | null | undefined
 ): boolean {
-  if (campaign.emailProvider === "simulate") return false;
+  if (!status || typeof status !== "object") return false;
+  if (campaign?.emailProvider === "simulate") return false;
   if (!isConfirmedCampaignDelivery(status)) return false;
   // Belt-and-suspenders: require real message id again at list boundary.
   return isRealDeliveryMessageId(status.providerMessageId);
@@ -79,6 +80,8 @@ export function getCampaignListViewStats(campaigns: readonly Campaign[]): {
     if (sent > 0) {
       totalReplied += (campaign.leadStatuses ?? []).filter(
         (status) =>
+          status &&
+          typeof status === "object" &&
           isListConfirmedSmtpDelivery(campaign, status) &&
           status.status === "replied"
       ).length;

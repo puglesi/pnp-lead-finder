@@ -18,6 +18,7 @@ import type { Campaign } from "../types/campaign.ts";
 import type { CampaignProfileId } from "../types/campaign-profile.ts";
 import type { AgentThreeOperationState } from "./agent-three-queue.ts";
 import type { EmailContactKind } from "./global-email-deduplication.ts";
+import { safeObjectEntries, safeObjectValues } from "./safe-object.ts";
 
 export type ListImportField =
   | "email"
@@ -169,7 +170,7 @@ export function detectColumnMapping(headers: string[]): DetectedColumns {
   }
 
   const needsManualMapping = emailColumn === null;
-  const mappedUseful = Object.values(mapping).filter((v) => v !== "ignore").length;
+  const mappedUseful = safeObjectValues(mapping).filter((v) => v !== "ignore").length;
   const confidence: DetectedColumns["confidence"] = needsManualMapping
     ? "manual"
     : mappedUseful >= 2
@@ -190,7 +191,7 @@ function fieldValue(
   mapping: ColumnMapping,
   field: ListImportField
 ): string {
-  for (const [index, mapped] of Object.entries(mapping)) {
+  for (const [index, mapped] of safeObjectEntries<ListImportField>(mapping)) {
     if (mapped === field) return (cells[Number(index)] ?? "").trim();
   }
   return "";
@@ -248,7 +249,7 @@ export function leadsFromMappedRows(
     leads,
     headers,
     mapping,
-    needsManualMapping: !Object.values(mapping).includes("email"),
+    needsManualMapping: !safeObjectValues(mapping).includes("email"),
     rawRowCount: dataRows.length,
     errors,
   };

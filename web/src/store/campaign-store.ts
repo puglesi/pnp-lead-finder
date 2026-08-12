@@ -31,6 +31,8 @@ import { useLeadStore } from "@/store/lead-store";
 import { useSettingsStore } from "@/store/settings-store";
 import { useBatchPipelineStore } from "@/store/batch-pipeline-store";
 import { applyCampaignDeliveryReconciliation } from "@/lib/campaign-metrics";
+import { normalizeCampaignPersistSlice } from "@/lib/store-rehydrate";
+import { asArray } from "@/lib/safe-object";
 
 interface CampaignStore {
   campaigns: Campaign[];
@@ -401,25 +403,46 @@ export const useCampaignStore = create<CampaignStore>()(
       getCampaign: (id) => get().campaigns.find((c) => c.id === id),
 
       getStats: () => {
-        const { campaigns } = get();
+        const campaigns = Array.isArray(get().campaigns) ? get().campaigns : [];
         return {
           total: campaigns.length,
           active: campaigns.filter((c) => c.status === "active").length,
           draft: campaigns.filter((c) => c.status === "draft").length,
           completed: campaigns.filter((c) => c.status === "completed").length,
-          totalSent: campaigns.reduce(
-            (sum, c) =>
-              sum + applyCampaignDeliveryReconciliation(c).sentCount,
-            0
-          ),
+          totalSent: campaigns.reduce((sum, c) => {
+            try {
+              return sum + applyCampaignDeliveryReconciliation(c).sentCount;
+            } catch {
+              return sum;
+            }
+          }, 0),
         };
       },
 
       normalizeLegacyDeliveryMetrics: () => {
         set((state) => ({
-          campaigns: state.campaigns.map((campaign) =>
-            applyCampaignDeliveryReconciliation(campaign)
-          ),
+          campaigns: (Array.isArray(state.campaigns) ? state.campaigns : [])
+            .map((campaign) => {
+              try {
+                return applyCampaignDeliveryReconciliation({
+                  ...campaign,
+                  leadIds: Array.isArray(campaign.leadIds)
+                    ? campaign.leadIds
+                    : [],
+                  leadStatuses: Array.isArray(campaign.leadStatuses)
+                    ? campaign.leadStatuses
+                    : initLeadStatuses(
+                        Array.isArray(campaign.leadIds) ? campaign.leadIds : []
+                      ),
+                  sendErrors: Array.isArray(campaign.sendErrors)
+                    ? campaign.sendErrors
+                    : [],
+                });
+              } catch {
+                return campaign;
+              }
+            })
+            .filter(Boolean),
           sendingProgress: null,
           sendingCampaignId: null,
           sendPaused: false,
@@ -459,11 +482,27 @@ export const useCampaignStore = create<CampaignStore>()(
     }),
     {
       name: "pnp-campaigns",
-      // v13: persist explicit first-contact/follow-up classification.
-      version: 13,
+      // v14: safe arrays + new statuses (saved/archived) without wiping data.
+      version: 14,
       migrate: (persisted, fromVersion) => {
-        const state = persisted as { campaigns?: Campaign[] };
-        if (!state?.campaigns) return persisted;
+        const state = persisted as { campaigns?: Campaign[] } | null;
+        if (!state || typeof state !== "object") {
+          return {
+            campaigns: [],
+            sendingProgress: null,
+            sendingCampaignId: null,
+            sendPaused: false,
+          };
+        }
+        if (!Array.isArray(state.campaigns)) {
+          return {
+            ...state,
+            campaigns: [],
+            sendingProgress: null,
+            sendingCampaignId: null,
+            sendPaused: false,
+          };
+        }
 
         const isLegacySignature = (body?: string) =>
           Boolean(
@@ -498,10 +537,13 @@ export const useCampaignStore = create<CampaignStore>()(
               replyTo: c.replyTo ?? SEND_DEFAULTS.replyTo,
               unsubscribeLink: c.unsubscribeLink ?? DEFAULT_UNSUBSCRIBE_LINK,
               followUp: c.followUp ?? { ...DEFAULT_FOLLOW_UP },
-              leadStatuses:
-                c.leadStatuses?.length > 0
-                  ? c.leadStatuses
-                  : initLeadStatuses(c.leadIds ?? []),
+              status: normalizeCampaignStatus(c.status),
+              leadIds: Array.isArray(c.leadIds) ? c.leadIds : [],
+              leadStatuses: Array.isArray(c.leadStatuses)
+                ? c.leadStatuses
+                : initLeadStatuses(
+                    Array.isArray(c.leadIds) ? c.leadIds : []
+                  ),
               clickedCount: c.clickedCount ?? 0,
               attachment: c.attachment ?? null,
               signature,
@@ -509,51 +551,63 @@ export const useCampaignStore = create<CampaignStore>()(
                 ...(isAutonomousProvider(c.emailProvider ?? "simulate")
                   ? DEFAULT_AUTONOMOUS_BATCH_CONFIG
                   : DEFAULT_BATCH_SEND_CONFIG),
-                ...c.batchSend,
+                ...(c.batchSend && typeof c.batchSend === "object"
+                  ? c.batchSend
+                  : {}),
                 dailyLimit:
                   c.batchSend?.dailyLimit ??
                   (isAutonomousProvider(c.emailProvider ?? "simulate") ? 100 : 0),
               },
-              sendErrors: c.sendErrors ?? [],
+              sendErrors: Array.isArray(c.sendErrors) ? c.sendErrors : [],
               failedCount: c.failedCount ?? 0,
               sentCount: c.sentCount ?? 0,
               openedCount: c.openedCount ?? 0,
               repliedCount: c.repliedCount ?? 0,
               emailProvider: c.emailProvider ?? "simulate",
             };
-            return applyCampaignDeliveryReconciliation(base);
+            try {
+              return applyCampaignDeliveryReconciliation(base);
+            } catch {
+              return base;
+            }
           }),
         };
       },
       merge: (persisted, current) => {
-        const state = (persisted ?? {}) as {
-          campaigns?: Campaign[];
-          sendingCampaignId?: string | null;
-          sendingProgress?: unknown;
-          sendPaused?: boolean;
-        };
-        const campaigns = Array.isArray(state.campaigns)
-          ? state.campaigns.map((campaign) =>
-              applyCampaignDeliveryReconciliation({
+        // Exact field repair first: campaigns / leadIds / leadStatuses / sendErrors
+        // must never reach UI as null (legacy Object.values / .map crashes).
+        const normalized = normalizeCampaignPersistSlice(persisted);
+        const campaigns = asArray<Campaign>(normalized.campaigns)
+          .map((campaign) => {
+            if (!campaign || typeof campaign !== "object") return null;
+            try {
+              return applyCampaignDeliveryReconciliation({
                 ...campaign,
-                leadStatuses:
-                  campaign.leadStatuses?.length > 0
-                    ? campaign.leadStatuses
-                    : initLeadStatuses(campaign.leadIds ?? []),
-                sendErrors: campaign.sendErrors ?? [],
+                status: normalizeCampaignStatus(campaign.status),
+                leadIds: asArray<string>(campaign.leadIds),
+                leadStatuses: asArray(campaign.leadStatuses).length
+                  ? asArray(campaign.leadStatuses)
+                  : initLeadStatuses(asArray<string>(campaign.leadIds)),
+                sendErrors: asArray(campaign.sendErrors),
                 failedCount: campaign.failedCount ?? 0,
                 sentCount: campaign.sentCount ?? 0,
                 openedCount: campaign.openedCount ?? 0,
                 clickedCount: campaign.clickedCount ?? 0,
                 repliedCount: campaign.repliedCount ?? 0,
                 emailProvider: campaign.emailProvider ?? "simulate",
-              } as Campaign)
-            )
-          : current.campaigns;
+              } as Campaign);
+            } catch {
+              return null;
+            }
+          })
+          .filter((c): c is Campaign => Boolean(c));
         return {
           ...current,
-          ...state,
-          campaigns,
+          campaigns: campaigns.length > 0 || Array.isArray(
+            (persisted as { campaigns?: unknown } | null)?.campaigns
+          )
+            ? campaigns
+            : current.campaigns,
           sendingProgress: null,
           sendingCampaignId: null,
           sendPaused: false,
@@ -562,3 +616,19 @@ export const useCampaignStore = create<CampaignStore>()(
     }
   )
 );
+
+function normalizeCampaignStatus(
+  status: unknown
+): import("@/types/campaign").CampaignStatus {
+  if (
+    status === "draft" ||
+    status === "saved" ||
+    status === "active" ||
+    status === "paused" ||
+    status === "completed" ||
+    status === "archived"
+  ) {
+    return status;
+  }
+  return "draft";
+}

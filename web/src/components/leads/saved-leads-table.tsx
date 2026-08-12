@@ -41,13 +41,22 @@ function filterLeads(
 }
 
 export function SavedLeadsTable() {
-  const { savedLeads, clearAllSavedLeads } = useLeadStore();
+  // Never whole-store destructure — savedLeads can be null before merge repair.
+  const savedLeads = useLeadStore((s) => s.savedLeads ?? []);
+  const clearAllSavedLeads = useLeadStore((s) => s.clearAllSavedLeads);
   const [scoreFilter, setScoreFilter] = useState<ScoreFilter>("all");
   const [emailFilter, setEmailFilter] = useState<EmailFilter>("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
 
   const categories = useMemo(
-    () => [...new Set(savedLeads.map((l) => l.category))],
+    () =>
+      [
+        ...new Set(
+          (Array.isArray(savedLeads) ? savedLeads : []).map(
+            (l) => l?.category
+          )
+        ),
+      ].filter((c): c is string => Boolean(c)),
     [savedLeads]
   );
 

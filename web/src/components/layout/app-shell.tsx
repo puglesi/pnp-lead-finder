@@ -4,6 +4,7 @@ import { Suspense } from "react";
 import { LocalProductionBootstrap } from "@/components/providers/local-production-bootstrap";
 import { SerpApiBootstrap } from "@/components/providers/serpapi-bootstrap";
 import { SessionUiBootstrap } from "@/components/providers/session-ui-bootstrap";
+import { DevErrorLogger } from "@/components/providers/dev-error-logger";
 import { BatchPipelineIndicator } from "@/components/pipeline/batch-pipeline-indicator";
 import { Sidebar } from "./sidebar";
 import { Navbar } from "./navbar";
@@ -11,6 +12,7 @@ import { Navbar } from "./navbar";
 export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-screen overflow-hidden bg-background">
+      <DevErrorLogger />
       <SerpApiBootstrap />
       <LocalProductionBootstrap />
       <Suspense fallback={null}>

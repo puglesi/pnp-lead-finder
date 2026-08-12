@@ -76,6 +76,11 @@ export default function CampanhasPage() {
         </Button>
       </div>
 
+      <CollapsibleCard storageKey="campanhas-kpi-summary" defaultOpen>
+        <CollapsibleCardHeader>
+          <CardTitle className="text-base">Resumo das campanhas</CardTitle>
+        </CollapsibleCardHeader>
+        <CollapsibleCardContent>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {[
           {
@@ -122,6 +127,8 @@ export default function CampanhasPage() {
           );
         })}
       </div>
+        </CollapsibleCardContent>
+      </CollapsibleCard>
 
       <CollapsibleCard storageKey="campaigns-list" className="border-border/60">
         <CollapsibleCardHeader>

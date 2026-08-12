@@ -5,6 +5,7 @@
 import { INITIAL_AGENT_ONE_SNAPSHOT } from "./agent-one-queue.ts";
 import { INITIAL_AGENT_TWO_SNAPSHOT } from "./agent-two-queue.ts";
 import { createInitialAgentThreeSnapshot } from "./agent-three-queue.ts";
+import { asArray, safeObjectKeys } from "./safe-object.ts";
 
 export const CLEAR_UI_TOAST =
   "Interface limpa. Seus dados salvos foram preservados.";
@@ -100,8 +101,10 @@ export async function clearUiSessionState(): Promise<ClearUiSessionResult> {
   ]);
 
   const leadBefore = useLeadStore.getState();
-  const campaignsBefore = useCampaignStore.getState().campaigns;
-  const batchesBefore = useBatchPipelineStore.getState().batches;
+  const campaignsBefore = asArray<import("../types/campaign.ts").Campaign>(
+    useCampaignStore.getState().campaigns
+  );
+  const batchesBefore = useBatchPipelineStore.getState().batches ?? {};
 
   useLeadStore.setState({
     ...buildClearedLeadUiState(),
@@ -131,12 +134,18 @@ export async function clearUiSessionState(): Promise<ClearUiSessionResult> {
 
   const agentThree = useAgentThreeStore.getState();
   const initialThree = createInitialAgentThreeSnapshot();
-  const nextOps = { ...agentThree.operations };
-  for (const profileId of Object.keys(nextOps) as Array<
+  // Never Object.keys(null) if operations missing after legacy rehydrate.
+  const nextOps = {
+    ...initialThree.operations,
+    ...(agentThree.operations && typeof agentThree.operations === "object"
+      ? agentThree.operations
+      : {}),
+  };
+  for (const profileId of safeObjectKeys(nextOps) as Array<
     keyof typeof nextOps
   >) {
     const op = nextOps[profileId];
-    if (op.status === "running" || op.status === "paused") continue;
+    if (!op || op.status === "running" || op.status === "paused") continue;
     nextOps[profileId] = {
       ...initialThree.operations[profileId],
       // Keep profile-level interval/limit prefs; drop selection + queue work.
@@ -147,14 +156,18 @@ export async function clearUiSessionState(): Promise<ClearUiSessionResult> {
       currentCampaignId: null,
     };
   }
-  useAgentThreeStore.setState({ operations: nextOps });
+  useAgentThreeStore.setState({
+    operations: nextOps,
+    recipientSourceMode: "campaign",
+    importTemplateId: null,
+  });
 
   return {
     preserved: {
-      savedLeads: leadBefore.savedLeads.length,
-      history: leadBefore.fullSearchHistory.length,
+      savedLeads: asArray(leadBefore.savedLeads).length,
+      history: asArray(leadBefore.fullSearchHistory).length,
       campaigns: campaignsBefore.length,
-      batches: Object.keys(batchesBefore).length,
+      batches: safeObjectKeys(batchesBefore).length,
     },
   };
 }
@@ -171,11 +184,17 @@ export async function syncCompletedCampaignsAndBatches(): Promise<void> {
 
   useCampaignStore.getState().normalizeLegacyDeliveryMetrics();
 
-  const campaigns = useCampaignStore.getState().campaigns;
+  const campaigns = asArray<import("../types/campaign.ts").Campaign>(
+    useCampaignStore.getState().campaigns
+  );
   const pipeline = useBatchPipelineStore.getState();
   for (const campaign of campaigns) {
-    if (!campaign.batchId) continue;
-    if (!isCampaignFullyDelivered(campaign)) continue;
-    pipeline.updateBatchStage(campaign.batchId, "complete");
+    if (!campaign?.batchId) continue;
+    try {
+      if (!isCampaignFullyDelivered(campaign)) continue;
+      pipeline.updateBatchStage(campaign.batchId, "complete");
+    } catch {
+      // Skip malformed legacy campaign entries without aborting boot.
+    }
   }
 }

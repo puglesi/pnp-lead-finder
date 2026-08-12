@@ -40,7 +40,7 @@ function formatDate(value: string) {
 }
 
 export function BlockedEmailsPanel() {
-  const entries = useEmailBlocklistStore((s) => s.entries);
+  const entries = useEmailBlocklistStore((s) => s.entries ?? []);
   const addEmail = useEmailBlocklistStore((s) => s.addEmail);
   const addEmails = useEmailBlocklistStore((s) => s.addEmails);
   const removeById = useEmailBlocklistStore((s) => s.removeById);
@@ -54,18 +54,23 @@ export function BlockedEmailsPanel() {
   const [filter, setFilter] = useState("");
 
   const filtered = useMemo(() => {
+    const list = Array.isArray(entries) ? entries : [];
     const q = filter.trim().toLowerCase();
-    if (!q) return entries;
-    return entries.filter(
-      (entry) =>
-        entry.normalizedEmail.includes(q) ||
-        entry.reason.includes(q) ||
+    if (!q) return list;
+    return list.filter((entry) => {
+      const reasonLabel =
+        EMAIL_BLOCK_REASON_LABELS[entry.reason] ?? String(entry.reason ?? "");
+      const opLabel =
+        EMAIL_BLOCK_OPERATION_LABELS[entry.operation] ??
+        String(entry.operation ?? "");
+      return (
+        (entry.normalizedEmail ?? "").includes(q) ||
+        (entry.reason ?? "").includes(q) ||
         (entry.note?.toLowerCase().includes(q) ?? false) ||
-        EMAIL_BLOCK_REASON_LABELS[entry.reason].toLowerCase().includes(q) ||
-        EMAIL_BLOCK_OPERATION_LABELS[entry.operation]
-          .toLowerCase()
-          .includes(q)
-    );
+        reasonLabel.toLowerCase().includes(q) ||
+        opLabel.toLowerCase().includes(q)
+      );
+    });
   }, [entries, filter]);
 
   function handleAddSingle() {
@@ -260,10 +265,14 @@ export function BlockedEmailsPanel() {
                         Bloqueado — não será prospectado
                       </Badge>
                       <Badge variant="secondary" className="text-[10px]">
-                        {EMAIL_BLOCK_REASON_LABELS[entry.reason]}
+                        {EMAIL_BLOCK_REASON_LABELS[entry.reason] ??
+                          entry.reason ??
+                          "manual"}
                       </Badge>
                       <Badge variant="outline" className="text-[10px]">
-                        {EMAIL_BLOCK_OPERATION_LABELS[entry.operation]}
+                        {EMAIL_BLOCK_OPERATION_LABELS[entry.operation] ??
+                          entry.operation ??
+                          "both"}
                       </Badge>
                     </div>
                     <p className="text-xs text-muted-foreground">

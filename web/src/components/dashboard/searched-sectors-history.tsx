@@ -26,11 +26,19 @@ export function SearchedSectorsHistory({
   className,
 }: SearchedSectorsHistoryProps) {
   const router = useRouter();
-  const sectorHistory = useLeadStore((s) => s.sectorHistory);
-  const lastBulkSearchLocation = useLeadStore((s) => s.lastBulkSearchLocation);
+  const sectorHistory = useLeadStore((s) => s.sectorHistory ?? []);
+  const lastBulkSearchLocation = useLeadStore(
+    (s) => s.lastBulkSearchLocation ?? ""
+  );
   const performBulkSearch = useLeadStore((s) => s.performBulkSearch);
   const isSearching = useLeadStore((s) => s.isSearching);
-  const settings = useSettingsStore();
+  const useMaxLeads = useSettingsStore((s) => s.useMaxLeads);
+  const serpapiDeepPagination = useSettingsStore((s) => s.serpapiDeepPagination);
+  const provider = useSettingsStore((s) => s.provider);
+  const searchProfile = useSettingsStore((s) => s.searchProfile);
+  const getEffectiveMaxResults = useSettingsStore(
+    (s) => s.getEffectiveMaxResults
+  );
   const remaining = useUsageStore((s) => s.getRemainingSerpApi());
   const creditExhausted = useUsageStore((s) => s.creditExhausted);
 
@@ -38,34 +46,39 @@ export function SearchedSectorsHistory({
   const [loadingSector, setLoadingSector] = useState<string | null>(null);
 
   const filteredSectors = useMemo(() => {
+    const list = Array.isArray(sectorHistory) ? sectorHistory : [];
     const query = filter.trim().toLowerCase();
-    if (!query) return sectorHistory;
-    return sectorHistory.filter((sector) =>
-      sector.toLowerCase().includes(query)
+    if (!query) return list;
+    return list.filter((sector) =>
+      String(sector).toLowerCase().includes(query)
     );
   }, [filter, sectorHistory]);
 
-  const searchLocation = lastBulkSearchLocation.trim() || "London";
+  const searchLocation =
+    (typeof lastBulkSearchLocation === "string"
+      ? lastBulkSearchLocation
+      : ""
+    ).trim() || "London";
 
   const runSingleSectorSearch = async (sector: string) => {
     if (isSearching || loadingSector) return;
 
     const serpPagination = {
-      useMaxLeads: settings.useMaxLeads,
-      deepPagination: settings.serpapiDeepPagination,
+      useMaxLeads,
+      deepPagination: serpapiDeepPagination,
     };
-    const effectiveMax = settings.getEffectiveMaxResults();
+    const effectiveMax = getEffectiveMaxResults();
     const estimatedCalls = estimateSerpApiCalls(
       1,
-      settings.provider,
-      settings.searchProfile,
+      provider,
+      searchProfile,
       effectiveMax,
       serpPagination
     );
 
     if (
-      settings.searchProfile === "serpapi" &&
-      settings.provider === "serpapi" &&
+      searchProfile === "serpapi" &&
+      provider === "serpapi" &&
       estimatedCalls > 0 &&
       estimatedCalls > remaining &&
       !creditExhausted
@@ -101,7 +114,7 @@ export function SearchedSectorsHistory({
     }
   };
 
-  if (sectorHistory.length === 0) {
+  if (!Array.isArray(sectorHistory) || sectorHistory.length === 0) {
     return (
       <Card className={cn("border-border/60", className)}>
         <CardContent
@@ -204,13 +217,12 @@ export function SearchedSectorsHistory({
           <MapPin className="size-3.5 shrink-0" />
           Clique em um setor para iniciar busca só com ele em{" "}
           <strong className="text-foreground">{searchLocation}</strong>
-          {settings.searchProfile === "serpapi" &&
-            settings.provider === "serpapi" && (
+          {searchProfile === "serpapi" && provider === "serpapi" && (
               <span>
                 · ~{getSerpApiPagesPerSector({
-                  useMaxLeads: settings.useMaxLeads,
-                  deepPagination: settings.serpapiDeepPagination,
-                  leadsPerSector: settings.getEffectiveMaxResults(),
+                  useMaxLeads,
+                  deepPagination: serpapiDeepPagination,
+                  leadsPerSector: getEffectiveMaxResults(),
                 })}{" "}
                 buscas/setor
               </span>

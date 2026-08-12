@@ -125,7 +125,7 @@ export function ListFileImportCard({
       toast.error("Reenvie o arquivo após mapear as colunas.");
       return;
     }
-    if (!Object.values(manualMapping).includes("email")) {
+    if (!Object.values(manualMapping ?? {}).includes("email")) {
       toast.error("Selecione qual coluna é o e-mail.");
       return;
     }

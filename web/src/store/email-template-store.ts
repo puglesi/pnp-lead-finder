@@ -8,6 +8,8 @@ import {
   type EmailTemplate,
   type EmailTemplateInput,
 } from "@/lib/email-template-library";
+import { normalizeTemplatesPersistSlice } from "@/lib/store-rehydrate";
+import { asArray } from "@/lib/safe-object";
 
 interface EmailTemplateStore {
   templates: EmailTemplate[];
@@ -171,11 +173,11 @@ export const useEmailTemplateStore = create<EmailTemplateStore>()(
     }),
     {
       name: "pnp-email-templates",
-      version: 4,
+      version: 5,
       partialize: (state) => ({ templates: state.templates }),
       migrate: (persisted, version) => {
         const state = persisted as Partial<EmailTemplateStore> | undefined;
-        if (!state?.templates?.length) {
+        if (!state || !Array.isArray(state.templates) || state.templates.length === 0) {
           return { templates: createInitialEmailTemplates() };
         }
         if (version < 3) {
@@ -183,9 +185,26 @@ export const useEmailTemplateStore = create<EmailTemplateStore>()(
             templates: configureExistingEmailTemplates(state.templates),
           };
         }
-        // v4+: still ensure missing stock templates exist, never wipe edits.
+        // v4/v5: ensure missing stock templates exist, never wipe edits.
         return {
           templates: configureExistingEmailTemplates(state.templates),
+        };
+      },
+      merge: (persisted, current) => {
+        const normalized = normalizeTemplatesPersistSlice(persisted);
+        const rawTemplates = asArray(normalized.templates);
+        const hadTemplatesField =
+          persisted &&
+          typeof persisted === "object" &&
+          "templates" in (persisted as object);
+        const templates = hadTemplatesField
+          ? configureExistingEmailTemplates(
+              rawTemplates as EmailTemplate[]
+            )
+          : current.templates;
+        return {
+          ...current,
+          templates,
         };
       },
       onRehydrateStorage: () => (state) => state?.markHydrated(),

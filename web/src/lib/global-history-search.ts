@@ -1,9 +1,10 @@
-import type { Campaign } from "../types/campaign.ts";
+import type { Campaign, CampaignLeadStatus } from "../types/campaign.ts";
 import type { Lead, SearchRecord } from "../types/lead.ts";
 import type { EmailBlocklistEntry } from "./email-blocklist.ts";
 import { findEmailBlock } from "./email-blocklist.ts";
 import { normalizeEmail } from "./email-validation.ts";
 import { isConfirmedCampaignDelivery } from "./campaign-delivery-metrics.ts";
+import { asArray } from "./safe-object.ts";
 
 export type GlobalHistoryHitKind =
   | "search"
@@ -39,6 +40,7 @@ function domainFromEmail(email: string): string {
 }
 
 function leadMatches(lead: Lead, q: string, qEmail: string | null): boolean {
+  if (!lead || typeof lead !== "object") return false;
   if (qEmail && normalizeEmail(lead.email) === qEmail) return true;
   if (qEmail && normalizeEmail(lead.normalizedEmail) === qEmail) return true;
   const hay = [
@@ -49,25 +51,32 @@ function leadMatches(lead: Lead, q: string, qEmail: string | null): boolean {
     lead.address,
     lead.phone,
   ]
+    .map((part) => (part == null ? "" : String(part)))
     .join(" ")
     .toLowerCase();
   return hay.includes(q);
 }
 
 function searchMatches(record: SearchRecord, q: string): boolean {
+  if (!record || typeof record !== "object") return false;
   return (
-    record.keyword.toLowerCase().includes(q) ||
-    record.location.toLowerCase().includes(q) ||
+    String(record.keyword ?? "")
+      .toLowerCase()
+      .includes(q) ||
+    String(record.location ?? "")
+      .toLowerCase()
+      .includes(q) ||
     (record.batchId?.toLowerCase().includes(q) ?? false)
   );
 }
 
 function campaignMatches(campaign: Campaign, q: string): boolean {
+  if (!campaign || typeof campaign !== "object") return false;
   return (
-    campaign.name.toLowerCase().includes(q) ||
-    campaign.subject.toLowerCase().includes(q) ||
-    campaign.id.toLowerCase().includes(q) ||
-    campaign.campaignProfileId.toLowerCase().includes(q)
+    (campaign.name ?? "").toLowerCase().includes(q) ||
+    (campaign.subject ?? "").toLowerCase().includes(q) ||
+    (campaign.id ?? "").toLowerCase().includes(q) ||
+    (campaign.campaignProfileId ?? "").toLowerCase().includes(q)
   );
 }
 
@@ -78,16 +87,22 @@ function campaignMatches(campaign: Campaign, q: string): boolean {
 export function searchGlobalHistory(
   input: GlobalHistorySearchInput
 ): GlobalHistoryHit[] {
-  const raw = input.query.trim();
+  const raw = (input?.query ?? "").trim();
   if (!raw) return [];
   const q = raw.toLowerCase();
   const qEmail = normalizeEmail(raw);
   const limit = input.limit ?? 40;
   const hits: GlobalHistoryHit[] = [];
+  const blockedEmails = asArray<EmailBlocklistEntry>(input.blockedEmails);
+  const fullSearchHistory = asArray<SearchRecord>(input.fullSearchHistory);
+  const recentSearches = asArray<SearchRecord>(input.recentSearches);
+  const savedLeads = asArray<Lead>(input.savedLeads);
+  const importedLeads = asArray<Lead>(input.importedLeads);
+  const campaigns = asArray<Campaign>(input.campaigns);
 
   // Blocklist first when query looks like an email.
   if (qEmail) {
-    const block = findEmailBlock(input.blockedEmails, qEmail);
+    const block = findEmailBlock(blockedEmails, qEmail);
     if (block) {
       hits.push({
         id: `blocked-${block.id}`,
@@ -103,7 +118,7 @@ export function searchGlobalHistory(
       });
     }
   } else {
-    for (const block of input.blockedEmails) {
+    for (const block of blockedEmails) {
       if (
         block.normalizedEmail.includes(q) ||
         domainFromEmail(block.normalizedEmail).includes(q) ||
@@ -123,11 +138,8 @@ export function searchGlobalHistory(
   }
 
   const seenSearch = new Set<string>();
-  for (const record of [
-    ...input.fullSearchHistory,
-    ...(input.recentSearches ?? []),
-  ]) {
-    if (seenSearch.has(record.id)) continue;
+  for (const record of [...fullSearchHistory, ...recentSearches]) {
+    if (!record?.id || seenSearch.has(record.id)) continue;
     if (!searchMatches(record, q)) continue;
     seenSearch.add(record.id);
     hits.push({
@@ -143,17 +155,17 @@ export function searchGlobalHistory(
 
   const seenLeads = new Set<string>();
   const allLeads = [
-    ...input.savedLeads,
-    ...(input.importedLeads ?? []),
-    ...input.fullSearchHistory.flatMap((r) => r.leads ?? []),
+    ...savedLeads,
+    ...importedLeads,
+    ...fullSearchHistory.flatMap((r) => asArray<Lead>(r.leads)),
   ];
   for (const lead of allLeads) {
-    if (seenLeads.has(lead.id)) continue;
+    if (!lead?.id || seenLeads.has(lead.id)) continue;
     if (!leadMatches(lead, q, qEmail)) continue;
     seenLeads.add(lead.id);
     const email = normalizeEmail(lead.normalizedEmail) ?? normalizeEmail(lead.email);
     const block = email
-      ? findEmailBlock(input.blockedEmails, email)
+      ? findEmailBlock(blockedEmails, email)
       : null;
     const badges = ["Lead"];
     if (lead.savedAt) badges.push("Salvo");
@@ -170,15 +182,17 @@ export function searchGlobalHistory(
     if (hits.length >= limit) return hits;
   }
 
-  for (const campaign of input.campaigns) {
-    if (!campaignMatches(campaign, q)) continue;
-    const sent = campaign.leadStatuses.filter((s) =>
-      isConfirmedCampaignDelivery(s)
-    ).length;
-    const replied = campaign.leadStatuses.filter(
-      (s) => s.status === "replied"
-    ).length;
-    const badges: string[] = [campaign.status, campaign.campaignProfileId];
+  for (const campaign of campaigns) {
+    if (!campaign?.id || !campaignMatches(campaign, q)) continue;
+    const statuses = asArray<CampaignLeadStatus>(campaign.leadStatuses).filter(
+      (s): s is CampaignLeadStatus => Boolean(s) && typeof s === "object"
+    );
+    const sent = statuses.filter((s) => isConfirmedCampaignDelivery(s)).length;
+    const replied = statuses.filter((s) => s?.status === "replied").length;
+    const badges: string[] = [
+      campaign.status ?? "draft",
+      campaign.campaignProfileId ?? "panek-puglesi",
+    ];
     if (sent > 0) badges.push(`${sent} enviados`);
     if (replied > 0) badges.push(`${replied} respostas`);
     hits.push({
@@ -194,14 +208,15 @@ export function searchGlobalHistory(
 
   // When looking up a specific email, also surface send evidence from campaigns.
   if (qEmail) {
-    for (const campaign of input.campaigns) {
-      for (const status of campaign.leadStatuses) {
+    for (const campaign of campaigns) {
+      if (!campaign?.id) continue;
+      for (const status of asArray<CampaignLeadStatus>(campaign.leadStatuses)) {
         if (!isConfirmedCampaignDelivery(status)) continue;
         const lead = allLeads.find((l) => l.id === status.leadId);
         const leadEmail =
           normalizeEmail(lead?.normalizedEmail) ?? normalizeEmail(lead?.email);
         if (leadEmail !== qEmail) continue;
-        const badges = ["Enviado", campaign.status];
+        const badges = ["Enviado", campaign.status ?? "draft"];
         if (status.status === "replied") badges.push("Respondeu");
         if (status.status === "opened") badges.push("Abriu");
         hits.push({

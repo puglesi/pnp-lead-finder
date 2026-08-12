@@ -36,7 +36,7 @@ function stageIndex(stage: PipelineStage): number {
 export function BatchPipelineIndicator() {
   const hydrated = useSyncExternalStore(subscribe, client, server);
   const activeBatchId = useBatchPipelineStore((s) => s.activeBatchId);
-  const batches = useBatchPipelineStore((s) => s.batches);
+  const batches = useBatchPipelineStore((s) => s.batches ?? {});
   const batch =
     hydrated && activeBatchId ? batches[activeBatchId] ?? null : null;
 

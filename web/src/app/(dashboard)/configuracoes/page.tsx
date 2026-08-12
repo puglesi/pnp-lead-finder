@@ -12,6 +12,7 @@ import { Separator } from "@/components/ui/separator";
 import { LocalProductionPanel } from "@/components/dashboard/local-production-panel";
 import { SearchSettingsForm } from "@/components/settings/search-settings-form";
 import { EmailTemplateLibrary } from "@/components/settings/email-template-library";
+import { OperationSignatureSettings } from "@/components/settings/operation-signature-settings";
 
 export default function ConfiguracoesPage() {
   return (
@@ -51,6 +52,8 @@ export default function ConfiguracoesPage() {
       <SearchSettingsForm />
 
       <EmailTemplateLibrary />
+
+      <OperationSignatureSettings />
 
       <CollapsibleCard storageKey="settings-company" className="border-border/60">
         <CollapsibleCardHeader>

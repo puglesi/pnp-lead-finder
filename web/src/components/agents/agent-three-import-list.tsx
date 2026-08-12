@@ -30,12 +30,18 @@ import { useEmailBlocklistStore } from "@/store/email-blocklist-store";
 import { useLeadStore } from "@/store/lead-store";
 import { useCampaignStore } from "@/store/campaign-store";
 import { useAgentThreeStore } from "@/store/agent-three-store";
+import { useEmailTemplateStore } from "@/store/email-template-store";
+import { useOperationSignatureStore } from "@/store/operation-signature-store";
 import {
   CAMPAIGN_PROFILES,
   type CampaignProfileId,
 } from "@/types/campaign-profile";
 import type { Lead } from "@/types/lead";
-import { DEFAULT_CAMPAIGN_SEND_CONFIG } from "@/types/campaign";
+import {
+  getDefaultEmailTemplate,
+  getEmailTemplatesForOperation,
+} from "@/lib/email-template-library";
+import { getOperationSendAccount } from "@/lib/operation-identity";
 
 function Stat({ label, value }: { label: string; value: number }) {
   return (
@@ -58,8 +64,14 @@ export function AgentThreeImportList() {
   const createCampaign = useCampaignStore((s) => s.createCampaign);
   const selectProfile = useAgentThreeStore((s) => s.selectProfile);
   const selectCampaign = useAgentThreeStore((s) => s.selectCampaign);
+  const setRecipientSourceMode = useAgentThreeStore(
+    (s) => s.setRecipientSourceMode
+  );
+  const setImportTemplateId = useAgentThreeStore((s) => s.setImportTemplateId);
   const operations = useAgentThreeStore((s) => s.operations);
   const selectedProfileId = useAgentThreeStore((s) => s.selectedProfileId);
+  const templates = useEmailTemplateStore((s) => s.templates);
+  const getSignature = useOperationSignatureStore((s) => s.getSignature);
 
   const [operation, setOperation] = useState<CampaignProfileId>(
     selectedProfileId || "panek-puglesi"
@@ -74,6 +86,11 @@ export function AgentThreeImportList() {
   const allKnown = useMemo(
     () => [...savedLeads, ...importedLeads, ...currentLeads],
     [savedLeads, importedLeads, currentLeads]
+  );
+
+  const opTemplates = useMemo(
+    () => getEmailTemplatesForOperation(templates, operation),
+    [templates, operation]
   );
 
   function rebuildPreview(leads: Lead[], profile: CampaignProfileId) {
@@ -94,12 +111,18 @@ export function AgentThreeImportList() {
   function handleParsed(result: ListImportParseResult) {
     if (result.needsManualMapping && result.leads.length === 0) return;
     setImportedRaw(result.leads);
+    // Auto-select Minha lista mode for Agent 3 control card.
+    setRecipientSourceMode("import");
+    selectProfile(operation);
     rebuildPreview(result.leads, operation);
-    toast.success(`${result.leads.length} contato(s) lidos. Revise a prévia.`);
+    toast.success(
+      `${result.leads.length} contato(s) lidos. Origem: Minha lista.`
+    );
   }
 
   function handleOperationChange(value: CampaignProfileId) {
     setOperation(value);
+    selectProfile(value);
     if (importedRaw.length > 0) rebuildPreview(importedRaw, value);
   }
 
@@ -112,26 +135,33 @@ export function AgentThreeImportList() {
     }
 
     const added = importExternalLeads(eligibleLeads);
+    // Exclusive recipients from this import — never merge old campaign leadIds.
     const leadIds = (added.length > 0 ? added : eligibleLeads).map((l) => l.id);
+    const account = getOperationSendAccount(operation);
+    const signature = getSignature(operation);
+    const template = getDefaultEmailTemplate(templates, operation);
 
     const campaign = createCampaign({
       campaignProfileId: operation,
-      contactKind: "first_contact",
+      contactKind: template?.contactKind ?? "first_contact",
+      emailTemplateId: template?.id,
       name: `Lista importada · ${new Date().toLocaleString("pt-BR")}`,
-      subject: "",
-      body: "",
+      subject: template?.subject ?? "",
+      body: template?.body ?? "",
       leadIds,
       leadSource: "imported",
-      fromName: DEFAULT_CAMPAIGN_SEND_CONFIG.fromName,
-      fromEmail: DEFAULT_CAMPAIGN_SEND_CONFIG.fromEmail,
-      replyTo: DEFAULT_CAMPAIGN_SEND_CONFIG.replyTo,
+      fromName: account.fromName,
+      fromEmail: account.fromEmail,
+      replyTo: account.replyTo,
+      signature: { ...signature },
     });
-    // Mark as saved draft ready for Agent 3 — user must start send explicitly.
     useCampaignStore.getState().setCampaignStatus(campaign.id, "saved");
+    setRecipientSourceMode("import");
+    if (template) setImportTemplateId(template.id);
     selectProfile(operation);
     selectCampaign(operation, campaign.id);
     toast.success(
-      `Campanha criada com ${leadIds.length} elegível(is). Use o Agente 3 para enviar.`
+      `Lista carregada (${leadIds.length} elegível(is)). Escolha o modelo e envie no card abaixo — sem campanhas antigas.`
     );
   }
 
@@ -140,7 +170,7 @@ export function AgentThreeImportList() {
       <ListFileImportCard
         storageKey="agent-3-send-my-list-upload"
         title="Enviar para minha lista"
-        description="CSV, TXT ou XLSX já validados pelo usuário. O envio só ocorre pelo Agente 3 — nunca ignora dedupe, blocklist, histórico ou suppression."
+        description="CSV, TXT ou XLSX. Ativa automaticamente o modo Minha lista no Agente 3. Destinatários vêm só desta lista — campanhas antigas não contaminam. Dedupe/blocklist/histórico só filtram."
         onParsed={handleParsed}
         defaultOpen={false}
       />
@@ -179,6 +209,11 @@ export function AgentThreeImportList() {
               </Select>
             </div>
 
+            <p className="text-xs text-muted-foreground">
+              Modelos disponíveis para {getOperationSendAccount(operation).profileName}:{" "}
+              {opTemplates.map((t) => t.name).join(", ") || "nenhum"}
+            </p>
+
             {analysis && (
               <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
                 <Stat label="Importados" value={analysis.totalImported} />
@@ -206,11 +241,12 @@ export function AgentThreeImportList() {
               disabled={!preview || preview.finalSendCount === 0}
             >
               <Send className="size-4" />
-              Criar campanha e carregar no Agente 3
+              Carregar no Agente 3 (Minha lista)
             </Button>
             <p className="text-xs text-muted-foreground">
-              Nenhum e-mail é enviado neste passo. O Start do Agente 3 continua
-              sendo o único caminho de envio (SMTP/preflight existentes).
+              Nenhum e-mail é enviado neste passo. O card de envio usará Modelo
+              de e-mail (não seletor de campanha antiga) e a lista importada
+              como única fonte de destinatários.
             </p>
           </CollapsibleCardContent>
         </CollapsibleCard>

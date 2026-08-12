@@ -47,12 +47,12 @@ function formatMeta(value?: string) {
 
 export function GlobalHistorySearch() {
   const [query, setQuery] = useState("");
-  const fullSearchHistory = useLeadStore((s) => s.fullSearchHistory);
-  const recentSearches = useLeadStore((s) => s.recentSearches);
-  const savedLeads = useLeadStore((s) => s.savedLeads);
-  const importedLeads = useLeadStore((s) => s.importedLeads);
-  const campaigns = useCampaignStore((s) => s.campaigns);
-  const blockedEmails = useEmailBlocklistStore((s) => s.entries);
+  const fullSearchHistory = useLeadStore((s) => s.fullSearchHistory ?? []);
+  const recentSearches = useLeadStore((s) => s.recentSearches ?? []);
+  const savedLeads = useLeadStore((s) => s.savedLeads ?? []);
+  const importedLeads = useLeadStore((s) => s.importedLeads ?? []);
+  const campaigns = useCampaignStore((s) => s.campaigns ?? []);
+  const blockedEmails = useEmailBlocklistStore((s) => s.entries ?? []);
 
   const hits = useMemo(
     () =>
@@ -154,18 +154,19 @@ export function GlobalHistorySearch() {
                         </p>
                       )}
                       <div className="mt-2 flex flex-wrap gap-1.5">
-                        {hit.badges.map((badge) => {
+                        {(hit.badges ?? []).filter(Boolean).map((badge) => {
+                          const badgeText = String(badge);
                           const reasonLabel =
                             EMAIL_BLOCK_REASON_LABELS[
-                              badge as keyof typeof EMAIL_BLOCK_REASON_LABELS
+                              badgeText as keyof typeof EMAIL_BLOCK_REASON_LABELS
                             ];
-                          const label = reasonLabel ?? badge;
+                          const label = reasonLabel ?? badgeText;
                           const isBlocked =
-                            badge.toLowerCase().includes("bloqueado") ||
+                            badgeText.toLowerCase().includes("bloqueado") ||
                             hit.kind === "blocked";
                           return (
                             <Badge
-                              key={badge}
+                              key={badgeText}
                               variant={isBlocked ? "danger" : "secondary"}
                               className="text-[10px]"
                             >

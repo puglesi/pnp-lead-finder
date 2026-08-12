@@ -12,6 +12,8 @@ import {
   type EmailBlockReason,
 } from "@/lib/email-blocklist";
 import { normalizeEmail } from "@/lib/email-validation";
+import { normalizeBlocklistPersistSlice } from "@/lib/store-rehydrate";
+import { asArray } from "@/lib/safe-object";
 
 interface EmailBlocklistStore {
   entries: EmailBlocklistEntry[];
@@ -128,9 +130,9 @@ export const useEmailBlocklistStore = create<EmailBlocklistStore>()(
     }),
     {
       name: "pnp-email-blocklist",
-      version: 1,
+      version: 2,
       migrate: (persisted) => {
-        const state = persisted as { entries?: unknown };
+        const state = persisted as { entries?: unknown } | null;
         if (!state || !Array.isArray(state.entries)) {
           return { entries: [] };
         }
@@ -172,6 +174,57 @@ export const useEmailBlocklistStore = create<EmailBlocklistStore>()(
           });
         }
         return { entries };
+      },
+      merge: (persisted, current) => {
+        // Exact field: entries must be an array of valid shapes before UI maps/labels.
+        const normalized = normalizeBlocklistPersistSlice(persisted);
+        const rawEntries = asArray(normalized.entries);
+        const entries: EmailBlocklistEntry[] = [];
+        for (const raw of rawEntries) {
+          if (!raw || typeof raw !== "object") continue;
+          const item = raw as Record<string, unknown>;
+          const normalizedEmail = normalizeEmail(
+            typeof item.normalizedEmail === "string"
+              ? item.normalizedEmail
+              : typeof item.email === "string"
+                ? item.email
+                : null
+          );
+          if (!normalizedEmail) continue;
+          const reason = isEmailBlockReason(item.reason)
+            ? item.reason
+            : "manual";
+          const operation = isEmailBlockOperationScope(item.operation)
+            ? item.operation
+            : "both";
+          entries.push({
+            id:
+              typeof item.id === "string"
+                ? item.id
+                : `block-${normalizedEmail}`,
+            normalizedEmail,
+            reason,
+            operation,
+            note:
+              typeof item.note === "string" && item.note.trim()
+                ? item.note.trim()
+                : undefined,
+            blockedAt:
+              typeof item.blockedAt === "string"
+                ? item.blockedAt
+                : new Date().toISOString(),
+            source: item.source === "system" ? "system" : "manual",
+          });
+        }
+        // Empty persisted array is valid; only fall back when entries field absent.
+        const hadEntriesField =
+          persisted &&
+          typeof persisted === "object" &&
+          "entries" in (persisted as object);
+        return {
+          ...current,
+          entries: hadEntriesField ? entries : current.entries,
+        };
       },
     }
   )

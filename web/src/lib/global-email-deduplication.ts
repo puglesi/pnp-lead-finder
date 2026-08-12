@@ -10,6 +10,7 @@ import {
   isRealDeliveryMessageId,
 } from "./campaign-delivery-metrics.ts";
 import { normalizeEmail } from "./email-validation.ts";
+import { asArray, safeObjectValues } from "./safe-object.ts";
 
 export type EmailContactKind = "first_contact" | "follow_up";
 export type PermanentContactBlockReason =
@@ -82,13 +83,18 @@ interface BuildEvidenceInput {
   operations: Record<CampaignProfileId, AgentThreeOperationState>;
 }
 
-function campaignNameById(campaigns: readonly Campaign[]) {
-  return new Map(campaigns.map((campaign) => [campaign.id, campaign.name]));
+function campaignNameById(campaigns: readonly Campaign[] | null | undefined) {
+  return new Map(
+    asArray<Campaign>(campaigns)
+      .filter((campaign) => campaign?.id)
+      .map((campaign) => [campaign.id, campaign.name])
+  );
 }
 
-function leadEmailById(leads: readonly Lead[]) {
+function leadEmailById(leads: readonly Lead[] | null | undefined) {
   const map = new Map<string, string>();
-  for (const lead of leads) {
+  for (const lead of asArray<Lead>(leads)) {
+    if (!lead?.id) continue;
     const email = normalizeEmail(lead.normalizedEmail) ?? normalizeEmail(lead.email);
     if (email) map.set(lead.id, email);
   }
@@ -106,8 +112,16 @@ export function buildGlobalEmailHistory(
   const emails = leadEmailById(input.leads);
   const records = new Map<string, GlobalEmailHistoryRecord>();
 
-  for (const operation of Object.values(input.operations)) {
-    for (const sent of operation.sentIndex) {
+  for (const operation of safeObjectValues<AgentThreeOperationState>(
+    input.operations
+  )) {
+    if (!operation) continue;
+    for (const sent of asArray<{
+      normalizedEmail?: string;
+      providerMessageId?: string;
+      campaignId: string;
+      sentAt: string;
+    }>(operation.sentIndex)) {
       const email = normalizeEmail(sent.normalizedEmail);
       if (!email || !isRealDeliveryMessageId(sent.providerMessageId)) continue;
       const record: GlobalEmailHistoryRecord = {
@@ -122,8 +136,11 @@ export function buildGlobalEmailHistory(
     }
   }
 
-  for (const campaign of input.campaigns) {
-    for (const status of campaign.leadStatuses) {
+  for (const campaign of asArray<Campaign>(input.campaigns)) {
+    if (!campaign) continue;
+    for (const status of asArray<import("../types/campaign.ts").CampaignLeadStatus>(
+      campaign.leadStatuses
+    )) {
       const email = emails.get(status.leadId);
       if (!email || !isConfirmedCampaignDelivery(status)) continue;
       const record: GlobalEmailHistoryRecord = {
@@ -175,8 +192,11 @@ export function buildPermanentContactBlocks(
   const emails = leadEmailById(input.leads);
   const blocks = new Map<string, PermanentContactBlock>();
 
-  for (const operation of Object.values(input.operations)) {
-    for (const item of operation.queue) {
+  for (const operation of safeObjectValues<AgentThreeOperationState>(
+    input.operations
+  )) {
+    if (!operation) continue;
+    for (const item of asArray<AgentThreeQueueItem>(operation.queue)) {
       const reason = queueBlockReason(item);
       const email = normalizeEmail(item.normalizedEmail ?? item.originalEmail);
       if (!reason || !email) continue;
@@ -189,8 +209,11 @@ export function buildPermanentContactBlocks(
     }
   }
 
-  for (const campaign of input.campaigns) {
-    for (const error of campaign.sendErrors) {
+  for (const campaign of asArray<Campaign>(input.campaigns)) {
+    if (!campaign) continue;
+    for (const error of asArray<import("../types/campaign.ts").CampaignSendError>(
+      campaign.sendErrors
+    )) {
       const reason = classifyPermanentContactBlock(
         `${error.errorCode} ${error.errorMessage}`
       );

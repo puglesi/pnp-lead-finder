@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import { ToastProvider } from "@/components/providers/toast-provider";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -10,6 +11,7 @@ export const metadata: Metadata = {
     "Plataforma Inteligente de Prospecção B2B com IA — Panek Pugliesi",
 };
 
+/** Runs before hydration to apply light/dark/system without flash. */
 const themeBootScript = `
 (function(){
   try {
@@ -39,10 +41,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="pt-BR" className="h-full antialiased" suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
-      </head>
       <body className="min-h-full">
+        <Script
+          id="pnp-theme-boot"
+          strategy="beforeInteractive"
+          dangerouslySetInnerHTML={{ __html: themeBootScript }}
+        />
         <ThemeProvider>
           <TooltipProvider>
             {children}

@@ -22,7 +22,6 @@ import {
   CollapsibleCardHeader,
 } from "@/components/ui/collapsible-card";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -47,6 +46,8 @@ import {
 } from "@/hooks/use-agent-three-runner";
 import { useAgentThreeStore } from "@/store/agent-three-store";
 import { useCampaignStore } from "@/store/campaign-store";
+import { useEmailTemplateStore } from "@/store/email-template-store";
+import { useOperationSignatureStore } from "@/store/operation-signature-store";
 import { GlobalDeduplicationPreviewPanel } from "@/components/campaigns/global-deduplication-preview";
 import {
   CAMPAIGN_PROFILES,
@@ -54,6 +55,16 @@ import {
   type CampaignProfileId,
 } from "@/types/campaign-profile";
 import { describeAgentThreeStartBlock } from "@/lib/agent-three-smtp-contract";
+import {
+  getDefaultEmailTemplate,
+  getEmailTemplatesForOperation,
+} from "@/lib/email-template-library";
+import {
+  agentThreeStepTwoKind,
+  getOperationSendAccount,
+} from "@/lib/operation-identity";
+import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 const subscribeToHydration = () => () => {};
@@ -109,13 +120,29 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
     (state) => state.selectedProfileId
   );
   const persistedOperations = useAgentThreeStore((state) => state.operations);
+  const recipientSourceMode = useAgentThreeStore(
+    (state) => state.recipientSourceMode ?? "campaign"
+  );
+  const importTemplateId = useAgentThreeStore(
+    (state) => state.importTemplateId
+  );
   const selectProfile = useAgentThreeStore((state) => state.selectProfile);
   const selectCampaign = useAgentThreeStore((state) => state.selectCampaign);
+  const setRecipientSourceMode = useAgentThreeStore(
+    (state) => state.setRecipientSourceMode
+  );
+  const setImportTemplateId = useAgentThreeStore(
+    (state) => state.setImportTemplateId
+  );
   const configureLimit = useAgentThreeStore((state) => state.configureLimit);
   const configureIntervals = useAgentThreeStore(
     (state) => state.configureIntervals
   );
   const campaigns = useCampaignStore((state) => state.campaigns);
+  const updateCampaign = useCampaignStore((state) => state.updateCampaign);
+  const templates = useEmailTemplateStore((state) => state.templates);
+  const saveAsTemplate = useEmailTemplateStore((state) => state.saveAsTemplate);
+  const getSignature = useOperationSignatureStore((state) => state.getSignature);
   const runner = useAgentThreeRunner();
 
   const profileId: CampaignProfileId = hydrated
@@ -127,12 +154,37 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
     ? persistedOperations[profileId]
     : initialOperation;
   const metrics = getAgentThreeMetrics(operation);
+  const isImportMode = recipientSourceMode === "import";
+  const stepTwo = agentThreeStepTwoKind(recipientSourceMode);
+  const sendAccount = getOperationSendAccount(profileId);
+  const operationTemplates = getEmailTemplatesForOperation(
+    templates,
+    profileId
+  );
+  // Campanha salva picker: all campaigns of this operation (user chooses intentionally).
+  // Minha lista never uses this picker — step 2 is the template selector.
   const profileCampaigns = campaigns.filter(
     (campaign) => campaign.campaignProfileId === profileId
   );
-  const currentCampaign = profileCampaigns.find(
-    (campaign) => campaign.id === operation.currentCampaignId
+  const currentCampaign =
+    campaigns.find((campaign) => campaign.id === operation.currentCampaignId) ??
+    null;
+  const campaignEditKey = currentCampaign
+    ? `${currentCampaign.id}:${currentCampaign.subject}:${(currentCampaign.body ?? "").length}`
+    : "none";
+  const [sessionEditKey, setSessionEditKey] = useState(campaignEditKey);
+  const [sessionSubject, setSessionSubject] = useState(
+    currentCampaign?.subject ?? ""
   );
+  const [sessionBody, setSessionBody] = useState(currentCampaign?.body ?? "");
+  const [sessionEditsDirty, setSessionEditsDirty] = useState(false);
+  // Reset local session editor when campaign changes (render-time adjust, not effect).
+  if (sessionEditKey !== campaignEditKey) {
+    setSessionEditKey(campaignEditKey);
+    setSessionSubject(currentCampaign?.subject ?? "");
+    setSessionBody(currentCampaign?.body ?? "");
+    setSessionEditsDirty(false);
+  }
   const connectionStatus = runner.statuses[profileId];
   const smtpResult = runner.smtpResults[profileId];
   const nextSendAt = runner.nextSendAt[profileId];
@@ -159,6 +211,33 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
     // Auto-load when profile/campaign selection changes after hydration.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runner methods are stable for this UI flow
   }, [hydrated, profileId, operation.currentCampaignId]);
+
+  // Operation change → account + signature must switch immediately on current campaign.
+  useEffect(() => {
+    if (!hydrated || !currentCampaign) return;
+    if (currentCampaign.campaignProfileId !== profileId) return;
+    const account = getOperationSendAccount(profileId);
+    const signature = getSignature(profileId);
+    if (
+      currentCampaign.fromEmail === account.fromEmail &&
+      currentCampaign.signature?.body === signature.body
+    ) {
+      return;
+    }
+    updateCampaign(currentCampaign.id, {
+      fromName: account.fromName,
+      fromEmail: account.fromEmail,
+      replyTo: account.replyTo,
+      signature: { ...signature },
+    });
+  }, [
+    hydrated,
+    profileId,
+    currentCampaign?.id,
+    currentCampaign?.campaignProfileId,
+    getSignature,
+    updateCampaign,
+  ]);
 
   const isPreparing =
     isLoadingCampaign || connectionStatus === "validating";
@@ -340,8 +419,88 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
   async function handleCampaignChange(value: string) {
     const campaignId = value === "none" ? null : value;
     setConfirmedPreviewCampaignId(null);
+    setRecipientSourceMode("campaign");
     selectCampaign(profileId, campaignId);
     await runner.loadCampaign(profileId, campaignId);
+  }
+
+  function applyTemplateToImportCampaign(templateId: string) {
+    const template = operationTemplates.find((t) => t.id === templateId);
+    if (!template || !currentCampaign) return;
+    const account = getOperationSendAccount(profileId);
+    const signature = getSignature(profileId);
+    setImportTemplateId(templateId);
+    setSessionSubject(template.subject);
+    setSessionBody(template.body);
+    setSessionEditsDirty(false);
+    // Never touch leadIds — import list stays exclusive.
+    updateCampaign(currentCampaign.id, {
+      emailTemplateId: template.id,
+      subject: template.subject,
+      body: template.body,
+      contactKind: template.contactKind,
+      fromName: account.fromName,
+      fromEmail: account.fromEmail,
+      replyTo: account.replyTo,
+      signature: { ...signature },
+      leadIds: currentCampaign.leadIds,
+    });
+    toast.success(`Modelo “${template.name}” aplicado a esta execução.`);
+  }
+
+  function applySessionEditsToCampaign() {
+    if (!currentCampaign) return;
+    updateCampaign(currentCampaign.id, {
+      subject: sessionSubject,
+      body: sessionBody,
+    });
+    setSessionEditsDirty(false);
+    toast.success("Assunto/corpo atualizados só para esta execução.");
+  }
+
+  function handleSaveSessionAsTemplate() {
+    if (!currentCampaign) return;
+    const result = saveAsTemplate({
+      name: `${currentCampaign.name} (lista)`,
+      operation: profileId,
+      subject: sessionSubject,
+      body: sessionBody,
+      sender: sendAccount.fromEmail,
+      replyTo: sendAccount.replyTo,
+    });
+    if (result) {
+      setImportTemplateId(result.id);
+      toast.success("Salvo como modelo da operação.");
+    } else {
+      toast.error("Não foi possível salvar o modelo.");
+    }
+  }
+
+  function handleRecipientSourceMode(mode: "campaign" | "import") {
+    setConfirmedPreviewCampaignId(null);
+    setRecipientSourceMode(mode);
+    if (mode === "campaign") {
+      // Stay on current campaign if it is a saved one; clear import template.
+      setImportTemplateId(null);
+    } else {
+      // Prefer current imported campaign if any; do not auto-pick old saved ones.
+      const importCampaign = campaigns.find(
+        (c) =>
+          c.campaignProfileId === profileId && c.leadSource === "imported"
+      );
+      if (importCampaign) {
+        selectCampaign(profileId, importCampaign.id);
+        void runner.loadCampaign(profileId, importCampaign.id);
+        const def = getDefaultEmailTemplate(templates, profileId);
+        if (def && !importTemplateId) setImportTemplateId(def.id);
+      } else {
+        selectCampaign(profileId, null);
+        toast(
+          "Faça upload em “Enviar para minha lista” para carregar destinatários.",
+          { icon: "📋" }
+        );
+      }
+    }
   }
 
 
@@ -437,10 +596,55 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
             Envio — {getCampaignProfileName(profileId)}
           </CardTitle>
           <CardDescription>
-            Fluxo: operação → campanha → prévia → verificar → Start.
+            {isImportMode
+              ? "Minha lista: operação → modelo → destinatários importados → prévia → verificar → Start."
+              : "Campanha salva: operação → campanha → prévia → verificar → Start."}
           </CardDescription>
         </CollapsibleCardHeader>
         <CollapsibleCardContent className="space-y-5">
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Origem dos destinatários</p>
+            <div className="inline-flex rounded-xl border border-border/60 bg-background/50 p-1">
+              <button
+                type="button"
+                disabled={controlsLocked}
+                onClick={() => handleRecipientSourceMode("campaign")}
+                className={cn(
+                  "rounded-lg px-3 py-1.5 text-sm font-medium transition-all",
+                  !isImportMode
+                    ? "bg-primary/15 text-primary shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                Campanha salva
+              </button>
+              <button
+                type="button"
+                disabled={controlsLocked}
+                onClick={() => handleRecipientSourceMode("import")}
+                className={cn(
+                  "rounded-lg px-3 py-1.5 text-sm font-medium transition-all",
+                  isImportMode
+                    ? "bg-primary/15 text-primary shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                Minha lista
+              </button>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-border/50 bg-background/40 p-3 text-sm">
+            <p>
+              <span className="text-muted-foreground">Enviando pela conta: </span>
+              <strong>{sendAccount.accountLabel}</strong>
+            </p>
+            <p className="mt-1">
+              <span className="text-muted-foreground">Assinatura: </span>
+              <strong>{sendAccount.signatureLabel}</strong>
+            </p>
+          </div>
+
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="agent-three-profile">1. Operação</Label>
@@ -450,6 +654,15 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
                 onValueChange={(value) => {
                   setConfirmedPreviewCampaignId(null);
                   selectProfile(value as CampaignProfileId);
+                  if (isImportMode) {
+                    const nextTemplates = getEmailTemplatesForOperation(
+                      templates,
+                      value as CampaignProfileId
+                    );
+                    const def =
+                      nextTemplates.find((t) => t.isDefault) ?? nextTemplates[0];
+                    if (def) setImportTemplateId(def.id);
+                  }
                 }}
               >
                 <SelectTrigger id="agent-three-profile">
@@ -464,29 +677,132 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="agent-three-campaign">2. Campanha</Label>
-              <Select
-                value={operation.currentCampaignId ?? "none"}
-                onValueChange={(value) => {
-                  void handleCampaignChange(value);
-                }}
-                disabled={controlsLocked}
-              >
-                <SelectTrigger id="agent-three-campaign">
-                  <SelectValue placeholder="Selecione uma campanha" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Nenhuma campanha</SelectItem>
-                  {profileCampaigns.map((campaign) => (
-                    <SelectItem key={campaign.id} value={campaign.id}>
-                      {campaign.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+
+            {stepTwo === "campaign" ? (
+              <div className="space-y-2">
+                <Label htmlFor="agent-three-campaign">2. Campanha</Label>
+                <Select
+                  value={operation.currentCampaignId ?? "none"}
+                  onValueChange={(value) => {
+                    void handleCampaignChange(value);
+                  }}
+                  disabled={controlsLocked}
+                >
+                  <SelectTrigger id="agent-three-campaign">
+                    <SelectValue placeholder="Selecione uma campanha" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Nenhuma campanha</SelectItem>
+                    {profileCampaigns.map((campaign) => (
+                      <SelectItem key={campaign.id} value={campaign.id}>
+                        {campaign.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label htmlFor="agent-three-template">2. Modelo de e-mail</Label>
+                <Select
+                  value={importTemplateId ?? "none"}
+                  onValueChange={(value) => {
+                    if (value === "none") return;
+                    applyTemplateToImportCampaign(value);
+                  }}
+                  disabled={controlsLocked || !currentCampaign}
+                >
+                  <SelectTrigger id="agent-three-template">
+                    <SelectValue placeholder="Selecione um modelo" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Selecione um modelo</SelectItem>
+                    {operationTemplates.map((template) => (
+                      <SelectItem key={template.id} value={template.id}>
+                        {template.name}
+                        {template.isDefault ? " (padrão)" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-muted-foreground">
+                  Somente modelos de {sendAccount.profileName}. Destinatários =
+                  lista importada (sem recipients de campanha antiga).
+                </p>
+              </div>
+            )}
           </div>
+
+          {isImportMode && currentCampaign && (
+            <div className="space-y-3 rounded-xl border border-border/60 bg-background/30 p-4">
+              <p className="text-sm font-medium">Prévia do e-mail (esta execução)</p>
+              <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
+                <p>
+                  Conta: <strong className="text-foreground">{sendAccount.accountLabel}</strong>
+                </p>
+                <p>
+                  Assinatura:{" "}
+                  <strong className="text-foreground">{sendAccount.signatureLabel}</strong>
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="session-subject">Assunto</Label>
+                <Input
+                  id="session-subject"
+                  value={sessionSubject}
+                  disabled={controlsLocked}
+                  onChange={(e) => {
+                    setSessionSubject(e.target.value);
+                    setSessionEditsDirty(true);
+                  }}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="session-body">Corpo</Label>
+                <Textarea
+                  id="session-body"
+                  rows={6}
+                  value={sessionBody}
+                  disabled={controlsLocked}
+                  onChange={(e) => {
+                    setSessionBody(e.target.value);
+                    setSessionEditsDirty(true);
+                  }}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Destinatário de exemplo:{" "}
+                {displayItem?.normalizedEmail ??
+                  displayItem?.originalEmail ??
+                  "—"}{" "}
+                ({displayItem?.companyName ?? "—"})
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={!sessionEditsDirty || controlsLocked}
+                  onClick={applySessionEditsToCampaign}
+                >
+                  Aplicar à execução
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={controlsLocked}
+                  onClick={handleSaveSessionAsTemplate}
+                >
+                  Salvar alterações como modelo
+                </Button>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Editar nesta execução não altera o modelo salvo até clicar em
+                “Salvar alterações como modelo”.
+              </p>
+            </div>
+          )}
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <SummaryCard label="3. Destinatários" value={campaignRecipientCount} />
@@ -516,7 +832,9 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
               </>
             ) : (
               <p className="text-sm text-muted-foreground">
-                Selecione uma campanha para gerar a prévia global.
+                {isImportMode
+                  ? "Carregue a lista importada para gerar a prévia global."
+                  : "Selecione uma campanha para gerar a prévia global."}
               </p>
             )}
           </div>
@@ -610,6 +928,34 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
               </div>
             </CollapsibleCardContent>
           </CollapsibleCard>
+
+          <div
+            className={cn(
+              "rounded-xl border p-4",
+              operation.untilQueueEnds
+                ? "border-emerald-500/35 bg-emerald-500/10"
+                : "border-amber-500/40 bg-amber-500/10"
+            )}
+            role="status"
+          >
+            <p className="text-sm font-semibold">
+              {operation.untilQueueEnds
+                ? "Limite desta execução: até acabar a lista"
+                : `Limite desta execução: ${operation.numericLimit}`}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Processados nesta run: {operation.processedCount}
+              {!operation.untilQueueEnds &&
+                ` · Restantes no limite: ${Math.max(0, operation.numericLimit - operation.processedCount)}`}
+              . Edite em “5. Intervalo / limite” antes do Start — o padrão
+              histórico do Agente 3 é 50 se não alterar.
+            </p>
+            {operation.stopReason && (
+              <p className="mt-2 text-sm text-amber-800 dark:text-amber-200">
+                Motivo da parada: {operation.stopReason}
+              </p>
+            )}
+          </div>
 
           <div className="space-y-3 rounded-xl border border-border/60 bg-background/40 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -743,19 +1089,42 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
           </div>
 
           <div className="space-y-2">
-            <p className="text-sm font-medium">8. Resultado</p>
+            <p className="text-sm font-medium">8. Resultado / relatório</p>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <SummaryCard label="Planejados (fila)" value={campaignItems.length} />
+              <SummaryCard label="Elegíveis (prontos)" value={readyCount} />
+              <SummaryCard
+                label="Limite configurado"
+                value={
+                  operation.untilQueueEnds
+                    ? "∞ lista"
+                    : operation.numericLimit
+                }
+              />
+              <SummaryCard label="Tentados" value={displayProcessedCount} />
+              <SummaryCard label="Confirmados (sent)" value={confirmedSentCount} />
               <SummaryCard label="Falharam" value={metrics.failed} />
               <SummaryCard
-                label="Responderam"
-                value={campaignDelivery?.repliedCount ?? 0}
+                label="Restantes no limite"
+                value={
+                  operation.untilQueueEnds
+                    ? readyCount
+                    : Math.max(
+                        0,
+                        operation.numericLimit - operation.processedCount
+                      )
+                }
               />
-              <SummaryCard label="Processados" value={displayProcessedCount} />
               <SummaryCard
                 label="Última atividade"
                 value={formatActivity(metrics.lastActivityAt)}
               />
             </div>
+            {operation.stopReason && (
+              <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">
+                {operation.stopReason}
+              </p>
+            )}
             {excludedTotal > 0 && (
               <p className="text-sm text-muted-foreground" role="status">
                 {excludedTotal} excluído(s):{" "}

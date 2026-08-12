@@ -17,12 +17,15 @@ import {
   selectAgentThreeCampaign,
   selectAgentThreeProfile,
   selectPersistedAgentThreeSnapshot,
+  setAgentThreeImportTemplateId,
+  setAgentThreeRecipientSourceMode,
   startAgentThree,
   stopAgentThree,
   type AgentThreeLoadResult,
   type AgentThreePreparationResult,
   type AgentThreeQueueItem,
   type AgentThreeExclusionReason,
+  type AgentThreeRecipientSourceMode,
   type AgentThreeSnapshot,
   type AgentThreeStartResult,
 } from "@/lib/agent-three-queue";
@@ -35,6 +38,8 @@ import type { AgentThreeSmtpResult } from "@/lib/agent-three-smtp-contract";
 
 interface AgentThreeStore extends AgentThreeSnapshot {
   selectProfile: (profileId: CampaignProfileId) => void;
+  setRecipientSourceMode: (mode: AgentThreeRecipientSourceMode) => void;
+  setImportTemplateId: (templateId: string | null) => void;
   selectCampaign: (
     profileId: CampaignProfileId,
     campaignId: string | null
@@ -101,6 +106,12 @@ export const useAgentThreeStore = create<AgentThreeStore>()(
 
       selectProfile: (profileId) =>
         set((state) => selectAgentThreeProfile(state, profileId)),
+
+      setRecipientSourceMode: (mode) =>
+        set((state) => setAgentThreeRecipientSourceMode(state, mode)),
+
+      setImportTemplateId: (templateId) =>
+        set((state) => setAgentThreeImportTemplateId(state, templateId)),
 
       selectCampaign: (profileId, campaignId) =>
         set((state) =>

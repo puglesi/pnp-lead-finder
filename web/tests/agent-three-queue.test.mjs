@@ -2099,8 +2099,13 @@ test("preparação 19. página antiga da campanha não envia e abre Agente 3", (
     ),
     "utf8"
   );
+  // No legacy batch send on the detail page itself.
   assert.equal(source.includes("startBatchSend"), false);
-  assert.equal(source.includes("handleSend"), false);
+  // Enviar agora reuses Agent 3 dialog — not a parallel sender.
+  assert.equal(source.includes("CampaignSendNowDialog"), true);
   assert.equal(source.includes("Abrir no Agente 3"), true);
+  assert.equal(source.includes("Enviar agora"), true);
   assert.equal(source.includes('router.push("/agente-3")'), true);
+  // Must not call simulateSend / startBatchSend from detail handlers.
+  assert.equal(/simulateSend\s*\(/.test(source), false);
 });

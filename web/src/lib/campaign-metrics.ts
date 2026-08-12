@@ -43,9 +43,10 @@ export function getResponseRate(campaign: Campaign): number {
 
 /** Progress = confirmed SMTP sends only (never legacy failed/simulate). */
 export function getSendProgress(campaign: Campaign): number {
-  if (campaign.leadIds.length === 0) return 0;
+  const leadIds = Array.isArray(campaign?.leadIds) ? campaign.leadIds : [];
+  if (leadIds.length === 0) return 0;
   const { sentCount } = getCampaignDeliverySnapshot(campaign);
-  return Math.round((sentCount / campaign.leadIds.length) * 100);
+  return Math.round((sentCount / leadIds.length) * 100);
 }
 
 export function getAggregateResponseRate(campaigns: Campaign[]): number {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import {
   AlertCircle,
@@ -9,7 +9,6 @@ import {
   EyeOff,
   Gauge,
   Key,
-  Sparkles,
   Wifi,
 } from "lucide-react";
 import toast from "react-hot-toast";
@@ -30,7 +29,6 @@ import { useSerpApiStatus } from "@/hooks/use-serpapi-status";
 import { useSettingsStore } from "@/store/settings-store";
 import { useUsageStore } from "@/store/usage-store";
 import {
-  AUTONOMOUS_STANDARD_MAX,
   AUTONOMOUS_VOLUME_MAX,
   DEFAULT_LEADS_PER_SECTOR,
   RECOMMENDED_LEADS_MAX,
@@ -41,21 +39,51 @@ import {
   SERPAPI_PAGES_EQUILIBRIUM_MIN,
   SERPAPI_FREE_MONTHLY_LIMIT,
 } from "@/lib/search/volume";
+import {
+  getSettingsVolumeDisplay,
+  SETTINGS_SSR_DISPLAY_DEFAULTS,
+} from "@/lib/settings-hydration";
 import { cn } from "@/lib/utils";
 
+const subscribeHydration = () => () => {};
+const getClientHydrated = () => true;
+const getServerHydrated = () => false;
+
 export function SearchSettingsForm() {
+  // First client paint must match SSR (defaults). After hydrate, show persisted.
+  const hydrated = useSyncExternalStore(
+    subscribeHydration,
+    getClientHydrated,
+    getServerHydrated
+  );
+
   const settings = useSettingsStore();
   const { configured, envKeyConfigured, isSerpActive, remaining, refresh } =
     useSerpApiStatus();
   const [showSerpKey, setShowSerpKey] = useState(false);
   const [serpKeyDraft, setSerpKeyDraft] = useState(() => ({
-    source: settings.serpApiKey,
-    value: settings.serpApiKey,
+    source: "",
+    value: "",
   }));
+
+  // Store-backed fields: SSR / pre-hydrate use empty defaults for controlled inputs.
+  const storeSerpKey = hydrated ? settings.serpApiKey : "";
+  const storeGoogleKey = hydrated ? settings.googleApiKey : "";
+  const storeGoogleCse = hydrated ? settings.googleCseId : "";
+
   const localSerpKey =
-    serpKeyDraft.source === settings.serpApiKey
+    hydrated && serpKeyDraft.source === settings.serpApiKey
       ? serpKeyDraft.value
-      : settings.serpApiKey;
+      : storeSerpKey;
+
+  const volume = getSettingsVolumeDisplay({
+    hydrated,
+    effectiveMaxResults: settings.getEffectiveMaxResults(),
+    effectiveWorkers: settings.getEffectiveWorkers(),
+    delayMs: settings.delayMs,
+    searchProfile: settings.searchProfile,
+    useMaxLeads: settings.useMaxLeads,
+  });
 
   const handleSave = () => {
     settings.setSerpApiKey(localSerpKey.trim());
@@ -66,9 +94,11 @@ export function SearchSettingsForm() {
     refresh();
   };
 
-  const isAutonomous = settings.searchProfile === "autonomous-24h";
-  const hasSerpKey = configured;
-  const serpLive = isSerpActive;
+  const isAutonomous = volume.isAutonomous;
+  // Before hydrate, don't flash SerpAPI remaining from client-only fetches.
+  const hasSerpKey = hydrated ? configured : false;
+  const serpLive = hydrated ? isSerpActive : false;
+  const displayRemaining = hydrated ? remaining : SERPAPI_FREE_MONTHLY_LIMIT;
 
   return (
     <div className="space-y-6">
@@ -120,7 +150,7 @@ export function SearchSettingsForm() {
                 value={localSerpKey}
                 onChange={(e) =>
                   setSerpKeyDraft({
-                    source: settings.serpApiKey,
+                    source: storeSerpKey,
                     value: e.target.value,
                   })
                 }
@@ -145,12 +175,12 @@ export function SearchSettingsForm() {
             <Badge variant={hasSerpKey ? "success" : "outline"}>
               {hasSerpKey ? "Chave configurada" : "Aguardando chave"}
             </Badge>
-            {isSerpActive && (
+            {serpLive && (
               <Badge variant="success">
-                Modo SerpAPI Ativo · ~{remaining} restantes
+                Modo SerpAPI Ativo · ~{displayRemaining} restantes
               </Badge>
             )}
-            {envKeyConfigured && (
+            {hydrated && envKeyConfigured && (
               <Badge variant="outline" className="font-mono text-[10px]">
                 SERPAPI_KEY · .env.local
               </Badge>
@@ -175,7 +205,7 @@ export function SearchSettingsForm() {
             <Label>API Key Google</Label>
             <Input
               type="password"
-              value={settings.googleApiKey}
+              value={storeGoogleKey}
               onChange={(e) => settings.setGoogleApiKey(e.target.value)}
               placeholder="GOOGLE_CSE_API_KEY"
               className="bg-background/50 font-mono text-sm"
@@ -184,7 +214,7 @@ export function SearchSettingsForm() {
           <div className="space-y-2">
             <Label>Search Engine ID</Label>
             <Input
-              value={settings.googleCseId}
+              value={storeGoogleCse}
               onChange={(e) => settings.setGoogleCseId(e.target.value)}
               placeholder="GOOGLE_CSE_ID"
               className="bg-background/50 font-mono text-sm"
@@ -210,7 +240,7 @@ export function SearchSettingsForm() {
           <div>
             <p className="font-medium">
               {hasSerpKey
-                ? envKeyConfigured
+                ? hydrated && envKeyConfigured
                   ? "SERPAPI_KEY detectada automaticamente no .env.local"
                   : "SerpAPI configurada — busca real disponível"
                 : "Busca real não configurada"}
@@ -245,17 +275,17 @@ export function SearchSettingsForm() {
             Volume Máximo: {SERPAPI_MAX_LEADS}/setor · 8–10 páginas · Autônomo: até{" "}
             {AUTONOMOUS_VOLUME_MAX} (Volume Alto 24h)
           </p>
-          {!isAutonomous && !settings.useMaxLeads && (
+          {!volume.isAutonomous && !volume.useMaxLeads && (
             <p className="text-xs text-emerald-300/90">
               {SERPAPI_EQUILIBRIUM_MODE_LABEL}
             </p>
           )}
           <p>
             Atual:{" "}
-            <strong>{settings.getEffectiveMaxResults()}</strong>/setor · Workers:{" "}
-            {settings.getEffectiveWorkers()} · Delay: {settings.delayMs}ms
-            {!isAutonomous &&
-              !settings.useMaxLeads &&
+            <strong>{volume.effectiveMaxResults}</strong>/setor · Workers:{" "}
+            {volume.effectiveWorkers} · Delay: {volume.delayMs}ms
+            {!volume.isAutonomous &&
+              !volume.useMaxLeads &&
               ` · ${SERPAPI_PAGES_EQUILIBRIUM_MIN}–${SERPAPI_PAGES_EQUILIBRIUM_MAX} páginas/setor`}
           </p>
           <Button variant="outline" size="sm" asChild>
@@ -269,15 +299,17 @@ export function SearchSettingsForm() {
 
       <div className="flex items-center gap-2">
         <span className="text-sm text-muted-foreground">Status:</span>
-        {isAutonomous ? (
+        {volume.isAutonomous ? (
           <Badge variant="outline" className="gap-1 border-indigo-500/40 text-indigo-300">
             Scraping Autônomo · Google+Bing+DDG
           </Badge>
-        ) : settings.searchProfile === "serpapi" ? (
+        ) : (hydrated
+            ? settings.searchProfile
+            : SETTINGS_SSR_DISPLAY_DEFAULTS.searchProfile) === "serpapi" ? (
           <Badge variant={serpLive ? "success" : "outline"}>
             {serpLive
-              ? `Modo SerpAPI Ativo · ~${remaining} buscas`
-              : configured
+              ? `Modo SerpAPI Ativo · ~${displayRemaining} buscas`
+              : hasSerpKey
                 ? "SerpAPI configurada — ative o perfil Premium"
                 : "SerpAPI — configure chave"}
           </Badge>

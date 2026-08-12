@@ -21,7 +21,8 @@ import { RECENT_SEARCHES_LIMIT } from "@/lib/mode-labels";
 
 export function FullSearchHistory() {
   const router = useRouter();
-  const fullSearchHistory = useLeadStore((s) => s.fullSearchHistory);
+  // Exact field: fullSearchHistory null after legacy rehydrate → .filter/.length crash.
+  const fullSearchHistory = useLeadStore((s) => s.fullSearchHistory ?? []);
   const loadSearchFromHistory = useLeadStore((s) => s.loadSearchFromHistory);
   const exportSearchFromHistory = useLeadStore(
     (s) => s.exportSearchFromHistory
@@ -30,12 +31,13 @@ export function FullSearchHistory() {
   const [filter, setFilter] = useState("");
 
   const filtered = useMemo(() => {
+    const list = Array.isArray(fullSearchHistory) ? fullSearchHistory : [];
     const q = filter.trim().toLowerCase();
-    if (!q) return fullSearchHistory;
-    return fullSearchHistory.filter(
+    if (!q) return list;
+    return list.filter(
       (r) =>
-        r.keyword.toLowerCase().includes(q) ||
-        r.location.toLowerCase().includes(q)
+        (r?.keyword ?? "").toLowerCase().includes(q) ||
+        (r?.location ?? "").toLowerCase().includes(q)
     );
   }, [filter, fullSearchHistory]);
 

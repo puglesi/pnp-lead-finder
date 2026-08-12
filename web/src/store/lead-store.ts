@@ -35,6 +35,7 @@ import {
   assessRealSearchResponse,
   REAL_SEARCH_UNAVAILABLE_MESSAGE,
 } from "@/lib/search/live-search-result";
+import { normalizeLeadPersistSlice } from "@/lib/store-rehydrate";
 
 const FULL_HISTORY_LIMIT = 200;
 
@@ -1151,17 +1152,40 @@ export const useLeadStore = create<LeadStore>()(
       importExternalLeads: (leads) => {
         const existingEmails = new Set(
           get()
-            .importedLeads.map((l) => l.email?.toLowerCase())
-            .filter(Boolean)
+            .importedLeads.map((l) =>
+              (l.normalizedEmail ?? l.email)?.toLowerCase()
+            )
+            .filter(Boolean) as string[]
         );
         const fresh: Lead[] = [];
         for (const lead of leads) {
-          const key = lead.email?.toLowerCase();
+          const key = (lead.normalizedEmail ?? lead.email)?.toLowerCase();
           if (!key || existingEmails.has(key)) continue;
           existingEmails.add(key);
           fresh.push(lead);
         }
-        if (fresh.length === 0) return [];
+        // Also accept re-stamp of existing importBatchId on leads already in store
+        // (membership is driven by importBatchId on form, not only "fresh" emails).
+        if (fresh.length === 0) {
+          // Still update importBatchId on matching emails if provided
+          const batchId = leads.find((l) => l.importBatchId)?.importBatchId;
+          if (batchId) {
+            set((state) => ({
+              importedLeads: state.importedLeads.map((existing) => {
+                const key = (
+                  existing.normalizedEmail ?? existing.email
+                )?.toLowerCase();
+                const match = leads.find(
+                  (l) =>
+                    (l.normalizedEmail ?? l.email)?.toLowerCase() === key
+                );
+                if (!match) return existing;
+                return { ...existing, importBatchId: batchId };
+              }),
+            }));
+          }
+          return [];
+        }
         set((state) => ({
           importedLeads: [...fresh, ...state.importedLeads],
         }));
@@ -1172,7 +1196,7 @@ export const useLeadStore = create<LeadStore>()(
     }),
     {
       name: "pnp-lead-finder",
-      version: 4,
+      version: 5,
       migrate: (persisted, version) => {
         const state = persisted as Partial<LeadStore>;
         if (!state || typeof state !== "object") return persisted;
@@ -1180,10 +1204,10 @@ export const useLeadStore = create<LeadStore>()(
         const next = { ...state };
 
         if (version < 2) {
-          if (
-            (!next.sectorHistory || next.sectorHistory.length === 0) &&
-            Array.isArray(next.recentSearches)
-          ) {
+          const sectorLen = Array.isArray(next.sectorHistory)
+            ? next.sectorHistory.length
+            : 0;
+          if (sectorLen === 0 && Array.isArray(next.recentSearches)) {
             const fromRecent: string[] = [];
             for (const record of next.recentSearches) {
               if (record?.keyword) {
@@ -1197,11 +1221,10 @@ export const useLeadStore = create<LeadStore>()(
         }
 
         if (version < 3) {
-          if (
-            (!next.fullSearchHistory ||
-              next.fullSearchHistory.length === 0) &&
-            Array.isArray(next.recentSearches)
-          ) {
+          const fullLen = Array.isArray(next.fullSearchHistory)
+            ? next.fullSearchHistory.length
+            : 0;
+          if (fullLen === 0 && Array.isArray(next.recentSearches)) {
             next.fullSearchHistory = [...next.recentSearches];
           }
           if (Array.isArray(next.recentSearches)) {
@@ -1216,7 +1239,14 @@ export const useLeadStore = create<LeadStore>()(
           next.importedLeads = next.importedLeads ?? [];
         }
 
-        return next;
+        // v5+: never leave durable arrays as null after partial legacy payloads.
+        // Always re-normalize (even when version already advanced) so a bad write
+        // cannot leave null arrays for the next rehydrate.
+        const normalized = normalizeLeadPersistSlice(next);
+        return {
+          ...next,
+          ...normalized,
+        };
       },
       // Session UI (keyword/location/current results) is NOT persisted so each
       // session opens with Nova Busca empty. Durable data remains.
@@ -1228,6 +1258,13 @@ export const useLeadStore = create<LeadStore>()(
         savedLeads: state.savedLeads,
         importedLeads: state.importedLeads,
       }),
+      merge: (persisted, current) => {
+        const normalized = normalizeLeadPersistSlice(persisted);
+        return {
+          ...current,
+          ...normalized,
+        };
+      },
     }
   )
 );

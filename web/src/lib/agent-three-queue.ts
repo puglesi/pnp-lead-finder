@@ -136,9 +136,18 @@ export interface AgentThreeOperationState {
   stopReason: string | null;
 }
 
+export type AgentThreeRecipientSourceMode = "campaign" | "import";
+
 export interface AgentThreeSnapshot {
   selectedProfileId: CampaignProfileId;
   operations: Record<CampaignProfileId, AgentThreeOperationState>;
+  /**
+   * campaign = pick saved campaign; import = my list + email template only.
+   * Never show both selectors at once.
+   */
+  recipientSourceMode: AgentThreeRecipientSourceMode;
+  /** Template selected for import mode (per session, filtered by operation). */
+  importTemplateId: string | null;
 }
 
 export interface AgentThreeLoadResult {
@@ -286,10 +295,35 @@ function createInitialOperation(
 export function createInitialAgentThreeSnapshot(): AgentThreeSnapshot {
   return {
     selectedProfileId: "panek-puglesi",
+    recipientSourceMode: "campaign",
+    importTemplateId: null,
     operations: {
       "panek-puglesi": createInitialOperation("panek-puglesi"),
       modeclean: createInitialOperation("modeclean"),
     },
+  };
+}
+
+export function setAgentThreeRecipientSourceMode(
+  snapshot: AgentThreeSnapshot,
+  mode: AgentThreeRecipientSourceMode
+): AgentThreeSnapshot {
+  return {
+    ...snapshot,
+    recipientSourceMode: mode === "import" ? "import" : "campaign",
+    importTemplateId:
+      mode === "import" ? snapshot.importTemplateId : null,
+  };
+}
+
+export function setAgentThreeImportTemplateId(
+  snapshot: AgentThreeSnapshot,
+  templateId: string | null
+): AgentThreeSnapshot {
+  return {
+    ...snapshot,
+    importTemplateId: templateId,
+    recipientSourceMode: "import",
   };
 }
 
@@ -1452,15 +1486,25 @@ export function finishAgentThree(
       item.campaignId === operation.currentCampaignId &&
       item.queueStatus === "ready"
   );
-  return hasSending ||
-    (hasReady && hasAgentThreeExecutionCapacity(operation))
-    ? snapshot
-    : updateOperation(snapshot, profileId, {
-        ...operation,
-        status: "completed",
-        currentItemId: null,
-        lastActivityAt: occurredAt,
-      });
+  if (hasSending || (hasReady && hasAgentThreeExecutionCapacity(operation))) {
+    return snapshot;
+  }
+  // Explain why the run ended (limit vs empty queue).
+  const hitNumericLimit =
+    !operation.untilQueueEnds &&
+    hasReady &&
+    !hasAgentThreeExecutionCapacity(operation);
+  const stopReason = hitNumericLimit
+    ? `Parado porque atingiu o limite configurado de ${operation.numericLimit}.`
+    : operation.stopReason ??
+      "Parado porque não há mais destinatários elegíveis na fila.";
+  return updateOperation(snapshot, profileId, {
+    ...operation,
+    status: "completed",
+    currentItemId: null,
+    lastActivityAt: occurredAt,
+    stopReason,
+  });
 }
 
 export function hasLeadReceivedCampaign(
@@ -1835,10 +1879,17 @@ export function normalizeAgentThreeSnapshot(
   const operations = isRecord(persisted.operations)
     ? persisted.operations
     : {};
+  const mode =
+    persisted.recipientSourceMode === "import" ? "import" : "campaign";
   return {
     selectedProfileId: isCampaignProfileId(persisted.selectedProfileId)
       ? persisted.selectedProfileId
       : "panek-puglesi",
+    recipientSourceMode: mode,
+    importTemplateId:
+      typeof persisted.importTemplateId === "string"
+        ? persisted.importTemplateId
+        : null,
     operations: {
       "panek-puglesi": normalizeOperation(
         operations["panek-puglesi"],
@@ -1854,6 +1905,8 @@ export function selectPersistedAgentThreeSnapshot(
 ): AgentThreeSnapshot {
   return {
     selectedProfileId: snapshot.selectedProfileId,
+    recipientSourceMode: snapshot.recipientSourceMode ?? "campaign",
+    importTemplateId: snapshot.importTemplateId ?? null,
     operations: Object.fromEntries(
       CAMPAIGN_PROFILE_IDS.map((profileId) => [
         profileId,

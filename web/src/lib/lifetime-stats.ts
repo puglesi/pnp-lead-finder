@@ -1,7 +1,8 @@
-import type { Campaign } from "../types/campaign.ts";
+import type { Campaign, CampaignLeadStatus } from "../types/campaign.ts";
 import type { Lead, SearchRecord } from "../types/lead.ts";
 import { isConfirmedCampaignDelivery } from "./campaign-delivery-metrics.ts";
 import { normalizeEmail } from "./email-validation.ts";
+import { asArray } from "./safe-object.ts";
 
 /**
  * Lifetime KPIs are cumulative business totals.
@@ -44,60 +45,71 @@ export interface LifetimeStatsInput {
 function collectUniqueLeads(input: LifetimeStatsInput): Map<string, Lead> {
   const byId = new Map<string, Lead>();
   const histories = [
-    ...input.fullSearchHistory,
-    ...(input.recentSearches ?? []),
+    ...asArray<SearchRecord>(input.fullSearchHistory),
+    ...asArray<SearchRecord>(input.recentSearches),
   ];
   for (const record of histories) {
-    for (const lead of record.leads ?? []) {
-      byId.set(lead.id, lead);
+    if (!record || typeof record !== "object") continue;
+    for (const lead of asArray<Lead>(record.leads)) {
+      if (lead?.id) byId.set(lead.id, lead);
     }
   }
-  for (const lead of input.savedLeads) {
-    byId.set(lead.id, lead);
+  for (const lead of asArray<Lead>(input.savedLeads)) {
+    if (lead?.id) byId.set(lead.id, lead);
   }
-  for (const lead of input.importedLeads ?? []) {
-    byId.set(lead.id, lead);
+  for (const lead of asArray<Lead>(input.importedLeads)) {
+    if (lead?.id) byId.set(lead.id, lead);
   }
   return byId;
 }
 
-function hasEmailAddress(lead: Lead): boolean {
-  return Boolean(normalizeEmail(lead.normalizedEmail) ?? normalizeEmail(lead.email));
+function hasEmailAddress(lead: Lead | null | undefined): boolean {
+  if (!lead || typeof lead !== "object") return false;
+  return Boolean(
+    normalizeEmail(lead.normalizedEmail) ?? normalizeEmail(lead.email)
+  );
 }
 
-function isCampaignEverSent(campaign: Campaign): boolean {
+function isCampaignEverSent(campaign: Campaign | null | undefined): boolean {
+  if (!campaign || typeof campaign !== "object") return false;
+  const statuses = asArray<CampaignLeadStatus>(campaign.leadStatuses).filter(
+    (status): status is CampaignLeadStatus =>
+      Boolean(status) && typeof status === "object"
+  );
   if (campaign.status === "completed" || campaign.status === "active") {
-    if (campaign.leadStatuses.some((status) => isConfirmedCampaignDelivery(status))) {
+    if (statuses.some((status) => isConfirmedCampaignDelivery(status))) {
       return true;
     }
   }
-  return campaign.leadStatuses.some((status) => isConfirmedCampaignDelivery(status));
+  return statuses.some((status) => isConfirmedCampaignDelivery(status));
 }
 
 export function computeLifetimeStats(input: LifetimeStatsInput): LifetimeStats {
   const histories = [
-    ...input.fullSearchHistory,
-    ...(input.recentSearches ?? []),
+    ...asArray<SearchRecord>(input?.fullSearchHistory),
+    ...asArray<SearchRecord>(input?.recentSearches),
   ];
   // Prefer full history ids; avoid double-counting the same search record.
   const seenSearchIds = new Set<string>();
   let companiesFound = 0;
   for (const record of histories) {
+    if (!record || typeof record !== "object" || !record.id) continue;
     if (seenSearchIds.has(record.id)) continue;
     seenSearchIds.add(record.id);
-    companiesFound += Math.max(0, record.resultsCount || 0);
+    companiesFound += Math.max(0, Number(record.resultsCount) || 0);
   }
 
-  const uniqueLeads = collectUniqueLeads(input);
+  const uniqueLeads = collectUniqueLeads(input ?? ({} as LifetimeStatsInput));
   const leadsFound = uniqueLeads.size;
   let validEmailsFound = 0;
   for (const lead of uniqueLeads.values()) {
     if (hasEmailAddress(lead)) validEmailsFound += 1;
   }
 
-  const campaignsSent = input.campaigns.filter(isCampaignEverSent).length;
-  const campaignsActive = input.campaigns.filter(
-    (campaign) => campaign.status === "active"
+  const campaigns = asArray<Campaign>(input?.campaigns);
+  const campaignsSent = campaigns.filter(isCampaignEverSent).length;
+  const campaignsActive = campaigns.filter(
+    (campaign) => campaign?.status === "active"
   ).length;
 
   const floors = input.floors ?? {};

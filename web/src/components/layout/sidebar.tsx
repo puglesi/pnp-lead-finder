@@ -31,8 +31,9 @@ const navItems = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { sidebarCollapsed, toggleSidebar } = useLeadStore();
-  const campaignCount = useCampaignStore((s) => s.campaigns.length);
+  const sidebarCollapsed = useLeadStore((s) => s.sidebarCollapsed ?? false);
+  const toggleSidebar = useLeadStore((s) => s.toggleSidebar);
+  const campaignCount = useCampaignStore((s) => s.campaigns?.length ?? 0);
 
   return (
     <aside

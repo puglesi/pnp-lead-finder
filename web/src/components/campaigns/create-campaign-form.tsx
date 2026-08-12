@@ -34,7 +34,6 @@ import { inferLeadSource } from "@/lib/campaign-leads";
 import {
   DEFAULT_CAMPAIGN_SEND_CONFIG,
   DEFAULT_FOLLOW_UP,
-  DEFAULT_SIGNATURE,
   DEFAULT_BATCH_SEND_CONFIG,
   type CampaignAttachment,
   type CampaignBatchSendConfig,
@@ -46,6 +45,9 @@ import { CampaignSignatureSettings } from "./campaign-signature-settings";
 import { useLeadStore } from "@/store/lead-store";
 import { useCampaignStore } from "@/store/campaign-store";
 import { useSettingsStore } from "@/store/settings-store";
+import { useOperationSignatureStore } from "@/store/operation-signature-store";
+import { useAgentThreeStore } from "@/store/agent-three-store";
+import { useEmailBlocklistStore } from "@/store/email-blocklist-store";
 import { EmailPreviewPanel } from "./email-preview-panel";
 import { LeadPicker } from "./lead-picker";
 import { RichEmailEditor } from "./rich-email-editor";
@@ -55,11 +57,20 @@ import { CampaignAttachmentField } from "./campaign-attachment";
 import { BatchSendSettings } from "./batch-send-settings";
 import { EmailProviderSettings } from "./email-provider-settings";
 import { SmtpAutonomousSettings } from "./smtp-autonomous-settings";
+import { GlobalDeduplicationPreviewPanel } from "./global-deduplication-preview";
 import { buildReuseCampaignName } from "@/lib/campaign-reuse";
 import {
   filterLeadsByMemberIds,
   getBatchEligibleLeads,
 } from "@/lib/lead-batch";
+import type { ImportBatchStats } from "@/lib/import-batch";
+import {
+  buildCampaignEligibilitySummary,
+  eligibilityTopCards,
+} from "@/lib/campaign-eligibility";
+import {
+  getOperationSendAccount,
+} from "@/lib/operation-identity";
 import { cn } from "@/lib/utils";
 import {
   CAMPAIGN_PROFILES,
@@ -74,6 +85,7 @@ import {
 } from "@/lib/email-template-library";
 import { useEmailTemplateStore } from "@/store/email-template-store";
 import { SaveAsTemplateDialog } from "./save-as-template-dialog";
+import type { Lead } from "@/types/lead";
 
 export function CreateCampaignForm({
   reuseFromId = null,
@@ -118,6 +130,10 @@ function CreateCampaignFormContent({
   );
   const createCampaign = useCampaignStore((s) => s.createCampaign);
   const setCampaignStatus = useCampaignStore((s) => s.setCampaignStatus);
+  const campaigns = useCampaignStore((s) => s.campaigns);
+  const agentOperations = useAgentThreeStore((s) => s.operations);
+  const blockedEntries = useEmailBlocklistStore((s) => s.entries);
+  const getOpSignature = useOperationSignatureStore((s) => s.getSignature);
   const getCampaign = useCampaignStore((s) => s.getCampaign);
   const attachCampaign = useBatchPipelineStore((s) => s.attachCampaign);
   const setActiveBatch = useBatchPipelineStore((s) => s.setActiveBatch);
@@ -169,9 +185,16 @@ function CreateCampaignFormContent({
   const [attachment, setAttachment] = useState<CampaignAttachment | null>(() =>
     reuseSource?.attachment ? { ...reuseSource.attachment } : null
   );
-  const [signature, setSignature] = useState<CampaignSignature>(() =>
-    reuseSource ? { ...reuseSource.signature } : { ...DEFAULT_SIGNATURE }
-  );
+  const [signature, setSignature] = useState<CampaignSignature>(() => {
+    if (reuseSource?.signature) return { ...reuseSource.signature };
+    // Official per-operation signature (Gmail paste) — never legacy hardcoded.
+    return { ...getOpSignature(campaignProfileId) };
+  });
+  /** Current upload only — never the global importedLeads pool. */
+  const [importBatchLeads, setImportBatchLeads] = useState<Lead[]>([]);
+  const [importBatchId, setImportBatchId] = useState<string | null>(null);
+  const [importBatchStats, setImportBatchStats] =
+    useState<ImportBatchStats | null>(null);
   const [batchSend, setBatchSend] = useState<CampaignBatchSendConfig>({
     ...(reuseSource?.batchSend ?? DEFAULT_BATCH_SEND_CONFIG),
   });
@@ -179,23 +202,55 @@ function CreateCampaignFormContent({
   const [formDirty, setFormDirty] = useState(false);
 
   const allLeads = useMemo(() => {
-    const map = new Map<string, (typeof savedLeads)[0]>();
+    const map = new Map<string, Lead>();
     const memberIds = batchMeta?.leadIds ?? [];
+    // Importados no seletor = SOMENTE o lote atual (importBatchLeads), não o pool global.
     const pool = batchId
       ? filterLeadsByMemberIds([...currentLeads, ...savedLeads], memberIds)
-      : [...importedLeads, ...savedLeads, ...currentLeads];
-    // Batch campaigns: only eligible emails (mailbox unknown OK; sem e-mail out).
+      : [...importBatchLeads, ...savedLeads, ...currentLeads];
     const scoped = batchId ? getBatchEligibleLeads(pool) : pool;
     for (const l of scoped) {
       if (hasValidEmail(l.email)) map.set(l.id, l);
     }
     return Array.from(map.values());
-  }, [savedLeads, currentLeads, importedLeads, batchId, batchMeta?.leadIds]);
+  }, [
+    savedLeads,
+    currentLeads,
+    importBatchLeads,
+    batchId,
+    batchMeta?.leadIds,
+  ]);
 
   const selectedLeads = useMemo(
     () => allLeads.filter((l) => selectedIds.includes(l.id)),
     [allLeads, selectedIds]
   );
+
+  /** Canonical eligibility — same numbers for cards, preview, and create. */
+  const eligibility = useMemo(
+    () =>
+      buildCampaignEligibilitySummary({
+        operation: campaignProfileId,
+        campaignId: "new-campaign-draft",
+        contactKind: "first_contact",
+        members: selectedLeads,
+        allKnownLeads: [...savedLeads, ...importedLeads, ...currentLeads],
+        campaigns,
+        operations: agentOperations,
+        blockedEntries,
+      }),
+    [
+      campaignProfileId,
+      selectedLeads,
+      savedLeads,
+      importedLeads,
+      currentLeads,
+      campaigns,
+      agentOperations,
+      blockedEntries,
+    ]
+  );
+  const topCards = eligibilityTopCards(eligibility);
   const operationTemplates = useMemo(
     () => getEmailTemplatesForOperation(emailTemplates, campaignProfileId),
     [emailTemplates, campaignProfileId]
@@ -255,7 +310,17 @@ function CreateCampaignFormContent({
 
   const changeCampaignOperation = (value: CampaignProfileId) => {
     setCampaignProfileId(value);
-    // Do not auto-fill subject/body on new campaigns — user picks a template.
+    // Official signature switches immediately with operation.
+    if (!reuseSource) {
+      setSignature({ ...getOpSignature(value) });
+      const account = getOperationSendAccount(value);
+      setSendConfig((prev) => ({
+        ...prev,
+        fromName: account.fromName,
+        fromEmail: account.fromEmail,
+        replyTo: account.replyTo,
+      }));
+    }
     if (reuseSource || selectedTemplateId) {
       const defaultTemplate = getDefaultEmailTemplate(emailTemplates, value);
       if (defaultTemplate && selectedTemplateId) {
@@ -264,13 +329,15 @@ function CreateCampaignFormContent({
     }
   };
 
-  const handleImport = (leads: import("@/types/lead").Lead[]) => {
-    const added = importExternalLeads(leads);
-    if (added.length > 0) {
-      const freshIds = added.map((l) => l.id);
-      setSelectedIds((prev) => [...new Set([...prev, ...freshIds])]);
-      if (!previewLeadId) setPreviewLeadId(freshIds[0]);
-    }
+  const handleImportBatch = (stats: ImportBatchStats) => {
+    // Persist new emails in global history, but campaign membership = this batch only.
+    importExternalLeads(stats.leads);
+    setImportBatchLeads(stats.leads);
+    setImportBatchId(stats.importBatchId);
+    setImportBatchStats(stats);
+    // Replace selection with this batch (do not accumulate old imports).
+    setSelectedIds(stats.leadIds);
+    if (stats.leadIds[0]) setPreviewLeadId(stats.leadIds[0]);
   };
 
   const handleSubmit = () => {
@@ -330,10 +397,10 @@ function CreateCampaignFormContent({
     router.push(`/campanhas/${campaign.id}`);
   };
 
-  const eligibleCount = selectedIds.length;
+  const eligibleCount = eligibility.eligibleFinal;
   const createLabel = batchId
     ? `Criar campanha com ${eligibleCount} elegíveis`
-    : `Criar Campanha (${eligibleCount} leads)`;
+    : `Criar Campanha (${eligibleCount} elegíveis de ${selectedIds.length} selecionados)`;
 
   // ── Batch mode: compact layout only ─────────────────────────────────────
   if (batchId) {
@@ -660,14 +727,18 @@ function CreateCampaignFormContent({
           </div>
         )}
 
-        <Card className="border-border/60 bg-gradient-to-br from-card to-blue-500/5">
-          <CardHeader>
+        <CollapsibleCard
+          storageKey="nova-campanha-main"
+          defaultOpen
+          className="border-border/60 bg-gradient-to-br from-card to-blue-500/5"
+        >
+          <CollapsibleCardHeader>
             <CardTitle className="flex items-center gap-2">
               <Megaphone className="size-5 text-blue-400" />
               Nova Campanha
             </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
+          </CollapsibleCardHeader>
+          <CollapsibleCardContent className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="campaign-profile">Operação</Label>
               <Select
@@ -688,7 +759,8 @@ function CreateCampaignFormContent({
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                A campanha e sua futura fila de envio ficarão isoladas nesta operação.
+                Trocar a operação troca conta de envio e assinatura oficial
+                imediatamente.
               </p>
             </div>
             <div className="space-y-2">
@@ -701,13 +773,14 @@ function CreateCampaignFormContent({
                 className="bg-background/50"
               />
             </div>
-
             <div className="space-y-2">
               <Label>Modelo de e-mail</Label>
               <Select
                 value={selectedTemplateId}
                 onValueChange={(id) => {
-                  const template = operationTemplates.find((item) => item.id === id);
+                  const template = operationTemplates.find(
+                    (item) => item.id === id
+                  );
                   if (template) applyEmailTemplate(template);
                 }}
               >
@@ -717,106 +790,208 @@ function CreateCampaignFormContent({
                 <SelectContent>
                   {operationTemplates.map((template) => (
                     <SelectItem key={template.id} value={template.id}>
-                      {template.name}{template.isDefault ? " · Padrão" : ""}
+                      {template.name}
+                      {template.isDefault ? " · Padrão" : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
-          </CardContent>
-        </Card>
+          </CollapsibleCardContent>
+        </CollapsibleCard>
 
-        <ImportExternalLeads
-          onImport={handleImport}
-          importedCount={importedLeads.length}
-        />
+        <CollapsibleCard
+          storageKey="nova-campanha-import"
+          defaultOpen
+          className="border-border/60 border-dashed"
+        >
+          <CollapsibleCardHeader>
+            <CardTitle className="text-base">Importar Leads Externos</CardTitle>
+          </CollapsibleCardHeader>
+          <CollapsibleCardContent>
+            <ImportExternalLeads
+              onImportBatch={handleImportBatch}
+              systemLeads={[...savedLeads, ...importedLeads]}
+              blockedEmails={blockedEntries.map((e) => e.normalizedEmail)}
+              currentBatchCount={importBatchLeads.length}
+            />
+          </CollapsibleCardContent>
+        </CollapsibleCard>
 
-        <SendConfigForm
-          config={sendConfig}
-          subject={subject}
-          onConfigChange={(patch) =>
-            setSendConfig((prev) => ({ ...prev, ...patch }))
-          }
-          onSubjectChange={setSubject}
-          onInsertVariable={(v) => setSubject((prev) => prev + v)}
-        />
-
-        <Card className="border-border/60">
-          <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 pb-3">
-            <div>
-              <CardTitle className="text-base">Corpo do email</CardTitle>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Editor amplo — cole direto do Gmail mantendo formatação
+        {selectedIds.length > 0 && (
+          <CollapsibleCard
+            storageKey="nova-campanha-eligibility"
+            defaultOpen
+            className="border-border/60"
+          >
+            <CollapsibleCardHeader>
+              <CardTitle className="text-base">
+                Elegibilidade (fonte única)
+              </CardTitle>
+            </CollapsibleCardHeader>
+            <CollapsibleCardContent className="space-y-3">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                <div className="rounded-lg border p-3">
+                  <p className="text-[11px] text-muted-foreground">Selecionados</p>
+                  <p className="text-xl font-semibold tabular-nums">
+                    {topCards.total}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+                  <p className="text-[11px] text-muted-foreground">Elegíveis</p>
+                  <p className="text-xl font-semibold tabular-nums text-emerald-400">
+                    {topCards.eligible}
+                  </p>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <p className="text-[11px] text-muted-foreground">Excluídos</p>
+                  <p className="text-xl font-semibold tabular-nums">
+                    {topCards.excluded}
+                  </p>
+                </div>
+              </div>
+              <GlobalDeduplicationPreviewPanel preview={eligibility.preview} />
+              <p className="text-xs text-muted-foreground">
+                Os mesmos números alimentam cards, prévia, Agent 3 e Start.
+                {importBatchId
+                  ? ` Lote de importação: ${importBatchId}.`
+                  : ""}
               </p>
+            </CollapsibleCardContent>
+          </CollapsibleCard>
+        )}
+
+        <CollapsibleCard storageKey="nova-campanha-send-config" defaultOpen>
+          <CollapsibleCardHeader>
+            <CardTitle className="text-base">Configuração de envio</CardTitle>
+          </CollapsibleCardHeader>
+          <CollapsibleCardContent>
+            <SendConfigForm
+              config={sendConfig}
+              subject={subject}
+              onConfigChange={(patch) =>
+                setSendConfig((prev) => ({ ...prev, ...patch }))
+              }
+              onSubjectChange={setSubject}
+              onInsertVariable={(v) => setSubject((prev) => prev + v)}
+            />
+          </CollapsibleCardContent>
+        </CollapsibleCard>
+
+        <CollapsibleCard storageKey="nova-campanha-editor" defaultOpen>
+          <CollapsibleCardHeader>
+            <div className="flex flex-wrap items-center justify-between gap-2 pr-10">
+              <CardTitle className="text-base">Editor / Preview do email</CardTitle>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setShowPreview((v) => !v)}
+              >
+                {showPreview ? (
+                  <>
+                    <EyeOff className="size-3.5" />
+                    Ocultar preview
+                  </>
+                ) : (
+                  <>
+                    <Eye className="size-3.5" />
+                    Mostrar preview
+                  </>
+                )}
+              </Button>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setShowPreview((v) => !v)}
-              className="shrink-0"
-            >
-              {showPreview ? (
-                <>
-                  <EyeOff className="size-3.5" />
-                  Ocultar preview
-                </>
-              ) : (
-                <>
-                  <Eye className="size-3.5" />
-                  Mostrar preview
-                </>
-              )}
-            </Button>
-          </CardHeader>
-          <CardContent className="space-y-4">
+          </CollapsibleCardHeader>
+          <CollapsibleCardContent className="space-y-4">
             <RichEmailEditor
               value={body}
               onChange={setBody}
               layout="full"
               minHeight={560}
             />
+          </CollapsibleCardContent>
+        </CollapsibleCard>
+
+        <CollapsibleCard storageKey="nova-campanha-attachment" defaultOpen={false}>
+          <CollapsibleCardHeader>
+            <CardTitle className="text-base">Anexo PDF</CardTitle>
+          </CollapsibleCardHeader>
+          <CollapsibleCardContent>
             <CampaignAttachmentField
               attachment={attachment}
               onChange={setAttachment}
             />
-          </CardContent>
-        </Card>
+          </CollapsibleCardContent>
+        </CollapsibleCard>
 
-        <CampaignSignatureSettings
-          signature={signature}
-          onChange={(patch) => setSignature((prev) => ({ ...prev, ...patch }))}
-        />
+        <CollapsibleCard storageKey="nova-campanha-signature" defaultOpen>
+          <CollapsibleCardHeader>
+            <CardTitle className="text-base">Assinatura</CardTitle>
+          </CollapsibleCardHeader>
+          <CollapsibleCardContent>
+            <CampaignSignatureSettings
+              signature={signature}
+              operation={campaignProfileId}
+              onChange={(patch) =>
+                setSignature((prev) => ({ ...prev, ...patch }))
+              }
+            />
+          </CollapsibleCardContent>
+        </CollapsibleCard>
 
-        <FollowUpSettings
-          followUp={followUp}
-          onChange={(patch) => setFollowUp((prev) => ({ ...prev, ...patch }))}
-        />
+        <CollapsibleCard storageKey="nova-campanha-followup" defaultOpen={false}>
+          <CollapsibleCardHeader>
+            <CardTitle className="text-base">Follow-up</CardTitle>
+          </CollapsibleCardHeader>
+          <CollapsibleCardContent>
+            <FollowUpSettings
+              followUp={followUp}
+              onChange={(patch) =>
+                setFollowUp((prev) => ({ ...prev, ...patch }))
+              }
+            />
+          </CollapsibleCardContent>
+        </CollapsibleCard>
 
-        <BatchSendSettings
-          config={batchSend}
-          provider={emailProvider}
-          leadCount={selectedIds.length}
-          onChange={(patch) => setBatchSend((prev) => ({ ...prev, ...patch }))}
-          onProviderChange={setEmailProvider}
-        />
+        <CollapsibleCard storageKey="nova-campanha-batch-settings" defaultOpen={false}>
+          <CollapsibleCardHeader>
+            <CardTitle className="text-base">Configurações de lote / SMTP</CardTitle>
+          </CollapsibleCardHeader>
+          <CollapsibleCardContent className="space-y-4">
+            <BatchSendSettings
+              config={batchSend}
+              provider={emailProvider}
+              leadCount={selectedIds.length}
+              onChange={(patch) =>
+                setBatchSend((prev) => ({ ...prev, ...patch }))
+              }
+              onProviderChange={setEmailProvider}
+            />
+            <EmailProviderSettings />
+            <SmtpAutonomousSettings />
+          </CollapsibleCardContent>
+        </CollapsibleCard>
 
-        <EmailProviderSettings />
-        <SmtpAutonomousSettings />
-
-        <LeadPicker
-          savedLeads={savedLeads}
-          recentLeads={currentLeads}
-          importedLeads={importedLeads}
-          selectedIds={selectedIds}
-          onSelectionChange={(ids) => {
-            setSelectedIds(ids);
-            if (ids.length > 0 && !ids.includes(previewLeadId ?? "")) {
-              setPreviewLeadId(ids[0]);
-            }
-          }}
-          recentSearchLabel={recentSearchLabel}
-        />
+        <CollapsibleCard storageKey="nova-campanha-leads" defaultOpen>
+          <CollapsibleCardHeader>
+            <CardTitle className="text-base">Selecionar Leads</CardTitle>
+          </CollapsibleCardHeader>
+          <CollapsibleCardContent>
+            <LeadPicker
+              savedLeads={savedLeads}
+              recentLeads={currentLeads}
+              importedLeads={importBatchLeads}
+              selectedIds={selectedIds}
+              onSelectionChange={(ids) => {
+                setSelectedIds(ids);
+                if (ids.length > 0 && !ids.includes(previewLeadId ?? "")) {
+                  setPreviewLeadId(ids[0]);
+                }
+              }}
+              recentSearchLabel={recentSearchLabel}
+            />
+          </CollapsibleCardContent>
+        </CollapsibleCard>
 
         <Button
           size="lg"
