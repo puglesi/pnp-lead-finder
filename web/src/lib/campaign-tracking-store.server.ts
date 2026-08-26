@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import type { CampaignTrackingEvent } from "@/types/campaign-tracking";
+import { getLocalDatabase } from "@/lib/server/local-database";
 
 const UPSTASH_KEY = "pnp:campaign-tracking";
 
@@ -128,6 +129,9 @@ function newEventId() {
 }
 
 export async function listTrackingEvents(campaignId?: string) {
+  if (!process.env.VERCEL) {
+    return getLocalDatabase().listTrackingEvents(campaignId);
+  }
   const store = await ensureStore();
   if (!campaignId) return store.events;
   return store.events.filter((e) => e.campaignId === campaignId);
@@ -138,6 +142,23 @@ export async function recordTrackingEvent(
     occurredAt?: string;
   }
 ): Promise<CampaignTrackingEvent> {
+  if (!process.env.VERCEL) {
+    const database = getLocalDatabase();
+    const existing = input.type === "open"
+      ? database.listTrackingEvents(input.campaignId).find(
+          (event) =>
+            event.leadId === input.leadId && event.type === "open"
+        )
+      : undefined;
+    if (existing) return existing;
+    const event: CampaignTrackingEvent = {
+      id: newEventId(),
+      occurredAt: input.occurredAt ?? new Date().toISOString(),
+      ...input,
+    };
+    database.recordTrackingEvent(event);
+    return event;
+  }
   const store = await ensureStore();
 
   if (input.type === "open") {

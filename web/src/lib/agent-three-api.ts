@@ -6,6 +6,8 @@ import {
   type AgentThreeSmtpResult,
 } from "./agent-three-smtp-contract.ts";
 import type { CampaignProfileId } from "../types/campaign-profile.ts";
+import type { AgentThreePersistedSendRecord } from "./agent-three-reconciliation.ts";
+import { AGENT_THREE_SEND_HTTP_TIMEOUT_MS } from "./agent-three-timeouts.ts";
 
 function parseDiagnostics(value: unknown): AgentThreeSmtpDiagnostics | undefined {
   if (typeof value !== "object" || value === null) return undefined;
@@ -95,12 +97,39 @@ export async function requestAgentThreeSmtpSend(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request),
+      signal: AbortSignal.timeout(AGENT_THREE_SEND_HTTP_TIMEOUT_MS),
     });
     return readResult(response);
-  } catch {
+  } catch (error) {
+    const timedOut =
+      (error instanceof DOMException && error.name === "TimeoutError") ||
+      (error instanceof Error && error.name === "AbortError");
     return {
-      status: "transient_error",
-      message: AGENT_THREE_SMTP_MESSAGES.transient_error,
+      status: timedOut ? "reconciliation_required" : "transient_error",
+      message: timedOut
+        ? AGENT_THREE_SMTP_MESSAGES.reconciliation_required
+        : AGENT_THREE_SMTP_MESSAGES.transient_error,
     };
+  }
+}
+
+export async function fetchAgentThreeSendHistory(input: {
+  operation: CampaignProfileId;
+  campaignId?: string | null;
+}): Promise<AgentThreePersistedSendRecord[]> {
+  try {
+    const params = new URLSearchParams({ operation: input.operation });
+    if (input.campaignId) params.set("campaignId", input.campaignId);
+    const response = await fetch(`/api/agent-3/history?${params.toString()}`, {
+      method: "GET",
+      cache: "no-store",
+      signal: AbortSignal.timeout(8_000),
+    });
+    const body = (await response.json().catch(() => null)) as {
+      sends?: AgentThreePersistedSendRecord[];
+    } | null;
+    return Array.isArray(body?.sends) ? body.sends : [];
+  } catch {
+    return [];
   }
 }

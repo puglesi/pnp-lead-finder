@@ -33,6 +33,10 @@ function lead(id, email, extras = {}) {
     address: "London",
     category: "Mortgage Adviser",
     aiScore: 80,
+    synthetic: false,
+    emailIsGuessed: false,
+    emailSourceUrl: email ? `https://${id}.example.test/contact` : null,
+    emailDiscoveryMethod: email ? "website_contact" : null,
     ...extras,
   };
 }

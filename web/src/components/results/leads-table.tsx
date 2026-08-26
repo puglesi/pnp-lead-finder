@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Download, Plus, SearchX, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Download, Plus, SearchX, X } from "lucide-react";
 import toast from "react-hot-toast";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
@@ -23,12 +23,24 @@ import {
 import { useLeadStore } from "@/store/lead-store";
 import { exportLeadsToCSV } from "@/lib/csv-export";
 import type { Lead } from "@/types/lead";
+import { SearchRecovery } from "./search-recovery";
+import { LocationFilterControls } from "./location-filter-controls";
+import {
+  DEFAULT_LOCATION_FILTER,
+  passesLocationFilter,
+  shouldApplyGeoLocationFilter,
+  type LocationFilterOptions,
+} from "@/lib/location-match";
+import { stampLegacyLeadQuality } from "@/lib/lead-provenance";
+import { formatRegionHeading, resolveGeoRegion } from "@/lib/geo/regions";
 
 function filterLeads(
   leads: Lead[],
   scoreFilter: ScoreFilter,
   emailFilter: EmailFilter,
-  categoryFilter: string
+  categoryFilter: string,
+  locationFilter: LocationFilterOptions,
+  requestedLocation: string
 ) {
   return leads.filter((lead) => {
     if (scoreFilter === "high" && lead.aiScore < 85) return false;
@@ -39,6 +51,13 @@ function filterLeads(
     if (emailFilter === "without" && lead.email) return false;
     if (categoryFilter !== "all" && lead.category !== categoryFilter)
       return false;
+    const stamped = stampLegacyLeadQuality(lead, requestedLocation);
+    if (
+      shouldApplyGeoLocationFilter(requestedLocation) &&
+      !passesLocationFilter(stamped.locationMatch, locationFilter)
+    ) {
+      return false;
+    }
     return true;
   });
 }
@@ -54,12 +73,15 @@ export function LeadsTable() {
     selectAllLeads,
     clearSelection,
     getSelectedLeads,
-    generateMoreLeads,
+    bulkProgress,
   } = useLeadStore();
 
   const [scoreFilter, setScoreFilter] = useState<ScoreFilter>("all");
   const [emailFilter, setEmailFilter] = useState<EmailFilter>("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [locationFilter, setLocationFilter] = useState<LocationFilterOptions>(
+    DEFAULT_LOCATION_FILTER
+  );
 
   const categories = useMemo(
     () => [...new Set(currentLeads.map((l) => l.category))],
@@ -68,8 +90,22 @@ export function LeadsTable() {
 
   const filteredLeads = useMemo(
     () =>
-      filterLeads(currentLeads, scoreFilter, emailFilter, categoryFilter),
-    [currentLeads, scoreFilter, emailFilter, categoryFilter]
+      filterLeads(
+        currentLeads,
+        scoreFilter,
+        emailFilter,
+        categoryFilter,
+        locationFilter,
+        currentLocation
+      ),
+    [
+      currentLeads,
+      scoreFilter,
+      emailFilter,
+      categoryFilter,
+      locationFilter,
+      currentLocation,
+    ]
   );
 
   const selectedSet = new Set(selectedLeadIds);
@@ -101,6 +137,7 @@ export function LeadsTable() {
     setScoreFilter("all");
     setEmailFilter("all");
     setCategoryFilter("all");
+    setLocationFilter(DEFAULT_LOCATION_FILTER);
   };
 
   if (isSearching) {
@@ -109,7 +146,22 @@ export function LeadsTable() {
 
   if (currentLeads.length === 0) {
     return (
-      <Card className="border-border/60">
+      <div className="space-y-4">
+        <SearchRecovery />
+        {bulkProgress.persistenceStatus === "error" && (
+          <Card className="border-red-500/40 bg-red-500/5">
+            <CardContent className="flex items-start gap-3 p-4 text-sm text-red-200">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+              <div>
+                <p className="font-medium">Falha ao salvar a busca</p>
+                <p className="mt-1 text-xs text-red-200/80">
+                  {bulkProgress.persistenceError}. Nenhuma nova consulta foi iniciada sem checkpoint seguro.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+        <Card className="border-border/60">
         <CardContent className="flex flex-col items-center justify-center py-20 text-center">
           <SearchX className="mb-4 size-16 text-muted-foreground/40" />
           <h3 className="text-lg font-semibold">Nenhum resultado ainda</h3>
@@ -129,12 +181,14 @@ export function LeadsTable() {
             </Button>
           </div>
         </CardContent>
-      </Card>
+        </Card>
+      </div>
     );
   }
 
   return (
     <div className="space-y-4">
+      <SearchRecovery />
       {!isSearching && currentLeads.length > 0 && (
         <BulkSearchProgress />
       )}
@@ -158,7 +212,9 @@ export function LeadsTable() {
           <h2 className="text-2xl font-bold tracking-tight">
             {currentKeyword}{" "}
             <span className="font-normal text-muted-foreground">
-              em {currentLocation}
+              em{" "}
+              {formatRegionHeading(resolveGeoRegion(currentLocation)) ??
+                currentLocation}
             </span>
           </h2>
           <p className="text-sm text-muted-foreground">
@@ -176,10 +232,9 @@ export function LeadsTable() {
             variant="outline"
             size="sm"
             onClick={() => {
-              const added = generateMoreLeads(50);
-              if (added > 0) {
-                toast.success(`+${added} leads adicionados!`, { icon: "✨" });
-              }
+              toast.error(
+                "Quantidade é um teto. Não completamos busca real com leads artificiais."
+              );
             }}
           >
             <Plus className="size-3.5" />
@@ -212,18 +267,25 @@ export function LeadsTable() {
 
       <div className="flex flex-col gap-6 lg:flex-row">
         <aside className="w-full shrink-0 lg:w-56 xl:w-64">
-          <ResultsFilters
-            scoreFilter={scoreFilter}
-            emailFilter={emailFilter}
-            categoryFilter={categoryFilter}
-            categories={categories}
-            totalCount={currentLeads.length}
-            filteredCount={filteredLeads.length}
-            onScoreChange={setScoreFilter}
-            onEmailChange={setEmailFilter}
-            onCategoryChange={setCategoryFilter}
-            onClear={handleClearFilters}
-          />
+          <div className="space-y-3">
+            <ResultsFilters
+              scoreFilter={scoreFilter}
+              emailFilter={emailFilter}
+              categoryFilter={categoryFilter}
+              categories={categories}
+              totalCount={currentLeads.length}
+              filteredCount={filteredLeads.length}
+              onScoreChange={setScoreFilter}
+              onEmailChange={setEmailFilter}
+              onCategoryChange={setCategoryFilter}
+              onClear={handleClearFilters}
+            />
+            <LocationFilterControls
+              value={locationFilter}
+              onChange={setLocationFilter}
+              requestedLocation={currentLocation}
+            />
+          </div>
         </aside>
 
         <Card className="min-w-0 flex-1 overflow-hidden border-border/60 shadow-sm">

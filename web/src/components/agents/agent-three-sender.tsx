@@ -39,6 +39,10 @@ import {
   describeAgentThreeExclusionReason,
 } from "@/lib/agent-three-campaign-load";
 import { isCampaignFullyDelivered } from "@/lib/campaign-completion";
+import {
+  AGENT_THREE_STALE_HEARTBEAT_MESSAGE,
+  isAgentThreeHeartbeatStale,
+} from "@/lib/agent-three-timeouts";
 import { getCampaignDeliverySnapshot } from "@/lib/campaign-metrics";
 import {
   connectionStatusMessage,
@@ -66,6 +70,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { bindSignatureToOperation } from "@/lib/operation-signature";
 
 const subscribeToHydration = () => () => {};
 const getClientHydrationSnapshot = () => true;
@@ -143,6 +148,9 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
   const templates = useEmailTemplateStore((state) => state.templates);
   const saveAsTemplate = useEmailTemplateStore((state) => state.saveAsTemplate);
   const getSignature = useOperationSignatureStore((state) => state.getSignature);
+  const officialSignatures = useOperationSignatureStore(
+    (state) => state.signatures
+  );
   const runner = useAgentThreeRunner();
 
   const profileId: CampaignProfileId = hydrated
@@ -217,7 +225,7 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
     if (!hydrated || !currentCampaign) return;
     if (currentCampaign.campaignProfileId !== profileId) return;
     const account = getOperationSendAccount(profileId);
-    const signature = getSignature(profileId);
+    const signature = officialSignatures[profileId];
     if (
       currentCampaign.fromEmail === account.fromEmail &&
       currentCampaign.signature?.body === signature.body
@@ -228,14 +236,15 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
       fromName: account.fromName,
       fromEmail: account.fromEmail,
       replyTo: account.replyTo,
-      signature: { ...signature },
+      signature: bindSignatureToOperation(profileId, signature),
     });
   }, [
     hydrated,
     profileId,
+    currentCampaign,
     currentCampaign?.id,
     currentCampaign?.campaignProfileId,
-    getSignature,
+    officialSignatures,
     updateCampaign,
   ]);
 
@@ -327,6 +336,10 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
     nextSendAt === null
       ? null
       : Math.max(0, Math.ceil((nextSendAt - clockNow) / 1_000));
+  const heartbeatStale = isAgentThreeHeartbeatStale(
+    operation.lastActivityAt,
+    operation.status
+  );
   const hasConnectionError =
     connectionStatus !== null &&
     ERROR_CONNECTION_STATUSES.has(connectionStatus);
@@ -345,7 +358,9 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
 
   const visualState = isPreparing
     ? "Carregando"
-    : hasConnectionError && operation.status !== "running"
+    : heartbeatStale
+      ? "Erro"
+      : hasConnectionError && operation.status !== "running"
       ? "Erro"
       : operation.status === "running"
         ? "Enviando"
@@ -366,7 +381,9 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
           : visualState === "Enviando"
             ? "default"
             : "secondary";
-  const activityMessage = isPreparing
+  const activityMessage = heartbeatStale
+    ? AGENT_THREE_STALE_HEARTBEAT_MESSAGE
+    : isPreparing
     ? "Carregando destinatÃ¡rios da campanhaâ€¦"
     : visualState === "Erro"
       ? operation.errorMessage ??
@@ -442,7 +459,7 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
       fromName: account.fromName,
       fromEmail: account.fromEmail,
       replyTo: account.replyTo,
-      signature: { ...signature },
+      signature: bindSignatureToOperation(profileId, signature),
       leadIds: currentCampaign.leadIds,
     });
     toast.success(`Modelo “${template.name}” aplicado a esta execução.`);

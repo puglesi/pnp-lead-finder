@@ -8,6 +8,8 @@ import {
   emailValidationResultToLeadUpdate,
   normalizeEmail,
 } from "./email-validation.ts";
+import { isSyntheticLead } from "./search/real-search-guard.ts";
+import { hasDiscoveredEmail, stampLegacyLeadQuality } from "./lead-provenance.ts";
 
 export type AgentTwoStatus =
   | "idle"
@@ -166,9 +168,18 @@ export function buildAgentTwoQueue(
     let status: EmailValidationStatus = "pending";
     let reason = "pending";
     let completedAt: string | undefined;
-    if (!normalizedEmail) {
+    const stamped = stampLegacyLeadQuality(lead);
+    if (isSyntheticLead(stamped)) {
+      status = "unknown";
+      reason = "synthetic_source";
+      completedAt = createdAt;
+    } else if (!normalizedEmail) {
       status = "no_email";
       reason = "no_email";
+      completedAt = createdAt;
+    } else if (!hasDiscoveredEmail(stamped)) {
+      status = "unknown";
+      reason = "guess_not_verified";
       completedAt = createdAt;
     } else if (duplicateOf) {
       status = "duplicate";
@@ -248,8 +259,11 @@ function prepareAgentTwoCandidates(
     seenLeadIds.add(lead.id);
     if (hasCompletedValidation(lead)) return;
 
+    const stamped = stampLegacyLeadQuality(lead);
+    if (isSyntheticLead(stamped)) return;
     const normalizedEmail = normalizeEmail(lead.email);
     if (!normalizedEmail) return;
+    if (!hasDiscoveredEmail(stamped)) return;
 
     const duplicateOf = canonicalLeadByEmail.get(normalizedEmail);
     if (!duplicateOf) {

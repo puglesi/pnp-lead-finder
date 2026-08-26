@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import {
   Cloud,
@@ -33,6 +33,8 @@ import {
   getProviderSendMode,
 } from "@/lib/email-provider-utils";
 import {
+  computeAutonomousDailyRemaining,
+  computeAutonomousDailySentCount,
   selectEmailProviderCredentials,
   useSettingsStore,
 } from "@/store/settings-store";
@@ -72,9 +74,24 @@ export function BatchSendSettings({
   const credentials = useSettingsStore(
     useShallow(selectEmailProviderCredentials)
   );
-  const dailySent = useSettingsStore((s) => s.autonomousDailySentCount);
-  const dailyRemaining = useSettingsStore((s) =>
-    s.getAutonomousDailyRemaining(config.dailyLimit)
+  const dailySentDate = useSettingsStore((s) => s.autonomousDailySentDate);
+  const dailySentCount = useSettingsStore((s) => s.autonomousDailySentCount);
+  const resetAutonomousDailyCountIfNeeded = useSettingsStore(
+    (s) => s.resetAutonomousDailyCountIfNeeded
+  );
+
+  useEffect(() => {
+    resetAutonomousDailyCountIfNeeded();
+  }, [resetAutonomousDailyCountIfNeeded]);
+
+  const dailySent = computeAutonomousDailySentCount(
+    dailySentDate,
+    dailySentCount
+  );
+  const dailyRemaining = computeAutonomousDailyRemaining(
+    dailySentDate,
+    dailySentCount,
+    config.dailyLimit
   );
 
   const sendMode = resolveSendMode(provider);

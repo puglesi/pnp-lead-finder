@@ -15,7 +15,6 @@ import {
   DEFAULT_BATCH_SEND_CONFIG,
   DEFAULT_CAMPAIGN_SEND_CONFIG as SEND_DEFAULTS,
   DEFAULT_FOLLOW_UP,
-  DEFAULT_SIGNATURE,
   DEFAULT_UNSUBSCRIBE_LINK,
   initLeadStatuses,
   type Campaign,
@@ -33,6 +32,20 @@ import { useBatchPipelineStore } from "@/store/batch-pipeline-store";
 import { applyCampaignDeliveryReconciliation } from "@/lib/campaign-metrics";
 import { normalizeCampaignPersistSlice } from "@/lib/store-rehydrate";
 import { asArray } from "@/lib/safe-object";
+import {
+  EMPTY_OPERATION_SIGNATURE,
+  ensureOperationSignaturesHydrated,
+  useOperationSignatureStore,
+} from "@/store/operation-signature-store";
+import {
+  bindSignatureToOperation,
+  getOperationSignatureMismatch,
+} from "@/lib/operation-signature";
+import { getOperationSendAccount } from "@/lib/operation-identity";
+import {
+  assertLocalDataWritable,
+  ensureLocalDataWritable,
+} from "@/lib/local-data-client";
 
 interface CampaignStore {
   campaigns: Campaign[];
@@ -93,10 +106,13 @@ export const useCampaignStore = create<CampaignStore>()(
       sendPaused: false,
 
       createCampaign: (data) => {
+        assertLocalDataWritable();
         const settings = useSettingsStore.getState();
+        const campaignProfileId =
+          data.campaignProfileId ?? "panek-puglesi";
         const campaign: Campaign = {
           id: `camp-${Date.now()}`,
-          campaignProfileId: data.campaignProfileId ?? "panek-puglesi",
+          campaignProfileId,
           emailTemplateId: data.emailTemplateId,
           contactKind: data.contactKind ?? "first_contact",
           name: data.name,
@@ -121,7 +137,17 @@ export const useCampaignStore = create<CampaignStore>()(
           repliedCount: 0,
           failedCount: 0,
           attachment: data.attachment ?? null,
-          signature: { ...DEFAULT_SIGNATURE, ...data.signature },
+          signature: bindSignatureToOperation(
+            campaignProfileId,
+            data.signature
+              ? {
+                  enabled:
+                    data.signature.enabled ??
+                    Boolean(data.signature.body?.trim()),
+                  body: data.signature.body ?? "",
+                }
+              : EMPTY_OPERATION_SIGNATURE
+          ),
           batchSend: { ...DEFAULT_BATCH_SEND_CONFIG, ...data.batchSend },
           sendErrors: [],
           emailProvider: data.emailProvider ?? settings.emailProvider ?? "simulate",
@@ -131,15 +157,16 @@ export const useCampaignStore = create<CampaignStore>()(
       },
 
       updateCampaign: (id, data) =>
-        set((state) => ({
+        (assertLocalDataWritable(), set((state) => ({
           campaigns: state.campaigns.map((c) =>
             c.id === id
               ? { ...c, ...data, updatedAt: new Date().toISOString() }
               : c
           ),
-        })),
+        }))),
 
       duplicateCampaign: (id) => {
+        assertLocalDataWritable();
         const source = get().getCampaign(id);
         if (!source) return null;
 
@@ -189,7 +216,7 @@ export const useCampaignStore = create<CampaignStore>()(
       },
 
       deleteCampaign: (id) =>
-        set((state) => ({
+        (assertLocalDataWritable(), set((state) => ({
           campaigns: state.campaigns.filter((c) => c.id !== id),
           sendingCampaignId:
             state.sendingCampaignId === id ? null : state.sendingCampaignId,
@@ -197,16 +224,16 @@ export const useCampaignStore = create<CampaignStore>()(
             state.sendingProgress?.campaignId === id
               ? null
               : state.sendingProgress,
-        })),
+        }))),
 
       setCampaignStatus: (id, status) =>
-        set((state) => ({
+        (assertLocalDataWritable(), set((state) => ({
           campaigns: state.campaigns.map((c) =>
             c.id === id
               ? { ...c, status, updatedAt: new Date().toISOString() }
               : c
           ),
-        })),
+        }))),
 
       pauseBatchSend: () => {
         const { sendingCampaignId, sendingProgress } = get();
@@ -241,8 +268,30 @@ export const useCampaignStore = create<CampaignStore>()(
       },
 
       startBatchSend: async (id, leadContexts) => {
+        await ensureLocalDataWritable();
         let campaign = get().getCampaign(id);
         if (!campaign) return;
+
+        await ensureOperationSignaturesHydrated();
+        const operation = campaign.campaignProfileId;
+        const officialSignature = bindSignatureToOperation(
+          operation,
+          useOperationSignatureStore.getState().getSignature(operation)
+        );
+        const signatureBlock = getOperationSignatureMismatch(
+          operation,
+          officialSignature,
+          { requireOperationId: true }
+        );
+        if (signatureBlock) throw new Error(signatureBlock);
+        const account = getOperationSendAccount(operation);
+        get().updateCampaign(id, {
+          fromName: account.fromName,
+          fromEmail: account.fromEmail,
+          replyTo: account.replyTo,
+          signature: officialSignature,
+        });
+        campaign = get().getCampaign(id)!;
 
         const settings = useSettingsStore.getState();
         const providerId =
@@ -519,16 +568,23 @@ export const useCampaignStore = create<CampaignStore>()(
           sendingCampaignId: null,
           sendPaused: false,
           campaigns: state.campaigns.map((c) => {
-            const signature = c.signature ?? { ...DEFAULT_SIGNATURE };
+            const campaignProfileId =
+              c.campaignProfileId === "modeclean"
+                ? "modeclean"
+                : "panek-puglesi";
+            let signature = bindSignatureToOperation(
+              campaignProfileId,
+              c.signature ?? EMPTY_OPERATION_SIGNATURE
+            );
             if (isLegacySignature(signature.body)) {
-              signature.body = DEFAULT_SIGNATURE.body;
+              signature = bindSignatureToOperation(
+                campaignProfileId,
+                EMPTY_OPERATION_SIGNATURE
+              );
             }
             const base: Campaign = {
               ...c,
-              campaignProfileId:
-                c.campaignProfileId === "modeclean"
-                  ? "modeclean"
-                  : "panek-puglesi",
+              campaignProfileId,
               emailTemplateId: c.emailTemplateId,
               contactKind: c.contactKind ?? "first_contact",
               leadSource: c.leadSource ?? "saved",

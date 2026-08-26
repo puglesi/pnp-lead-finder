@@ -10,6 +10,18 @@ import {
   normalizeEmail,
 } from "./email-validation.ts";
 import { isRealDeliveryMessageId } from "./campaign-delivery-metrics.ts";
+import { AGENT_THREE_UNKNOWN_RECONCILIATION_MESSAGE } from "./agent-three-timeouts.ts";
+import {
+  hasDiscoveredEmail,
+  stampLegacyLeadQuality,
+} from "./lead-provenance.ts";
+import { isSyntheticLead } from "./search/real-search-guard.ts";
+import {
+  DEFAULT_LOCATION_FILTER,
+  isGeographicallyEligible,
+  shouldApplyGeoLocationFilter,
+  type LocationFilterOptions,
+} from "./location-match.ts";
 
 export type AgentThreeQueueStatus =
   | "pending"
@@ -18,7 +30,8 @@ export type AgentThreeQueueStatus =
   | "sent"
   | "failed"
   | "blocked"
-  | "skipped";
+  | "skipped"
+  | "unknown";
 
 export type AgentThreeExclusionReason =
   | "no_email"
@@ -32,7 +45,11 @@ export type AgentThreeExclusionReason =
   | "unsubscribed"
   | "permanent_bounce"
   | "contact_blocked"
-  | "send_locked";
+  | "send_locked"
+  | "synthetic"
+  | "guess_not_verified"
+  | "outside_target"
+  | "unknown_location";
 
 export type AgentThreeStatus =
   | "idle"
@@ -82,6 +99,9 @@ export interface AgentThreeQueueItem {
   failedAt?: string;
   errorMessage?: string;
   attemptCount: number;
+  synthetic?: boolean;
+  emailIsGuessed?: boolean;
+  emailSourceUrl?: string | null;
   providerMessageId?: string;
 }
 
@@ -185,6 +205,8 @@ export interface AgentThreeMetrics {
   pending: number;
   ready: number;
   failed: number;
+  sending: number;
+  unknown: number;
   blocked: number;
   skipped: number;
   numericLimit: number;
@@ -225,6 +247,7 @@ const QUEUE_STATUSES = new Set<AgentThreeQueueStatus>([
   "failed",
   "blocked",
   "skipped",
+  "unknown",
 ]);
 
 const EXCLUSION_REASONS = new Set<
@@ -242,6 +265,10 @@ const EXCLUSION_REASONS = new Set<
   "permanent_bounce",
   "contact_blocked",
   "send_locked",
+  "synthetic",
+  "guess_not_verified",
+  "outside_target",
+  "unknown_location",
 ]);
 
 const VALIDATION_STATUSES = new Set<EmailValidationStatus>([
@@ -527,16 +554,60 @@ export function configureAgentThreeIntervals(
   );
 }
 
-function classifyLead(lead: Lead): {
+function classifyLead(
+  lead: Lead,
+  locationFilter: LocationFilterOptions = DEFAULT_LOCATION_FILTER
+): {
   validationStatus: EmailValidationStatus;
   validationReason: string;
   queueStatus: AgentThreeQueueStatus;
   exclusionReason?: AgentThreeQueueItem["exclusionReason"];
 } {
-  const validationStatus = lead.emailValidationStatus ?? "pending";
+  const stamped = stampLegacyLeadQuality(lead);
+  const validationStatus = stamped.emailValidationStatus ?? "pending";
   const validationReason =
-    lead.emailValidationReason ??
-    (lead.emailValidationStatus ? "reason_not_recorded" : "awaiting_validation");
+    stamped.emailValidationReason ??
+    (stamped.emailValidationStatus ? "reason_not_recorded" : "awaiting_validation");
+
+  if (
+    shouldApplyGeoLocationFilter(stamped.requestedLocation) &&
+    !isGeographicallyEligible(stamped.locationMatch, locationFilter)
+  ) {
+    const geoReason: AgentThreeQueueItem["exclusionReason"] =
+      stamped.locationMatch === "outside_target"
+        ? "outside_target"
+        : "unknown_location";
+    return {
+      validationStatus,
+      validationReason:
+        geoReason === "unknown_location"
+          ? "review_location"
+          : "outside_target",
+      queueStatus: "blocked",
+      exclusionReason: geoReason,
+    };
+  }
+
+  if (isSyntheticLead(stamped)) {
+    return {
+      validationStatus,
+      validationReason: "synthetic_source",
+      queueStatus: "blocked",
+      exclusionReason: "synthetic",
+    };
+  }
+  if (!hasDiscoveredEmail(stamped)) {
+    if (normalizeEmail(stamped.normalizedEmail) ?? normalizeEmail(stamped.email)) {
+      return {
+        validationStatus,
+        validationReason:
+          validationReason === "awaiting_validation"
+            ? "guess_not_verified"
+            : validationReason,
+        queueStatus: "pending",
+      };
+    }
+  }
 
   if (!(normalizeEmail(lead.normalizedEmail) ?? normalizeEmail(lead.email))) {
     return {
@@ -586,11 +657,12 @@ function queueItemFromLead(
   profileId: CampaignProfileId,
   campaignId: string,
   createdAt: string,
-  sequence: number
+  sequence: number,
+  locationFilter: LocationFilterOptions = DEFAULT_LOCATION_FILTER
 ): AgentThreeQueueItem {
   const normalizedEmail =
     normalizeEmail(lead.normalizedEmail) ?? normalizeEmail(lead.email);
-  const classification = classifyLead(lead);
+  const classification = classifyLead(lead, locationFilter);
   return {
     id:
       "agent-three-" +
@@ -620,6 +692,9 @@ function queueItemFromLead(
     createdAt,
     updatedAt: createdAt,
     attemptCount: 0,
+    synthetic: isSyntheticLead(lead),
+    emailIsGuessed: stampLegacyLeadQuality(lead).emailIsGuessed === true,
+    emailSourceUrl: lead.emailSourceUrl ?? null,
   };
 }
 
@@ -633,7 +708,8 @@ export function loadAgentThreeLeads(
   campaignId: string,
   leads: Lead[],
   quantity: number,
-  createdAt: string
+  createdAt: string,
+  options?: { locationFilter?: LocationFilterOptions }
 ): AgentThreeLoadResult {
   const operation = snapshot.operations[profileId];
   const safeQuantity = Number.isFinite(quantity)
@@ -689,7 +765,8 @@ export function loadAgentThreeLeads(
       profileId,
       campaignId,
       createdAt,
-      operation.queue.length + addedItems.length
+      operation.queue.length + addedItems.length,
+      options?.locationFilter ?? DEFAULT_LOCATION_FILTER
     );
     addedItems.push(item);
     leadKeys.add(leadKey);
@@ -782,6 +859,10 @@ function leadEvidenceForItem(
     hasMxRecords: hasRecordedValidation
       ? lead.hasMxRecords
       : lead.hasMxRecords ?? item.hasMxRecords,
+    synthetic: isSyntheticLead(lead) || item.synthetic,
+    emailIsGuessed:
+      stampLegacyLeadQuality(lead).emailIsGuessed === true || item.emailIsGuessed,
+    emailSourceUrl: lead.emailSourceUrl ?? item.emailSourceUrl,
   };
 }
 
@@ -798,6 +879,9 @@ function getAgentThreeExclusionReason(
   ) {
     return item.exclusionReason;
   }
+  if (item.synthetic || item.exclusionReason === "synthetic") return "synthetic";
+  if (item.exclusionReason === "outside_target") return "outside_target";
+  if (item.exclusionReason === "unknown_location") return "unknown_location";
   if (!item.normalizedEmail) return "no_email";
   if (!isEmailSyntaxValid(item.normalizedEmail)) return "invalid_syntax";
   if (item.validationStatus === "no_email") return "no_email";
@@ -821,6 +905,8 @@ function getAgentThreeExclusionReason(
 export function isAgentThreeItemEligible(
   item: AgentThreeQueueItem
 ): boolean {
+  if (item.synthetic) return false;
+  if (item.emailIsGuessed) return false;
   if (getAgentThreeExclusionReason(item)) return false;
   if (!item.normalizedEmail || !isEmailSyntaxValid(item.normalizedEmail)) {
     return false;
@@ -864,7 +950,7 @@ export function prepareAgentThreeCampaign(
       eligibleCount: operation.queue.filter(
         (item) =>
           item.campaignId === campaignId &&
-          (item.queueStatus === "ready" || item.queueStatus === "sending")
+          item.queueStatus === "ready"
       ).length,
       preparedCount: 0,
       removedCount: 0,
@@ -889,6 +975,7 @@ export function prepareAgentThreeCampaign(
     if (
       originalItem.campaignId !== campaignId ||
       originalItem.queueStatus === "sending" ||
+      originalItem.queueStatus === "unknown" ||
       originalItem.queueStatus === "skipped" ||
       (originalItem.queueStatus === "sent" && !unconfirmedSent) ||
       (originalItem.queueStatus === "failed" &&
@@ -1140,7 +1227,12 @@ export function resumeAgentThree(
       errorMessage: null,
       queue: operation.queue.map((item) =>
         item.queueStatus === "sending"
-          ? { ...item, queueStatus: "ready" as const, updatedAt: occurredAt }
+          ? {
+              ...item,
+              queueStatus: "unknown" as const,
+              errorMessage: AGENT_THREE_UNKNOWN_RECONCILIATION_MESSAGE,
+              updatedAt: occurredAt,
+            }
           : item
       ),
     },
@@ -1365,6 +1457,102 @@ export function completeAgentThreeItem(
   return updateOperation(snapshot, profileId, next);
 }
 
+export function confirmAgentThreeItem(
+  snapshot: AgentThreeSnapshot,
+  profileId: CampaignProfileId,
+  itemId: string,
+  sentAt: string,
+  providerMessageId: string
+): AgentThreeSnapshot {
+  if (!isRealDeliveryMessageId(providerMessageId)) return snapshot;
+  const operation = snapshot.operations[profileId];
+  const item = operation.queue.find((candidate) => candidate.id === itemId);
+  if (!item?.campaignId) return snapshot;
+  if (
+    item.queueStatus === "sent" &&
+    isRealDeliveryMessageId(item.providerMessageId)
+  ) {
+    return snapshot;
+  }
+  return completeAgentThreeItem(
+    {
+      ...snapshot,
+      operations: {
+        ...snapshot.operations,
+        [profileId]: {
+          ...operation,
+          queue: operation.queue.map((candidate) =>
+            candidate.id === itemId
+              ? { ...candidate, queueStatus: "sending" as const }
+              : candidate
+          ),
+        },
+      },
+    },
+    profileId,
+    itemId,
+    sentAt,
+    providerMessageId
+  );
+}
+
+export function markAgentThreeItemUnknown(
+  snapshot: AgentThreeSnapshot,
+  profileId: CampaignProfileId,
+  itemId: string,
+  occurredAt: string,
+  message = AGENT_THREE_UNKNOWN_RECONCILIATION_MESSAGE
+): AgentThreeSnapshot {
+  const operation = snapshot.operations[profileId];
+  const item = operation.queue.find((candidate) => candidate.id === itemId);
+  if (!item) return snapshot;
+  if (item.queueStatus === "sent" && isRealDeliveryMessageId(item.providerMessageId)) {
+    return snapshot;
+  }
+  if (item.queueStatus === "unknown") return snapshot;
+  const unknownItem: AgentThreeQueueItem = {
+    ...item,
+    queueStatus: "unknown",
+    updatedAt: occurredAt,
+    errorMessage: message,
+    failedAt: undefined,
+  };
+  const next = withHistory(
+    {
+      ...operation,
+      currentItemId:
+        operation.currentItemId === itemId ? null : operation.currentItemId,
+      queue: operation.queue.map((candidate) =>
+        candidate.id === itemId ? unknownItem : candidate
+      ),
+    },
+    "item_blocked",
+    occurredAt,
+    message,
+    itemId
+  );
+  return updateOperation(snapshot, profileId, next);
+}
+
+export function touchAgentThreeHeartbeat(
+  snapshot: AgentThreeSnapshot,
+  profileId: CampaignProfileId,
+  occurredAt: string
+): AgentThreeSnapshot {
+  const operation = snapshot.operations[profileId];
+  if (operation.lastActivityAt === occurredAt) return snapshot;
+  return {
+    ...snapshot,
+    operations: {
+      ...snapshot.operations,
+      [profileId]: {
+        ...operation,
+        lastActivityAt: occurredAt,
+      },
+    },
+  };
+}
+
 export function failAgentThreeItem(
   snapshot: AgentThreeSnapshot,
   profileId: CampaignProfileId,
@@ -1481,12 +1669,21 @@ export function finishAgentThree(
       item.campaignId === operation.currentCampaignId &&
       item.queueStatus === "sending"
   );
+  const hasUnknown = operation.queue.some(
+    (item) =>
+      item.campaignId === operation.currentCampaignId &&
+      item.queueStatus === "unknown"
+  );
   const hasReady = operation.queue.some(
     (item) =>
       item.campaignId === operation.currentCampaignId &&
       item.queueStatus === "ready"
   );
-  if (hasSending || (hasReady && hasAgentThreeExecutionCapacity(operation))) {
+  if (
+    hasSending ||
+    hasUnknown ||
+    (hasReady && hasAgentThreeExecutionCapacity(operation))
+  ) {
     return snapshot;
   }
   // Explain why the run ended (limit vs empty queue).
@@ -1604,7 +1801,9 @@ export function getAgentThreeMetrics(
     total: queue.length,
     sent: count("sent"),
     pending: count("pending"),
-    ready: count("ready") + count("sending"),
+    ready: count("ready"),
+    sending: count("sending"),
+    unknown: count("unknown"),
     failed: count("failed"),
     blocked: count("blocked"),
     skipped: count("skipped"),
@@ -1758,7 +1957,9 @@ function normalizeOperation(
     item.queueStatus === "sending"
       ? {
           ...item,
-          queueStatus: "ready" as const,
+          queueStatus: "unknown" as const,
+          errorMessage:
+            item.errorMessage || AGENT_THREE_UNKNOWN_RECONCILIATION_MESSAGE,
           updatedAt: item.updatedAt || item.createdAt,
         }
       : item

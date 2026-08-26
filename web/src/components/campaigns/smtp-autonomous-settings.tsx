@@ -1,16 +1,33 @@
 "use client";
 
+import { useEffect } from "react";
 import { Mail, Shield } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useSettingsStore } from "@/store/settings-store";
+import {
+  computeAutonomousDailySentCount,
+  useSettingsStore,
+} from "@/store/settings-store";
 
 export function SmtpAutonomousSettings() {
   const smtpEmail = useSettingsStore((s) => s.smtpEmail);
   const smtpPassword = useSettingsStore((s) => s.smtpPassword);
   const setSmtpConfig = useSettingsStore((s) => s.setSmtpConfig);
-  const dailyCount = useSettingsStore((s) => s.autonomousDailySentCount);
+  const dailySentDate = useSettingsStore((s) => s.autonomousDailySentDate);
+  const dailySentCount = useSettingsStore((s) => s.autonomousDailySentCount);
+  const resetAutonomousDailyCountIfNeeded = useSettingsStore(
+    (s) => s.resetAutonomousDailyCountIfNeeded
+  );
+
+  useEffect(() => {
+    resetAutonomousDailyCountIfNeeded();
+  }, [resetAutonomousDailyCountIfNeeded]);
+
+  const dailyCount = computeAutonomousDailySentCount(
+    dailySentDate,
+    dailySentCount
+  );
 
   return (
     <Card className="border-emerald-500/20 bg-gradient-to-br from-card to-emerald-500/5">

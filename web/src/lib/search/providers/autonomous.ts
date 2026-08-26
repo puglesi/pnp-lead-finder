@@ -1,24 +1,15 @@
-import { generateLeadsForSearch } from "@/lib/mock-data";
 import { runAutonomousPipeline } from "@/lib/search/scrapers/autonomous-pipeline";
-import type { ScrapedResult } from "@/lib/search/scrapers/fetch-html";
 import { enrichLeadsBatch } from "@/lib/search/scrapers/website-enricher";
+import { capRealSearchResults, stampRealLeadOrigin } from "@/lib/search/real-search-guard";
+import { discoveryMethodFromUrl } from "@/lib/lead-provenance";
+import { classifyLocationMatch, extractUkPostcode } from "@/lib/location-match";
 import type {
   AutonomousSourceId,
   AutonomousSourceStrategy,
 } from "@/types/autonomous-sources";
 import type { Lead } from "@/types/lead";
 import type { SearchProvider } from "./types";
-
-function guessEmail(website: string): string | null {
-  try {
-    const host = new URL(website).hostname.replace(/^www\./, "");
-    const prefixes = ["info", "contact", "hello", "enquiries"];
-    const prefix = prefixes[host.length % prefixes.length];
-    return `${prefix}@${host}`;
-  } catch {
-    return null;
-  }
-}
+import type { ScrapedResult } from "@/lib/search/scrapers/fetch-html";
 
 function scoreFromScrape(
   engine: string,
@@ -58,34 +49,65 @@ function mapScrapedToLead(
   item: ScrapedResult & {
     enrichedEmail?: string | null;
     enrichedPhone?: string | null;
+    emailSourceUrl?: string | null;
+    emailDiscoveryMethod?: Lead["emailDiscoveryMethod"];
+    phoneSourceUrl?: string | null;
   },
   keyword: string,
   location: string,
-  index: number,
-  allowGuessedEmail: boolean
+  index: number
 ): Lead {
-  const email =
-    item.enrichedEmail ??
-    (allowGuessedEmail ? guessEmail(item.url) : null);
-  const phone = item.enrichedPhone ?? item.phone ?? "—";
-  const enriched = Boolean(item.enrichedEmail || item.enrichedPhone);
+  const foundAt = new Date().toISOString();
+  const email = item.enrichedEmail ?? null;
+  const scrapedPhone = item.enrichedPhone ?? item.phone ?? "";
+  const phone = scrapedPhone && scrapedPhone !== "—" ? scrapedPhone : "";
+  const address = item.address?.trim() || "";
+  const postcode = extractUkPostcode(address);
+  const emailSourceUrl = email
+    ? item.emailSourceUrl ?? item.url
+    : null;
+  const phoneSourceUrl = phone
+    ? item.phoneSourceUrl ?? (item.enrichedPhone ? item.url : item.url)
+    : null;
 
-  return {
-    id: `auto-${item.engine}-${index}-${domainSlug(item.url)}`,
-    company: item.title.slice(0, 120),
-    website: item.url,
-    email,
-    phone,
-    address: item.address ?? item.snippet ?? `${location}, UK`,
-    category: keyword,
-    aiScore: scoreFromScrape(
-      item.engine,
-      index,
-      Boolean(email),
-      phone !== "—",
-      enriched
-    ),
-  };
+  return stampRealLeadOrigin(
+    {
+      id: `auto-${item.engine}-${index}-${domainSlug(item.url)}`,
+      company: item.title.slice(0, 120),
+      website: item.url,
+      email,
+      phone,
+      address,
+      category: keyword,
+      aiScore: scoreFromScrape(
+        item.engine,
+        index,
+        Boolean(email),
+        Boolean(phone),
+        Boolean(item.enrichedEmail || item.enrichedPhone)
+      ),
+      emailIsGuessed: false,
+      emailSourceUrl,
+      emailDiscoveryMethod: email
+        ? item.emailDiscoveryMethod ?? discoveryMethodFromUrl(emailSourceUrl ?? item.url)
+        : null,
+      emailSourceType: email
+        ? item.emailDiscoveryMethod ?? discoveryMethodFromUrl(emailSourceUrl ?? item.url)
+        : null,
+      emailFoundAt: email ? foundAt : null,
+      phoneSourceUrl,
+      phoneFoundAt: phone ? foundAt : null,
+      discoveredAddress: address || undefined,
+      postcode,
+      locationMatch: classifyLocationMatch({
+        requestedLocation: location,
+        address,
+        postcode,
+      }),
+    },
+    "autonomous",
+    location
+  );
 }
 
 function domainSlug(url: string): string {
@@ -102,29 +124,6 @@ function indexHash(s: string): number {
   return Math.abs(h);
 }
 
-function padWithFallback(
-  keyword: string,
-  location: string,
-  existing: Lead[],
-  maxResults: number
-): Lead[] {
-  const padCount = maxResults - existing.length;
-  if (padCount <= 0) return existing;
-
-  const mockPad = generateLeadsForSearch(
-    keyword,
-    location,
-    padCount,
-    existing.length
-  ).map((lead) => ({
-    ...lead,
-    id: `auto-sup-${lead.id}`,
-    aiScore: Math.min(62, Math.max(45, lead.aiScore - 18)),
-  }));
-
-  return [...existing, ...mockPad].slice(0, maxResults);
-}
-
 export const autonomousProvider: SearchProvider = {
   name: "autonomous",
   async search({
@@ -138,7 +137,6 @@ export const autonomousProvider: SearchProvider = {
     autonomousSingleSource,
     autonomousEnrichWebsites,
     useMaxLeads,
-    allowArtificialResults,
   }) {
     if (delayMs > 0) {
       await new Promise((r) => setTimeout(r, delayMs));
@@ -167,42 +165,42 @@ export const autonomousProvider: SearchProvider = {
 
     if (autonomousEnrichWebsites !== false && working.length > 0) {
       const enrichCap = deepSearch ? 60 : 35;
-      working = await enrichLeadsBatch(working, {
+      const enrichable = working.filter((item) => {
+        const match = classifyLocationMatch({
+          requestedLocation: location,
+          address: item.address,
+        });
+        return match !== "outside_target";
+      });
+      const skipped = working.filter(
+        (item) => !enrichable.some((candidate) => candidate.url === item.url)
+      );
+      const enriched = await enrichLeadsBatch(enrichable, {
         maxEnrich: enrichCap,
         delayMs: 400,
       });
+      working = [...enriched, ...skipped];
     }
 
-    const leads: Lead[] = working.map((item, i) =>
-      mapScrapedToLead(item, keyword, location, i, allowArtificialResults !== false)
+    const mapped: Lead[] = working.map((item, i) =>
+      mapScrapedToLead(item, keyword, location, i)
     );
+    const capped = capRealSearchResults(mapped, maxResults);
 
     const sourceTag =
       sourcesUsed.length > 0
         ? `autonomous-${primarySource}+${sourcesUsed.join("+")}${deepSearch ? "+deep" : ""}${autonomousEnrichWebsites !== false ? "+enriched" : ""}`
-        : "autonomous-offline-fallback";
-
-    if (
-      allowArtificialResults === false ||
-      leads.length >= maxResults * 0.6
-    ) {
-      return {
-        leads: leads.slice(0, maxResults),
-        source: sourceTag,
-        provider: "autonomous",
-        isLive: sourcesUsed.length > 0,
-        apiCallConsumed: false,
-      };
-    }
-
-    const combined = padWithFallback(keyword, location, leads, maxResults);
+        : "autonomous-empty";
 
     return {
-      leads: combined,
-      source: sourcesUsed.length > 0 ? `${sourceTag}+supplemented` : sourceTag,
+      leads: capped.leads,
+      source: sourceTag,
       provider: "autonomous",
       isLive: sourcesUsed.length > 0,
       apiCallConsumed: false,
+      requestedCount: capped.requestedCount,
+      foundRealCount: capped.foundRealCount,
+      sourceExhausted: capped.sourceExhausted,
     };
   },
 };

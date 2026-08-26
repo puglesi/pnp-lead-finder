@@ -63,6 +63,8 @@ import {
   filterLeadsByMemberIds,
   getBatchEligibleLeads,
 } from "@/lib/lead-batch";
+import { DEFAULT_LOCATION_FILTER } from "@/lib/location-match";
+import { LocationFilterControls } from "@/components/results/location-filter-controls";
 import type { ImportBatchStats } from "@/lib/import-batch";
 import {
   buildCampaignEligibilitySummary,
@@ -72,6 +74,7 @@ import {
   getOperationSendAccount,
 } from "@/lib/operation-identity";
 import { cn } from "@/lib/utils";
+import { bindSignatureToOperation } from "@/lib/operation-signature";
 import {
   CAMPAIGN_PROFILES,
   type CampaignProfileId,
@@ -86,6 +89,12 @@ import {
 import { useEmailTemplateStore } from "@/store/email-template-store";
 import { SaveAsTemplateDialog } from "./save-as-template-dialog";
 import type { Lead } from "@/types/lead";
+import {
+  LOCAL_DATA_UNAVAILABLE_MESSAGE,
+  isLocalDataUnavailableError,
+  prepareLocalDataWrite,
+  useLocalDataAvailability,
+} from "@/lib/local-data-client";
 
 export function CreateCampaignForm({
   reuseFromId = null,
@@ -111,6 +120,8 @@ function CreateCampaignFormContent({
   batchId: string | null;
 }) {
   const router = useRouter();
+  const localDataAvailability = useLocalDataAvailability();
+  const localDataWriteBlocked = localDataAvailability === "unavailable";
   const {
     savedLeads,
     currentLeads,
@@ -134,6 +145,10 @@ function CreateCampaignFormContent({
   const agentOperations = useAgentThreeStore((s) => s.operations);
   const blockedEntries = useEmailBlocklistStore((s) => s.entries);
   const getOpSignature = useOperationSignatureStore((s) => s.getSignature);
+  const officialSignatures = useOperationSignatureStore((s) => s.signatures);
+  const signaturesHydrated = useOperationSignatureStore(
+    (s) => s.hasHydrated
+  );
   const getCampaign = useCampaignStore((s) => s.getCampaign);
   const attachCampaign = useBatchPipelineStore((s) => s.attachCampaign);
   const setActiveBatch = useBatchPipelineStore((s) => s.setActiveBatch);
@@ -180,15 +195,24 @@ function CreateCampaignFormContent({
     reuseSource ? { ...reuseSource.followUp } : { ...DEFAULT_FOLLOW_UP }
   );
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [locationFilter, setLocationFilter] = useState(DEFAULT_LOCATION_FILTER);
   const [previewLeadId, setPreviewLeadId] = useState<string | null>(null);
   const [showPreview, setShowPreview] = useState(() => Boolean(batchId));
   const [attachment, setAttachment] = useState<CampaignAttachment | null>(() =>
     reuseSource?.attachment ? { ...reuseSource.attachment } : null
   );
   const [signature, setSignature] = useState<CampaignSignature>(() => {
-    if (reuseSource?.signature) return { ...reuseSource.signature };
+    if (reuseSource?.signature) {
+      return bindSignatureToOperation(
+        campaignProfileId,
+        reuseSource.signature
+      );
+    }
     // Official per-operation signature (Gmail paste) — never legacy hardcoded.
-    return { ...getOpSignature(campaignProfileId) };
+    return bindSignatureToOperation(
+      campaignProfileId,
+      getOpSignature(campaignProfileId)
+    );
   });
   /** Current upload only — never the global importedLeads pool. */
   const [importBatchLeads, setImportBatchLeads] = useState<Lead[]>([]);
@@ -200,6 +224,23 @@ function CreateCampaignFormContent({
   });
   const [templateDialogOpen, setTemplateDialogOpen] = useState(false);
   const [formDirty, setFormDirty] = useState(false);
+  const officialSignature = officialSignatures[campaignProfileId];
+  const officialSignatureKey = `${campaignProfileId}:${officialSignature.enabled}:${officialSignature.body}`;
+  const [signatureSourceKey, setSignatureSourceKey] = useState(
+    officialSignatureKey
+  );
+
+  if (
+    signaturesHydrated &&
+    !formDirty &&
+    !reuseSource &&
+    signatureSourceKey !== officialSignatureKey
+  ) {
+    setSignatureSourceKey(officialSignatureKey);
+    setSignature(
+      bindSignatureToOperation(campaignProfileId, officialSignature)
+    );
+  }
 
   const allLeads = useMemo(() => {
     const map = new Map<string, Lead>();
@@ -208,7 +249,12 @@ function CreateCampaignFormContent({
     const pool = batchId
       ? filterLeadsByMemberIds([...currentLeads, ...savedLeads], memberIds)
       : [...importBatchLeads, ...savedLeads, ...currentLeads];
-    const scoped = batchId ? getBatchEligibleLeads(pool) : pool;
+    const scoped = batchId
+      ? getBatchEligibleLeads(pool, {
+          locationFilter,
+          requestedLocation: batchMeta?.location,
+        })
+      : pool;
     for (const l of scoped) {
       if (hasValidEmail(l.email)) map.set(l.id, l);
     }
@@ -219,6 +265,8 @@ function CreateCampaignFormContent({
     importBatchLeads,
     batchId,
     batchMeta?.leadIds,
+    batchMeta?.location,
+    locationFilter,
   ]);
 
   const selectedLeads = useMemo(
@@ -312,7 +360,7 @@ function CreateCampaignFormContent({
     setCampaignProfileId(value);
     // Official signature switches immediately with operation.
     if (!reuseSource) {
-      setSignature({ ...getOpSignature(value) });
+      setSignature(bindSignatureToOperation(value, getOpSignature(value)));
       const account = getOperationSendAccount(value);
       setSendConfig((prev) => ({
         ...prev,
@@ -340,7 +388,7 @@ function CreateCampaignFormContent({
     if (stats.leadIds[0]) setPreviewLeadId(stats.leadIds[0]);
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!name.trim()) {
       toast.error("Dê um nome à campanha.");
       return;
@@ -354,47 +402,69 @@ function CreateCampaignFormContent({
       return;
     }
 
+    try {
+      const ready = await prepareLocalDataWrite();
+      if (!ready) {
+        toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
+        return;
+      }
+    } catch (error) {
+      if (isLocalDataUnavailableError(error)) {
+        toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
+        return;
+      }
+      throw error;
+    }
+
     const selectedEmailTemplate = emailTemplates.find(
       (template) => template.id === selectedTemplateId
     );
-    const campaign = createCampaign({
-      campaignProfileId,
-      emailTemplateId:
-        selectedEmailTemplate?.id ?? reuseSource?.emailTemplateId,
-      contactKind:
-        selectedEmailTemplate?.contactKind ??
-        reuseSource?.contactKind ??
-        "first_contact",
-      name: name.trim(),
-      subject: subject.trim(),
-      body: body.trim(),
-      leadIds: selectedIds,
-      leadSource: inferLeadSource(
-        selectedIds,
-        savedLeads,
-        currentLeads,
-        importedLeads
-      ),
-      batchId: batchId ?? undefined,
-      fromName: sendConfig.fromName.trim(),
-      fromEmail: sendConfig.fromEmail.trim(),
-      replyTo: sendConfig.replyTo.trim(),
-      unsubscribeLink: sendConfig.unsubscribeLink.trim(),
-      followUp,
-      attachment,
-      signature,
-      batchSend,
-      emailProvider,
-    });
+    try {
+      const campaign = createCampaign({
+        campaignProfileId,
+        emailTemplateId:
+          selectedEmailTemplate?.id ?? reuseSource?.emailTemplateId,
+        contactKind:
+          selectedEmailTemplate?.contactKind ??
+          reuseSource?.contactKind ??
+          "first_contact",
+        name: name.trim(),
+        subject: subject.trim(),
+        body: body.trim(),
+        leadIds: selectedIds,
+        leadSource: inferLeadSource(
+          selectedIds,
+          savedLeads,
+          currentLeads,
+          importedLeads
+        ),
+        batchId: batchId ?? undefined,
+        fromName: sendConfig.fromName.trim(),
+        fromEmail: sendConfig.fromEmail.trim(),
+        replyTo: sendConfig.replyTo.trim(),
+        unsubscribeLink: sendConfig.unsubscribeLink.trim(),
+        followUp,
+        attachment,
+        signature,
+        batchSend,
+        emailProvider,
+      });
 
-    if (batchId) {
-      attachCampaign(batchId, campaign.id);
+      if (batchId) {
+        attachCampaign(batchId, campaign.id);
+      }
+      // Explicit save → status Salva (persiste; limpar UI não apaga).
+      setCampaignStatus(campaign.id, "saved");
+
+      toast.success(`Campanha "${campaign.name}" salva!`, { icon: "📣" });
+      router.push(`/campanhas/${campaign.id}`);
+    } catch (error) {
+      if (isLocalDataUnavailableError(error)) {
+        toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
+        return;
+      }
+      throw error;
     }
-    // Explicit save → status Salva (persiste; limpar UI não apaga).
-    setCampaignStatus(campaign.id, "saved");
-
-    toast.success(`Campanha "${campaign.name}" salva!`, { icon: "📣" });
-    router.push(`/campanhas/${campaign.id}`);
   };
 
   const eligibleCount = eligibility.eligibleFinal;
@@ -684,8 +754,8 @@ function CreateCampaignFormContent({
           {/* 8. Primary action */}
           <Button
             size="lg"
-            onClick={handleSubmit}
-            disabled={eligibleCount === 0}
+            onClick={() => void handleSubmit()}
+            disabled={eligibleCount === 0 || localDataWriteBlocked}
             className="sticky bottom-4 z-10 w-full bg-gradient-to-r from-blue-600 to-emerald-600 shadow-lg hover:from-blue-500 hover:to-emerald-500"
           >
             <Sparkles className="size-4" />
@@ -850,6 +920,10 @@ function CreateCampaignFormContent({
                   </p>
                 </div>
               </div>
+              <LocationFilterControls
+                value={locationFilter}
+                onChange={setLocationFilter}
+              />
               <GlobalDeduplicationPreviewPanel preview={eligibility.preview} />
               <p className="text-xs text-muted-foreground">
                 Os mesmos números alimentam cards, prévia, Agent 3 e Start.
@@ -995,8 +1069,8 @@ function CreateCampaignFormContent({
 
         <Button
           size="lg"
-          onClick={handleSubmit}
-          disabled={selectedIds.length === 0}
+          onClick={() => void handleSubmit()}
+          disabled={selectedIds.length === 0 || localDataWriteBlocked}
           className="w-full bg-gradient-to-r from-blue-600 to-emerald-600 hover:from-blue-500 hover:to-emerald-500"
         >
           <Sparkles className="size-4" />

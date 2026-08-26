@@ -30,7 +30,8 @@ test("encontra e-mail real em contact page e preserva telefone da homepage", asy
   try {
     const result = await enrichWebsiteContacts("https://www.acme.co.uk");
     assert.equal(result.email, "info@acme.co.uk");
-    assert.equal(result.phone, "020 7123 4567");
+    assert.equal(result.phone, "+44 20 7123 4567");
+    assert.equal(result.phoneDiscoveryMethod, "labeled_text");
     assert.deepEqual(fetchedUrls, [
       "https://www.acme.co.uk/",
       "https://www.acme.co.uk/contact-us",
@@ -86,7 +87,8 @@ test("não segue redirecionamento de website público para endereço interno", a
 
   try {
     const result = await enrichWebsiteContacts("https://redirect.co.uk");
-    assert.deepEqual(result, { email: null, phone: null });
+    assert.equal(result.email, null);
+    assert.equal(result.phone, null);
     assert.deepEqual(fetchedUrls, ["https://redirect.co.uk/"]);
   } finally {
     globalThis.fetch = originalFetch;
@@ -117,7 +119,32 @@ test("enriquece lote em paralelo preservando ids e ordem", async () => {
         ["second", "info@second.co.uk"],
       ]
     );
+    assert.deepEqual(
+      results.map((result) => result.enrichmentStatus),
+      ["completed", "completed"]
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("um enrichment pendurado vira falha e não bloqueia os demais", async () => {
+  const results = await enrichWebsiteLeadBatch(
+    [
+      { id: "hung", website: "https://hung.co.uk" },
+      { id: "ok", website: "https://ok.co.uk" },
+    ],
+    {
+      concurrency: 2,
+      timeoutMs: 20,
+      enrich: async (website) => {
+        if (website.includes("hung")) return new Promise(() => {});
+        return { email: "info@ok.co.uk", phone: null };
+      },
+    }
+  );
+  assert.equal(results[0].enrichmentStatus, "failed");
+  assert.match(results[0].error, /timeout/i);
+  assert.equal(results[1].enrichmentStatus, "completed");
+  assert.equal(results[1].email, "info@ok.co.uk");
 });

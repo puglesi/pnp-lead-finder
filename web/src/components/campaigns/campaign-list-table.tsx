@@ -25,9 +25,17 @@ import { buildReuseCampaignUrl } from "@/lib/campaign-reuse";
 import type { Campaign } from "@/types/campaign";
 import { cn } from "@/lib/utils";
 import { useCampaignStore } from "@/store/campaign-store";
+import {
+  LOCAL_DATA_UNAVAILABLE_MESSAGE,
+  isLocalDataUnavailableError,
+  prepareLocalDataWrite,
+  useLocalDataAvailability,
+} from "@/lib/local-data-client";
 
 export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
   const router = useRouter();
+  const localDataAvailability = useLocalDataAvailability();
+  const localDataWriteBlocked = localDataAvailability === "unavailable";
   const duplicateCampaign = useCampaignStore((s) => s.duplicateCampaign);
   const deleteCampaign = useCampaignStore((s) => s.deleteCampaign);
   const setCampaignStatus = useCampaignStore((s) => s.setCampaignStatus);
@@ -37,36 +45,75 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
     router.push(buildReuseCampaignUrl(campaign.id));
   };
 
-  const handleSave = (campaign: Campaign) => {
-    const status = getCampaignEffectiveStatus(campaign);
-    if (status === "completed" || status === "archived") {
-      updateCampaign(campaign.id, {});
-      toast.success("Campanha já persistida.");
-      return;
+  const handleSave = async (campaign: Campaign) => {
+    try {
+      const ready = await prepareLocalDataWrite();
+      if (!ready) {
+        toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
+        return;
+      }
+      const status = getCampaignEffectiveStatus(campaign);
+      if (status === "completed" || status === "archived") {
+        updateCampaign(campaign.id, {});
+        toast.success("Campanha já persistida.");
+        return;
+      }
+      if (status === "draft") {
+        setCampaignStatus(campaign.id, "saved");
+      } else {
+        updateCampaign(campaign.id, {});
+      }
+      toast.success("Campanha salva.");
+    } catch (error) {
+      if (isLocalDataUnavailableError(error)) {
+        toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
+        return;
+      }
+      throw error;
     }
-    if (status === "draft") {
-      setCampaignStatus(campaign.id, "saved");
-    } else {
-      updateCampaign(campaign.id, {});
-    }
-    toast.success("Campanha salva.");
   };
 
-  const handleDuplicate = (campaign: Campaign) => {
-    const copy = duplicateCampaign(campaign.id);
-    if (!copy) {
-      toast.error("Não foi possível duplicar.");
-      return;
+  const handleDuplicate = async (campaign: Campaign) => {
+    try {
+      const ready = await prepareLocalDataWrite();
+      if (!ready) {
+        toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
+        return;
+      }
+      const copy = duplicateCampaign(campaign.id);
+      if (!copy) {
+        toast.error("Não foi possível duplicar.");
+        return;
+      }
+      toast.success(`Cópia criada: ${copy.name}`);
+    } catch (error) {
+      if (isLocalDataUnavailableError(error)) {
+        toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
+        return;
+      }
+      throw error;
     }
-    toast.success(`Cópia criada: ${copy.name}`);
   };
 
-  const handleArchive = (campaign: Campaign) => {
-    setCampaignStatus(campaign.id, "archived");
-    toast.success("Campanha arquivada.");
+  const handleArchive = async (campaign: Campaign) => {
+    try {
+      const ready = await prepareLocalDataWrite();
+      if (!ready) {
+        toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
+        return;
+      }
+      setCampaignStatus(campaign.id, "archived");
+      toast.success("Campanha arquivada.");
+    } catch (error) {
+      if (isLocalDataUnavailableError(error)) {
+        toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
+        return;
+      }
+      throw error;
+    }
   };
 
-  const handleDelete = (campaign: Campaign) => {
+  const handleDelete = async (campaign: Campaign) => {
     if (
       !window.confirm(
         `Apagar permanentemente a campanha “${campaign.name}”? Esta ação não remove o histórico de envios já confirmados em outras estruturas, mas remove a campanha da lista.`
@@ -74,8 +121,21 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
     ) {
       return;
     }
-    deleteCampaign(campaign.id);
-    toast.success("Campanha apagada.");
+    try {
+      const ready = await prepareLocalDataWrite();
+      if (!ready) {
+        toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
+        return;
+      }
+      deleteCampaign(campaign.id);
+      toast.success("Campanha apagada.");
+    } catch (error) {
+      if (isLocalDataUnavailableError(error)) {
+        toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
+        return;
+      }
+      throw error;
+    }
   };
 
   if (campaigns.length === 0) {
@@ -189,7 +249,8 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
                         variant="outline"
                         size="sm"
                         className="h-8 gap-1 text-xs"
-                        onClick={() => handleSave(campaign)}
+                        onClick={() => void handleSave(campaign)}
+                        disabled={localDataWriteBlocked}
                         title="Salvar"
                       >
                         <Save className="size-3.5" />
@@ -200,7 +261,8 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
                         variant="outline"
                         size="sm"
                         className="h-8 gap-1 text-xs"
-                        onClick={() => handleDuplicate(campaign)}
+                        onClick={() => void handleDuplicate(campaign)}
+                        disabled={localDataWriteBlocked}
                         title="Duplicar"
                       >
                         <Copy className="size-3.5" />
@@ -212,7 +274,8 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
                           variant="outline"
                           size="sm"
                           className="h-8 gap-1 text-xs"
-                          onClick={() => handleArchive(campaign)}
+                          onClick={() => void handleArchive(campaign)}
+                          disabled={localDataWriteBlocked}
                           title="Arquivar"
                         >
                           <Archive className="size-3.5" />
@@ -224,7 +287,8 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
                         variant="outline"
                         size="sm"
                         className="h-8 gap-1 text-xs text-red-300"
-                        onClick={() => handleDelete(campaign)}
+                        onClick={() => void handleDelete(campaign)}
+                        disabled={localDataWriteBlocked}
                         title="Apagar"
                       >
                         <Trash2 className="size-3.5" />

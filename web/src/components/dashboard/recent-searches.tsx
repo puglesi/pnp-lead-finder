@@ -29,8 +29,16 @@ export function RecentSearches() {
   );
   const clearRecentSearches = useLeadStore((s) => s.clearRecentSearches);
 
-  const handleRowClick = (id: string, keyword: string, location: string) => {
-    if (!loadSearchFromHistory(id)) {
+  const loadHistoryRecord = async (id: string) => {
+    const record = useLeadStore.getState().getHistoryRecord(id);
+    if (record?.batchId) {
+      return useLeadStore.getState().loadPersistedSearchBatch(record.batchId);
+    }
+    return loadSearchFromHistory(id);
+  };
+
+  const handleRowClick = async (id: string, keyword: string, location: string) => {
+    if (!(await loadHistoryRecord(id))) {
       toast.error("Registro não encontrado.");
       return;
     }
@@ -38,7 +46,7 @@ export function RecentSearches() {
     router.push("/resultados");
   };
 
-  const handleContinueAgentOne = (
+  const handleContinueAgentOne = async (
     event: { stopPropagation: () => void },
     id: string,
     keyword: string,
@@ -46,6 +54,10 @@ export function RecentSearches() {
     resultsCount: number
   ) => {
     event.stopPropagation();
+    if (!(await loadHistoryRecord(id))) {
+      toast.error("Resultados persistidos não encontrados.");
+      return;
+    }
     const batchId = openSearchBatchInAgentOne(id);
     if (!batchId) {
       toast.error(
@@ -142,7 +154,7 @@ export function RecentSearches() {
                 <tr
                   key={search.id}
                   onClick={() =>
-                    handleRowClick(
+                    void handleRowClick(
                       search.id,
                       search.keyword,
                       search.location
@@ -170,7 +182,7 @@ export function RecentSearches() {
                         variant="default"
                         className="h-8"
                         onClick={(event) =>
-                          handleContinueAgentOne(
+                          void handleContinueAgentOne(
                             event,
                             search.id,
                             search.keyword,

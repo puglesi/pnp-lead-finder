@@ -48,6 +48,7 @@ import {
 import { useAgentOneStore } from "@/store/agent-one-store";
 import { useBatchPipelineStore } from "@/store/batch-pipeline-store";
 import { useLeadStore } from "@/store/lead-store";
+import { DEFAULT_GEO_SEARCH_LOCATION } from "@/lib/geo/regions";
 
 const AGENT_STATUS_LABELS: Record<AgentOneStatus, string> = {
   idle: "Inativo",
@@ -727,7 +728,7 @@ export function AgentOneGarimpeiro() {
                     id="agent-one-location"
                     value={location}
                     onChange={(event) => setLocation(event.target.value)}
-                    placeholder="Ex.: London"
+                    placeholder={DEFAULT_GEO_SEARCH_LOCATION}
                   />
                 </div>
                 <div className="space-y-1.5">

@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import {
   checkAgentThreeSmtpAvailability,
+  fetchAgentThreeSendHistory,
   requestAgentThreeSmtpSend,
 } from "@/lib/agent-three-api";
 import {
@@ -38,7 +39,7 @@ import { useLeadStore } from "@/store/lead-store";
 import type { Campaign, CampaignLeadStatus } from "@/types/campaign";
 import type { CampaignProfileId } from "@/types/campaign-profile";
 import type { Lead } from "@/types/lead";
-import { isRealDeliveryMessageId } from "@/lib/campaign-delivery-metrics";
+
 import {
   acquireGlobalEmailSendLock,
   auditGlobalEmailRecipients,
@@ -51,6 +52,18 @@ import {
   mergePermanentBlocks,
 } from "@/lib/email-blocklist";
 import { useEmailBlocklistStore } from "@/store/email-blocklist-store";
+import {
+  isLocalDataUnavailableError,
+  prepareLocalDataWrite,
+} from "@/lib/local-data-client";
+import {
+  decideRunnerContinuation,
+  isConfirmedSmtpDelivery,
+  persistCampaignAfterConfirmedSend,
+  reconcileCampaignFromSendHistory,
+  shouldSkipSmtpForItem,
+} from "@/lib/agent-three-reconciliation";
+import { isAgentThreeHeartbeatStale } from "@/lib/agent-three-timeouts";
 
 export type AgentThreeUiConnectionStatus =
   | AgentThreeSmtpStatus
@@ -576,6 +589,7 @@ export function useAgentThreeRunner() {
         message: null,
       };
       setPreparation(profileId, current);
+      await reconcileProfile(profileId);
       return current;
     }
 
@@ -603,6 +617,7 @@ export function useAgentThreeRunner() {
         } else {
           setStatus(profileId, "lead_ready");
         }
+        await reconcileProfile(profileId);
         return preparation;
       } finally {
         setLoadingCampaign((current) => ({ ...current, [profileId]: false }));
@@ -617,20 +632,93 @@ export function useAgentThreeRunner() {
     }
   }
 
+  async function reconcileProfile(
+    profileId: CampaignProfileId
+  ): Promise<void> {
+    const store = useAgentThreeStore.getState();
+    const operation = store.operations[profileId];
+    const records = await fetchAgentThreeSendHistory({
+      operation: profileId,
+      campaignId: operation.currentCampaignId,
+    });
+    store.reconcileFromHistory(profileId, records);
+    const campaign = useCampaignStore
+      .getState()
+      .campaigns.find(
+        (candidate) =>
+          candidate.id === operation.currentCampaignId &&
+          candidate.campaignProfileId === profileId
+      );
+    if (campaign) {
+      const reconciled = reconcileCampaignFromSendHistory(campaign, records);
+      if (reconciled.sentCount !== campaign.sentCount) {
+        try {
+          const ready = await prepareLocalDataWrite();
+          if (ready) {
+            useCampaignStore.getState().updateCampaign(campaign.id, {
+              leadStatuses: reconciled.leadStatuses,
+              sentCount: reconciled.sentCount,
+              failedCount: reconciled.failedCount,
+            });
+          }
+        } catch (error) {
+          if (!isLocalDataUnavailableError(error)) {
+            console.warn("[agent-3] falha ao reconciliar campanha", error);
+          }
+        }
+      }
+    }
+    const latest = useAgentThreeStore.getState().operations[profileId];
+    if (
+      isAgentThreeHeartbeatStale(latest.lastActivityAt, latest.status) &&
+      latest.status === "running"
+    ) {
+      useAgentThreeStore.getState().pause(profileId);
+      setStatus(profileId, "paused");
+    }
+  }
+
   async function run(profileId: CampaignProfileId): Promise<void> {
     if (activeLoops.current.has(profileId)) return;
     activeLoops.current.add(profileId);
     try {
+      await reconcileProfile(profileId);
       while (true) {
         const store = useAgentThreeStore.getState();
         const operation = store.operations[profileId];
         if (operation.status !== "running") break;
+        store.touchHeartbeat(profileId);
 
         setProfileNextSendAt(profileId, null);
+        const history = await fetchAgentThreeSendHistory({
+          operation: profileId,
+          campaignId: operation.currentCampaignId,
+        });
+        store.reconcileFromHistory(profileId, history);
         const item = store.claimNext(profileId);
         if (!item) {
+          const latest = useAgentThreeStore.getState().operations[profileId];
+          const hasUnknown = latest.queue.some(
+            (candidate) =>
+              candidate.campaignId === latest.currentCampaignId &&
+              candidate.queueStatus === "unknown"
+          );
+          if (hasUnknown) {
+            useAgentThreeStore.getState().pause(profileId);
+            setStatus(profileId, "paused");
+            break;
+          }
           store.finish(profileId);
           break;
+        }
+        const alreadySent = shouldSkipSmtpForItem(item, history);
+        if (alreadySent?.providerMessageId) {
+          useAgentThreeStore.getState().applyDeliveryResult(profileId, item.id, {
+            status: "sent",
+            message: "Envio já confirmado no histórico local; duplicata bloqueada.",
+            messageId: alreadySent.providerMessageId,
+          });
+          continue;
         }
         const campaign = useCampaignStore
           .getState()
@@ -709,13 +797,25 @@ export function useAgentThreeRunner() {
         } finally {
           sendLock.release();
         }
+        if (smtpResult.status === "reconciliation_required") {
+          const latestHistory = await fetchAgentThreeSendHistory({
+            operation: profileId,
+            campaignId: item.campaignId,
+          });
+          const confirmed = shouldSkipSmtpForItem(item, latestHistory);
+          if (confirmed?.providerMessageId) {
+            smtpResult = {
+              status: "sent",
+              message: "Envio confirmado no histórico após timeout.",
+              messageId: confirmed.providerMessageId,
+            };
+          }
+        }
         const occurredAt = new Date().toISOString();
         const application = useAgentThreeStore
           .getState()
           .applyDeliveryResult(profileId, item.id, smtpResult);
-        const confirmedSmtpSend =
-          smtpResult.status === "sent" &&
-          isRealDeliveryMessageId(smtpResult.messageId);
+        const confirmedSmtpSend = isConfirmedSmtpDelivery(smtpResult);
         setStatus(
           profileId,
           confirmedSmtpSend
@@ -725,51 +825,67 @@ export function useAgentThreeRunner() {
               : smtpResult.status
         );
 
+        let campaignPersistFailed = false;
         if (campaign && confirmedSmtpSend) {
-          useCampaignStore.getState().updateCampaign(
-            campaign.id,
-            patchCampaignDelivery(
-              campaign,
-              item.leadId,
-              "sent",
-              occurredAt,
-              smtpResult.messageId
-            )
-          );
+          const persist = await persistCampaignAfterConfirmedSend(() => {
+            useCampaignStore.getState().updateCampaign(
+              campaign.id,
+              patchCampaignDelivery(
+                campaign,
+                item.leadId,
+                "sent",
+                occurredAt,
+                smtpResult.messageId
+              )
+            );
+          });
+          campaignPersistFailed = !persist.ok;
         } else if (
           campaign &&
           (smtpResult.status === "transient_error" ||
             smtpResult.status === "permanent_error" ||
             smtpResult.status === "sent")
         ) {
-          useCampaignStore.getState().updateCampaign(
-            campaign.id,
-            patchCampaignDelivery(
-              campaign,
-              item.leadId,
-              "failed",
-              occurredAt,
-              undefined,
-              smtpResult.status === "sent"
-                ? "O provedor não confirmou o envio com providerMessageId."
-                : smtpResult.message
-            )
-          );
+          try {
+            useCampaignStore.getState().updateCampaign(
+              campaign.id,
+              patchCampaignDelivery(
+                campaign,
+                item.leadId,
+                "failed",
+                occurredAt,
+                undefined,
+                smtpResult.status === "sent"
+                  ? "O provedor não confirmou o envio com providerMessageId."
+                  : smtpResult.message
+              )
+            );
+          } catch {
+            campaignPersistFailed = true;
+          }
         }
 
-        if (application.shouldPause) {
-          // Systemic / consecutive-failure circuit breaker — do not claim more recipients.
-          break;
-        }
         const nextOperation =
           useAgentThreeStore.getState().operations[profileId];
-        if (nextOperation.status !== "running") break;
         const hasAnotherItem = nextOperation.queue.some(
           (candidate) =>
             candidate.campaignId === nextOperation.currentCampaignId &&
             candidate.queueStatus === "ready"
         );
-        if (!hasAnotherItem) {
+        const continuation = decideRunnerContinuation({
+          confirmed: confirmedSmtpSend,
+          campaignPersistFailed,
+          shouldPause: application.shouldPause,
+          hasReady: hasAnotherItem,
+        });
+        if (continuation === "pause") {
+          if (nextOperation.status === "running") {
+            useAgentThreeStore.getState().pause(profileId);
+          }
+          break;
+        }
+        if (nextOperation.status !== "running") break;
+        if (continuation === "finish" || !hasAnotherItem) {
           useAgentThreeStore.getState().finish(profileId);
           break;
         }
@@ -793,10 +909,20 @@ export function useAgentThreeRunner() {
         setProfileNextSendAt(profileId, null);
         if (waited.interrupted) break;
       }
+    } catch {
+      const latest = useAgentThreeStore.getState().operations[profileId];
+      if (latest.status === "running") {
+        useAgentThreeStore.getState().pause(profileId);
+      }
+      setStatus(profileId, "paused");
     } finally {
       controllers.current.delete(profileId);
       activeLoops.current.delete(profileId);
       setProfileNextSendAt(profileId, null);
+      const leftover = useAgentThreeStore.getState().operations[profileId];
+      if (leftover.status === "running" && !activeLoops.current.has(profileId)) {
+        useAgentThreeStore.getState().pause(profileId);
+      }
     }
   }
 
@@ -819,6 +945,7 @@ export function useAgentThreeRunner() {
         return { started: false, message: preparation.message };
       }
       setStatus(profileId, "lead_ready");
+      await reconcileProfile(profileId);
       // Live SMTP auth/connection check before the first real send (no message).
       const availability = await verifySend(profileId, { verify: true });
       if (availability.status !== "connected") {
@@ -851,6 +978,7 @@ export function useAgentThreeRunner() {
     if (activeLoops.current.has(profileId)) {
       return { started: false, message: "Aguarde a pausa ser concluída." };
     }
+    await reconcileProfile(profileId);
     const availability = await verifySend(profileId, { verify: true });
     if (availability.status !== "connected") {
       return {

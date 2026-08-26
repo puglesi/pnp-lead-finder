@@ -13,22 +13,37 @@ export const mockProvider: SearchProvider = {
     if (delayMs > 0) {
       await new Promise((r) => setTimeout(r, delayMs));
     }
-    if (allowArtificialResults === false) {
+    if (allowArtificialResults !== true) {
       return {
         leads: [],
-        source: "mock-disabled-for-agent-one",
+        source: "mock-disabled-for-real-search",
         provider: "mock",
         isLive: false,
         apiCallConsumed: false,
+        requestedCount: maxResults,
+        foundRealCount: 0,
+        sourceExhausted: true,
       };
     }
-    const leads = generateLeadsForSearch(keyword, location, maxResults);
+    const leads = generateLeadsForSearch(keyword, location, maxResults).map(
+      (lead) => ({
+        ...lead,
+        synthetic: true,
+        syntheticReason: "explicit_mock_provider",
+        sourceKind: "mock" as const,
+        emailIsGuessed: Boolean(lead.email),
+        requestedLocation: location,
+      })
+    );
     return {
       leads,
       source: "mock-engine",
       provider: "mock",
       isLive: false,
       apiCallConsumed: false,
+      requestedCount: maxResults,
+      foundRealCount: 0,
+      sourceExhausted: false,
     };
   },
 };

@@ -32,6 +32,10 @@ function importedLead(
     address: "London",
     category: "Services",
     aiScore: 0,
+    importBatchId: "import-test",
+    emailIsGuessed: false,
+    emailSourceUrl: "import://list/" + id,
+    emailDiscoveryMethod: "external_provider",
   };
 }
 

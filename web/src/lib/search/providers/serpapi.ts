@@ -1,12 +1,20 @@
-import { generateLeadsForSearch } from "@/lib/mock-data";
 import { getSerpApiKey, isSerpApiCreditError } from "@/lib/search/config";
 import {
   getSerpApiPagesPerSector,
   SERPAPI_PAGE_SIZE,
 } from "@/lib/search/volume";
-import { leadFingerprint, type Lead } from "@/types/lead";
-import { autonomousProvider } from "./autonomous";
-import type { SearchProvider, SearchParams, SearchProviderResult } from "./types";
+import { stampRealLeadOrigin } from "@/lib/search/real-search-guard";
+import { extractUkPostcode, classifyLocationMatch } from "@/lib/location-match";
+import { buildProviderLocationQuery, resolveGeoRegion } from "@/lib/geo/regions";
+import { parsePublishedPhone } from "@/lib/uk-phone";
+import {
+  collectUntilTarget,
+  isInsideSearchTarget,
+  selectOperationalSearchLeads,
+  sortByLocationMatch,
+} from "@/lib/search/targeted-search";
+import type { Lead } from "@/types/lead";
+import type { SearchProvider, SearchProviderResult } from "./types";
 
 interface SerpPlace {
   title?: string;
@@ -18,18 +26,10 @@ interface SerpPlace {
   rating?: number;
   reviews?: number;
   place_id?: string;
-}
-
-function guessEmail(website?: string): string | null {
-  if (!website) return null;
-  try {
-    const host = new URL(website).hostname.replace(/^www\./, "");
-    const prefixes = ["info", "contact", "hello", "enquiries"];
-    const prefix = prefixes[host.length % prefixes.length];
-    return `${prefix}@${host}`;
-  } catch {
-    return null;
-  }
+  gps_coordinates?: {
+    latitude?: number;
+    longitude?: number;
+  };
 }
 
 function scoreFromRating(rating?: number, reviews?: number): number {
@@ -39,27 +39,62 @@ function scoreFromRating(rating?: number, reviews?: number): number {
   return Math.min(99, Math.max(55, base + reviewBoost));
 }
 
+export function buildSerpApiMapsQuery(
+  keyword: string,
+  location: string
+): { q: string; ll?: string } {
+  return buildProviderLocationQuery(keyword, location);
+}
+
 function mapPlaceToLead(
   place: SerpPlace,
   keyword: string,
   location: string,
-  index: number,
-  allowGuessedEmail: boolean
+  index: number
 ): Lead {
   const website =
     place.website ||
     `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(place.title ?? keyword)}`;
+  const address = place.address?.trim() || "";
+  const parsedPhone = parsePublishedPhone(place.phone, "serp_result");
+  const postcode = extractUkPostcode(address);
+  const foundAt = new Date().toISOString();
+  const latitude = place.gps_coordinates?.latitude;
+  const longitude = place.gps_coordinates?.longitude;
+  const region = resolveGeoRegion(location);
 
-  return {
-    id: `serp-${place.place_id ?? `${keyword}-${index}`}`,
-    company: place.title ?? `Business ${index + 1}`,
-    website,
-    email: allowGuessedEmail ? guessEmail(place.website) : null,
-    phone: place.phone ?? "—",
-    address: place.address ?? `${location}, UK`,
-    category: place.types?.[0] ?? place.type ?? keyword,
-    aiScore: scoreFromRating(place.rating, place.reviews),
-  };
+  return stampRealLeadOrigin(
+    {
+      id: `serp-${place.place_id ?? `${keyword}-${index}`}`,
+      company: place.title ?? `Business ${index + 1}`,
+      website,
+      email: null,
+      phone: parsedPhone?.phone ?? "",
+      address,
+      category: place.types?.[0] ?? place.type ?? keyword,
+      aiScore: scoreFromRating(place.rating, place.reviews),
+      emailIsGuessed: false,
+      phoneSourceUrl: parsedPhone ? website : null,
+      phoneFoundAt: parsedPhone ? foundAt : null,
+      phoneRaw: parsedPhone?.phoneRaw ?? null,
+      phoneDiscoveryMethod: parsedPhone?.discoveryMethod ?? null,
+      phoneConfidence: parsedPhone?.confidence ?? null,
+      latitude: latitude ?? null,
+      longitude: longitude ?? null,
+      discoveredAddress: address || undefined,
+      postcode,
+      locationMatch: classifyLocationMatch({
+        requestedLocation: location,
+        address,
+        postcode,
+        latitude,
+        longitude,
+        region,
+      }),
+    },
+    "serpapi",
+    location
+  );
 }
 
 function dedupePlaces(places: SerpPlace[]): SerpPlace[] {
@@ -72,43 +107,19 @@ function dedupePlaces(places: SerpPlace[]): SerpPlace[] {
   });
 }
 
-function mergeLeadsPrimaryFirst(primary: Lead[], extra: Lead[], max: number): Lead[] {
-  const seen = new Set<string>();
-  const merged: Lead[] = [];
-
-  for (const lead of primary) {
-    const fp = leadFingerprint(lead);
-    if (seen.has(fp)) continue;
-    seen.add(fp);
-    merged.push(lead);
-    if (merged.length >= max) return merged;
-  }
-
-  for (const lead of extra) {
-    const fp = leadFingerprint(lead);
-    if (seen.has(fp)) continue;
-    seen.add(fp);
-    merged.push({
-      ...lead,
-      aiScore: Math.min(lead.aiScore, 75),
-    });
-    if (merged.length >= max) break;
-  }
-
-  return merged;
-}
-
 async function fetchSerpApiPage(
-  query: string,
+  query: { q: string; ll?: string },
   apiKey: string,
   start: number
 ): Promise<{ places: SerpPlace[]; creditExhausted: boolean }> {
   const url = new URL("https://serpapi.com/search.json");
   url.searchParams.set("engine", "google_maps");
-  url.searchParams.set("q", query);
+  url.searchParams.set("type", "search");
+  url.searchParams.set("q", query.q);
   url.searchParams.set("api_key", apiKey);
   url.searchParams.set("hl", "en");
   url.searchParams.set("gl", "uk");
+  if (query.ll) url.searchParams.set("ll", query.ll);
   if (start > 0) url.searchParams.set("start", String(start));
 
   const res = await fetch(url.toString(), { next: { revalidate: 0 } });
@@ -141,91 +152,37 @@ async function fetchSerpApiPage(
   return { places, creditExhausted: false };
 }
 
-async function fetchSerpApiPlaces(
-  query: string,
-  apiKey: string,
-  maxPages: number
-): Promise<{
-  places: SerpPlace[];
-  creditExhausted: boolean;
-  apiCallsUsed: number;
-}> {
-  const all: SerpPlace[] = [];
-  let apiCallsUsed = 0;
-  let start = 0;
-
-  for (let page = 0; page < maxPages; page++) {
-    const { places } = await fetchSerpApiPage(query, apiKey, start);
-    apiCallsUsed++;
-
-    if (places.length === 0) break;
-
-    all.push(...places);
-    if (places.length < SERPAPI_PAGE_SIZE) break;
-
-    start += SERPAPI_PAGE_SIZE;
-    if (page < maxPages - 1) {
-      await new Promise((r) => setTimeout(r, 300));
-    }
-  }
-
-  return {
-    places: dedupePlaces(all),
-    creditExhausted: false,
-    apiCallsUsed,
-  };
-}
-
-async function supplementVolume(
-  params: SearchParams,
-  serpLeads: Lead[]
-): Promise<{ leads: Lead[]; supplemented: boolean }> {
-  if (serpLeads.length >= params.maxResults) {
-    return { leads: serpLeads.slice(0, params.maxResults), supplemented: false };
-  }
-
-  const needed = params.maxResults - serpLeads.length;
-  const extra = await autonomousProvider.search({
-    ...params,
-    maxResults: needed,
-    delayMs: 0,
-  });
-
-  return {
-    leads: mergeLeadsPrimaryFirst(serpLeads, extra.leads, params.maxResults),
-    supplemented: extra.leads.length > 0,
-  };
-}
-
-async function autonomousFallback(
-  params: SearchParams,
+function emptyRealResult(
   source: string,
-  creditExhausted = false
-): Promise<SearchProviderResult> {
-  const result = await autonomousProvider.search(params);
+  extra: Partial<SearchProviderResult> = {}
+): SearchProviderResult {
   return {
-    ...result,
-    source: `${source}-${result.source}`,
+    leads: [],
+    source,
     provider: "serpapi",
-    isLive: result.isLive,
-    apiCallConsumed: creditExhausted,
-    creditExhausted,
+    isLive: false,
+    apiCallConsumed: extra.apiCallConsumed ?? false,
+    apiCallsUsed: extra.apiCallsUsed,
+    creditExhausted: extra.creditExhausted,
+    requestedCount: extra.requestedCount,
+    foundRealCount: 0,
+    sourceExhausted: true,
+    providerResultsInspected: 0,
+    insideTargetFound: 0,
   };
 }
 
-function mockFallback(
-  keyword: string,
-  location: string,
-  maxResults: number,
-  source: string
-) {
-  const leads = generateLeadsForSearch(keyword, location, maxResults);
+function locationStats(leads: Lead[]) {
   return {
-    leads,
-    source,
-    provider: "serpapi" as const,
-    isLive: false,
-    apiCallConsumed: false,
+    insideTargetFound: leads.filter((lead) =>
+      isInsideSearchTarget(lead.locationMatch)
+    ).length,
+    outsideTargetCount: leads.filter(
+      (lead) => lead.locationMatch === "outside_target"
+    ).length,
+    unknownLocationCount: leads.filter(
+      (lead) => lead.locationMatch === "unknown" || !lead.locationMatch
+    ).length,
   };
 }
 
@@ -238,9 +195,9 @@ export const serpApiProvider: SearchProvider = {
       maxResults,
       delayMs,
       serpApiKey,
-      strictMaxResults = false,
       serpapiDeepPagination = false,
       useMaxLeads = false,
+      strictMaxResults = false,
     } = params;
 
     if (delayMs > 0) {
@@ -250,70 +207,75 @@ export const serpApiProvider: SearchProvider = {
     const apiKey = getSerpApiKey(serpApiKey);
 
     if (!apiKey) {
-      if (params.allowArtificialResults === false) {
-        return {
-          leads: [],
-          source: "serpapi-no-key-no-results",
-          provider: "serpapi",
-          isLive: false,
-          apiCallConsumed: false,
-        };
-      }
-      return autonomousFallback(params, "serpapi-no-key");
+      return emptyRealResult("serpapi-no-key-no-results", {
+        requestedCount: maxResults,
+      });
     }
 
-    const maxPages = strictMaxResults
-      ? 1
-      : getSerpApiPagesPerSector({
+    const region = resolveGeoRegion(location);
+    const maxPages = region
+      ? getSerpApiPagesPerSector({
           useMaxLeads,
           deepPagination: serpapiDeepPagination,
-          leadsPerSector: maxResults,
-        });
+          leadsPerSector: useMaxLeads ? maxResults : Math.max(maxResults, 80),
+        })
+      : strictMaxResults
+        ? 1
+        : getSerpApiPagesPerSector({
+            useMaxLeads,
+            deepPagination: serpapiDeepPagination,
+            leadsPerSector: maxResults,
+          });
+    const mapsQuery = buildSerpApiMapsQuery(keyword, location);
 
     try {
-      const query = `${keyword} in ${location}, UK`;
-      const { places, apiCallsUsed } = await fetchSerpApiPlaces(
-        query,
-        apiKey,
-        maxPages
-      );
-
-      if (places.length === 0) {
-        if (params.allowArtificialResults === false) {
+      let index = 0;
+      const accumulated = await collectUntilTarget<Lead>({
+        requestedInside: maxResults,
+        maxPages,
+        getId: (lead) => lead.id,
+        isInside: (lead) =>
+          region ? isInsideSearchTarget(lead.locationMatch) : true,
+        fetchPage: async (pageIndex) => {
+          const start = pageIndex * SERPAPI_PAGE_SIZE;
+          const { places } = await fetchSerpApiPage(mapsQuery, apiKey, start);
+          const unique = dedupePlaces(places);
+          const leads = unique.map((place) =>
+            mapPlaceToLead(place, keyword, location, index++)
+          );
           return {
-            leads: [],
-            source: "serpapi-empty-no-results",
-            provider: "serpapi",
-            isLive: false,
-            apiCallConsumed: true,
-            apiCallsUsed,
+            items: leads,
+            shortPage: unique.length < SERPAPI_PAGE_SIZE,
           };
-        }
-        return autonomousFallback(params, "serpapi-empty");
-      }
+        },
+      });
 
-      const serpLeads = places.map((place, i) =>
-        mapPlaceToLead(place, keyword, location, i, params.allowArtificialResults !== false)
-      );
-
-      const { leads, supplemented } =
-        serpLeads.length < maxResults && params.allowArtificialResults !== false
-          ? await supplementVolume(params, serpLeads)
-          : { leads: serpLeads.slice(0, maxResults), supplemented: false };
-
+      const sorted = sortByLocationMatch(accumulated.inspected);
+      const stats = locationStats(sorted);
       const sourceParts = [
         useMaxLeads ? "serpapi-max-volume" : "serpapi-equilibrium",
-        apiCallsUsed > 1 ? `${apiCallsUsed}p` : null,
-        supplemented ? "supplemented" : null,
+        accumulated.pagesUsed > 1 ? `${accumulated.pagesUsed}p` : null,
+        region ? "geo-target" : null,
       ].filter(Boolean);
 
       return {
-        leads,
-        source: sourceParts.join("-"),
+        leads: sorted,
+        source:
+          sorted.length === 0
+            ? "serpapi-empty-no-results"
+            : sourceParts.join("-"),
         provider: "serpapi",
-        isLive: true,
+        isLive: sorted.length > 0,
         apiCallConsumed: true,
-        apiCallsUsed,
+        apiCallsUsed: accumulated.pagesUsed,
+        requestedCount: maxResults,
+        foundRealCount: stats.insideTargetFound,
+        sourceExhausted: accumulated.sourceExhausted,
+        providerResultsInspected: accumulated.inspected.length,
+        insideTargetFound: stats.insideTargetFound,
+        outsideTargetCount: stats.outsideTargetCount,
+        unknownLocationCount: stats.unknownLocationCount,
+        selectedCount: selectOperationalSearchLeads(sorted, maxResults).length,
       };
     } catch (err) {
       console.error("[SerpAPI]", err);
@@ -326,35 +288,13 @@ export const serpApiProvider: SearchProvider = {
         ) ||
         isSerpApiCreditError(err instanceof Error ? err.message : String(err));
 
-      if (creditExhausted) {
-        if (params.allowArtificialResults === false) {
-          return {
-            leads: [],
-            source: "serpapi-quota-no-results",
-            provider: "serpapi",
-            isLive: false,
-            apiCallConsumed: true,
-            creditExhausted: true,
-          };
+      return emptyRealResult(
+        creditExhausted ? "serpapi-quota-no-results" : "serpapi-error-no-results",
+        {
+          requestedCount: maxResults,
+          apiCallConsumed: creditExhausted,
+          creditExhausted,
         }
-        return autonomousFallback(params, "serpapi-quota", true);
-      }
-
-      if (params.allowArtificialResults === false) {
-        return {
-          leads: [],
-          source: "serpapi-error-no-results",
-          provider: "serpapi",
-          isLive: false,
-          apiCallConsumed: false,
-        };
-      }
-
-      return mockFallback(
-        keyword,
-        location,
-        maxResults,
-        "serpapi-error-fallback"
       );
     }
   },

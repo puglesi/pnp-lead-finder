@@ -37,6 +37,10 @@ function lead(id, email, validation = {}) {
     address: "London",
     category: "Test",
     aiScore: 0,
+    synthetic: false,
+    emailIsGuessed: false,
+    emailSourceUrl: email ? "https://" + id + ".example/contact" : null,
+    emailDiscoveryMethod: email ? "website_contact" : null,
     ...validation,
   };
 }

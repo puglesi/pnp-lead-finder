@@ -58,7 +58,8 @@ export function evaluateAgentThreeCircuitBreaker(
   // Non-failure control statuses that already pause the queue item without counting.
   if (
     input.smtpStatus === "suppressed" ||
-    input.smtpStatus === "invalid_request"
+    input.smtpStatus === "invalid_request" ||
+    input.smtpStatus === "reconciliation_required"
   ) {
     return {
       consecutiveFailureStatus: input.consecutiveFailureStatus,

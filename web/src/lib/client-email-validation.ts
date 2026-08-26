@@ -29,11 +29,19 @@ function isDomainCheckResult(
 export const checkEmailDomainFromApi: EmailDomainChecker = async (
   domain
 ) => {
-  const response = await fetch("/api/email-validation/domain", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ domain }),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8_000);
+  let response: Response;
+  try {
+    response = await fetch("/api/email-validation/domain", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({ domain }),
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
   if (!response.ok) {
     throw new Error("Falha ao verificar o domínio do e-mail");
   }

@@ -130,6 +130,14 @@ export function describeAgentThreeExclusionReason(
       return "contato bloqueado";
     case "send_locked":
       return "envio já reservado por outra execução";
+    case "synthetic":
+      return "lead sintético/mock bloqueado";
+    case "guess_not_verified":
+      return "e-mail presumido sem fonte real";
+    case "outside_target":
+      return "fora da área";
+    case "unknown_location":
+      return "Revisar localização";
     default:
       return reason ?? "excluído";
   }

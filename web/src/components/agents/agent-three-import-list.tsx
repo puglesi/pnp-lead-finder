@@ -42,6 +42,7 @@ import {
   getEmailTemplatesForOperation,
 } from "@/lib/email-template-library";
 import { getOperationSendAccount } from "@/lib/operation-identity";
+import { bindSignatureToOperation } from "@/lib/operation-signature";
 
 function Stat({ label, value }: { label: string; value: number }) {
   return (
@@ -153,7 +154,7 @@ export function AgentThreeImportList() {
       fromName: account.fromName,
       fromEmail: account.fromEmail,
       replyTo: account.replyTo,
-      signature: { ...signature },
+      signature: bindSignatureToOperation(operation, signature),
     });
     useCampaignStore.getState().setCampaignStatus(campaign.id, "saved");
     setRecipientSourceMode("import");

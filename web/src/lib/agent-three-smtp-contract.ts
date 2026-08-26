@@ -11,7 +11,8 @@ export type AgentThreeSmtpStatus =
   | "provider_rate_limit"
   | "provider_account_blocked"
   | "transient_error"
-  | "permanent_error";
+  | "permanent_error"
+  | "reconciliation_required";
 
 export interface AgentThreeAttachmentPayload {
   filename: string;
@@ -64,6 +65,8 @@ export const AGENT_THREE_SMTP_MESSAGES: Record<
   provider_account_blocked: "Conta bloqueada pelo provedor.",
   transient_error: "Falha temporária no envio.",
   permanent_error: "Falha permanente no envio.",
+  reconciliation_required:
+    "UNKNOWN_RECONCILIATION_REQUIRED — o SMTP não confirmou o resultado a tempo. Sem retry automático.",
 };
 
 /** Human reasons for Start blocking (client-side preconditions). */

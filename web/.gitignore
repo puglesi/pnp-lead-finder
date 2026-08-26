@@ -22,6 +22,10 @@
 
 # tracking data
 /.data/
+/backups/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 
 # misc
 .DS_Store

@@ -185,6 +185,7 @@ export async function runBatchEmailSend(
 
       if (dailyLimit > 0) {
         const settings = useSettingsStore.getState();
+        settings.resetAutonomousDailyCountIfNeeded();
         const remaining = settings.getAutonomousDailyRemaining(dailyLimit);
         if (remaining <= 0) {
           const now = new Date().toISOString();

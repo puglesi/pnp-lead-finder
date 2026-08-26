@@ -11,7 +11,7 @@ import {
 } from "../src/store/operation-signature-store.ts";
 
 test("EMPTY_OPERATION_SIGNATURE is a single frozen reference", () => {
-  assert.equal(EMPTY_OPERATION_SIGNATURE.enabled, true);
+  assert.equal(EMPTY_OPERATION_SIGNATURE.enabled, false);
   assert.equal(EMPTY_OPERATION_SIGNATURE.body, "");
   assert.equal(
     selectOperationSignature(undefined, "panek-puglesi"),

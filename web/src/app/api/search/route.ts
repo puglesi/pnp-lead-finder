@@ -51,7 +51,8 @@ export async function POST(request: NextRequest) {
       creditExhausted: Boolean(body.creditExhausted),
       serpapiDeepPagination: Boolean(body.serpapiDeepPagination),
       useMaxLeads,
-      allowArtificialResults: body.allowArtificialResults !== false,
+      allowArtificialResults:
+        provider === "mock" && body.allowArtificialResults === true,
       autonomousSources: Array.isArray(body.autonomousSources)
         ? body.autonomousSources
         : undefined,
@@ -76,6 +77,15 @@ export async function POST(request: NextRequest) {
       apiCallConsumed: result.apiCallConsumed ?? false,
       apiCallsUsed: result.apiCallsUsed,
       creditExhausted: result.creditExhausted ?? false,
+      requestedCount: result.requestedCount ?? maxResults,
+      foundRealCount: result.foundRealCount ?? result.leads.length,
+      sourceExhausted: result.sourceExhausted ?? result.leads.length < maxResults,
+      providerResultsInspected:
+        result.providerResultsInspected ?? result.leads.length,
+      insideTargetFound: result.insideTargetFound,
+      outsideTargetCount: result.outsideTargetCount,
+      unknownLocationCount: result.unknownLocationCount,
+      selectedCount: result.selectedCount,
     });
   } catch (err) {
     console.error("[api/search]", err);

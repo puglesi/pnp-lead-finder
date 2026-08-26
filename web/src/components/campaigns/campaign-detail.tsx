@@ -48,6 +48,13 @@ import { useSettingsStore } from "@/store/settings-store";
 import { resolveCampaignLeads } from "@/lib/campaign-leads";
 import { useLeadStore } from "@/store/lead-store";
 import { useCampaignStore } from "@/store/campaign-store";
+import {
+  LOCAL_DATA_CHECKING_MESSAGE,
+  LOCAL_DATA_UNAVAILABLE_MESSAGE,
+  isLocalDataUnavailableError,
+  prepareLocalDataWrite,
+  useLocalDataAvailability,
+} from "@/lib/local-data-client";
 import { useAgentThreeStore } from "@/store/agent-three-store";
 import { useBatchPipelineStore } from "@/store/batch-pipeline-store";
 import { useEmailTemplateStore } from "@/store/email-template-store";
@@ -161,6 +168,8 @@ function CampaignDetailContent({
   const [trackingEvents, setTrackingEvents] = useState<CampaignTrackingEvent[]>([]);
   const [trackingRefreshing, setTrackingRefreshing] = useState(false);
 
+  const localDataAvailability = useLocalDataAvailability();
+  const localDataWriteBlocked = localDataAvailability === "unavailable";
   const localProductionEnabled = useSettingsStore(
     (s) => s.localProductionEnabled
   );
@@ -244,28 +253,45 @@ function CampaignDetailContent({
     setSaveState("dirty");
   };
 
-  const handleSave = () => {
-    updateCampaign(campaign.id, {
-      subject: draft.subject,
-      body: draft.body,
-      fromName: draft.fromName,
-      fromEmail: draft.fromEmail,
-      replyTo: draft.replyTo,
-      unsubscribeLink: draft.unsubscribeLink,
-      followUp: draft.followUp,
-      signature: draft.signature,
-      attachment: campaign.attachment ?? null,
-      status:
-        campaign.status === "draft" || campaign.status === "saved"
-          ? "saved"
-          : campaign.status,
-    });
-    setSaveState("saved");
-    toast.success("Salvo");
+  const handleSave = async () => {
+    try {
+      const ready = await prepareLocalDataWrite();
+      if (!ready) {
+        toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
+        return false;
+      }
+      updateCampaign(campaign.id, {
+        subject: draft.subject,
+        body: draft.body,
+        fromName: draft.fromName,
+        fromEmail: draft.fromEmail,
+        replyTo: draft.replyTo,
+        unsubscribeLink: draft.unsubscribeLink,
+        followUp: draft.followUp,
+        signature: draft.signature,
+        attachment: campaign.attachment ?? null,
+        status:
+          campaign.status === "draft" || campaign.status === "saved"
+            ? "saved"
+            : campaign.status,
+      });
+      setSaveState("saved");
+      toast.success("Salvo");
+      return true;
+    } catch (error) {
+      if (isLocalDataUnavailableError(error)) {
+        toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
+        return false;
+      }
+      throw error;
+    }
   };
 
-  const handleOpenInAgentThree = () => {
-    if (isEditable) handleSave();
+  const handleOpenInAgentThree = async () => {
+    if (isEditable) {
+      const saved = await handleSave();
+      if (!saved) return;
+    }
     setRecipientSourceMode("campaign");
     selectProfile(campaign.campaignProfileId);
     selectCampaign(campaign.campaignProfileId, campaign.id);
@@ -277,8 +303,15 @@ function CampaignDetailContent({
     router.push("/agente-3");
   };
 
-  const handleSendNow = () => {
-    if (isEditable) handleSave();
+  const handleSendNow = async () => {
+    if (localDataWriteBlocked) {
+      toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
+      return;
+    }
+    if (isEditable) {
+      const saved = await handleSave();
+      if (!saved) return;
+    }
     setSendNowOpen(true);
   };
 
@@ -323,10 +356,16 @@ function CampaignDetailContent({
             <UsersRound className="size-4" />
             Reutilizar para nova lista
           </Button>
+          {localDataAvailability === "checking" && (
+            <span className="text-xs text-muted-foreground">
+              {LOCAL_DATA_CHECKING_MESSAGE}
+            </span>
+          )}
           {isEditable && (
             <Button
               variant={saveState === "dirty" ? "default" : "outline"}
-              onClick={handleSave}
+              onClick={() => void handleSave()}
+              disabled={localDataWriteBlocked}
             >
               <Save className="size-4" />
               Salvar alterações
@@ -360,16 +399,18 @@ function CampaignDetailContent({
             Definir como padrão
           </Button>
           <Button
-            onClick={handleOpenInAgentThree}
+            onClick={() => void handleOpenInAgentThree()}
             className="bg-emerald-600 hover:bg-emerald-500"
+            disabled={localDataWriteBlocked}
           >
             <Send className="size-4" />
             Abrir no Agente 3
           </Button>
           <Button
             variant="default"
-            onClick={handleSendNow}
+            onClick={() => void handleSendNow()}
             className="bg-blue-600 hover:bg-blue-500"
+            disabled={localDataWriteBlocked}
           >
             <Play className="size-4" />
             Enviar agora
@@ -384,7 +425,19 @@ function CampaignDetailContent({
               ) {
                 return;
               }
-              deleteCampaign(campaign.id);
+              if (localDataWriteBlocked) {
+                toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
+                return;
+              }
+              try {
+                deleteCampaign(campaign.id);
+              } catch (error) {
+                if (isLocalDataUnavailableError(error)) {
+                  toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
+                  return;
+                }
+                throw error;
+              }
               router.push("/campanhas");
             }}
           >

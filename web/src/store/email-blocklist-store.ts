@@ -14,6 +14,7 @@ import {
 import { normalizeEmail } from "@/lib/email-validation";
 import { normalizeBlocklistPersistSlice } from "@/lib/store-rehydrate";
 import { asArray } from "@/lib/safe-object";
+import { assertLocalDataWritable } from "@/lib/local-data-client";
 
 interface EmailBlocklistStore {
   entries: EmailBlocklistEntry[];
@@ -50,6 +51,7 @@ export const useEmailBlocklistStore = create<EmailBlocklistStore>()(
       entries: [],
 
       addEmail: (input) => {
+        assertLocalDataWritable();
         const entry = createEmailBlocklistEntry(input);
         if (!entry) return null;
         set((state) => {
@@ -62,6 +64,7 @@ export const useEmailBlocklistStore = create<EmailBlocklistStore>()(
       },
 
       addEmails: (input) => {
+        assertLocalDataWritable();
         const emails = parseEmailListInput(input.raw);
         let added = 0;
         let skipped = 0;
@@ -96,6 +99,7 @@ export const useEmailBlocklistStore = create<EmailBlocklistStore>()(
       },
 
       removeEmail: (normalizedEmail) => {
+        assertLocalDataWritable();
         const email = normalizeEmail(normalizedEmail);
         if (!email) return false;
         const before = get().entries.length;
@@ -108,6 +112,7 @@ export const useEmailBlocklistStore = create<EmailBlocklistStore>()(
       },
 
       removeById: (id) => {
+        assertLocalDataWritable();
         const before = get().entries.length;
         set((state) => ({
           entries: state.entries.filter((item) => item.id !== id),

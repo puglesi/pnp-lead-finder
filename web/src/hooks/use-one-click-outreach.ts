@@ -56,11 +56,18 @@ import type { GlobalDeduplicationPreview } from "@/lib/global-email-deduplicatio
 import { useAgentThreeRunner } from "@/hooks/use-agent-three-runner";
 import { getAgentThreeMetrics } from "@/lib/agent-three-queue";
 import { isCampaignFullyDelivered } from "@/lib/campaign-completion";
-import {
-  getEmailTemplateSenderName,
-  type EmailTemplate,
-} from "@/lib/email-template-library";
+import type { EmailTemplate } from "@/lib/email-template-library";
 import { useEmailTemplateStore } from "@/store/email-template-store";
+import {
+  ensureOperationSignaturesHydrated,
+  useOperationSignatureStore,
+} from "@/store/operation-signature-store";
+import { getOperationSendAccount } from "@/lib/operation-identity";
+import {
+  bindSignatureToOperation,
+  getOperationSignatureMismatch,
+  removeLegacyEmbeddedOneClickSignatures,
+} from "@/lib/operation-signature";
 
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -125,13 +132,15 @@ function resolveTemplate(
       item.id === config.templateId && item.operation === config.operation
   );
   if (!template) return null;
+  const account = getOperationSendAccount(config.operation);
+  const preparedBody = removeLegacyEmbeddedOneClickSignatures(template.body);
   return {
     name: template.name,
     subject: template.subject,
-    body: template.body,
-    fromName: getEmailTemplateSenderName(template.operation),
-    fromEmail: template.sender,
-    replyTo: template.replyTo,
+    body: preparedBody.body,
+    fromName: account.fromName,
+    fromEmail: account.fromEmail,
+    replyTo: account.replyTo,
     unsubscribeLink: DEFAULT_UNSUBSCRIBE_LINK,
     contactKind: template.contactKind,
   };
@@ -425,6 +434,9 @@ export function useOneClickOutreach() {
       });
 
       try {
+        // Fail closed before search/credits: sending identity must be loaded
+        // from the durable IndexedDB source of truth first.
+        await ensureOperationSignaturesHydrated();
         let batchId = existing?.batchId ?? "";
         let campaignId = existing?.campaignId ?? null;
         let eligibleLeads: Lead[] = [];
@@ -645,6 +657,12 @@ export function useOneClickOutreach() {
             replyTo: template.replyTo,
             unsubscribeLink: template.unsubscribeLink,
             followUp: { ...DEFAULT_FOLLOW_UP },
+            signature: bindSignatureToOperation(
+              config.operation,
+              useOperationSignatureStore
+                .getState()
+                .getSignature(config.operation)
+            ),
           });
           campaignId = campaign.id;
           useBatchPipelineStore
@@ -721,6 +739,41 @@ export function useOneClickOutreach() {
         if (!campaignId) {
           throw new Error("Campanha não encontrada para envio.");
         }
+
+        // Rebind on every run, including checkpoint resume, so a One-Click
+        // campaign always uses the latest official signature for its SMTP op.
+        const campaignForIdentity = useCampaignStore
+          .getState()
+          .getCampaign(campaignId);
+        if (!campaignForIdentity) {
+          throw new Error("Campanha não encontrada para validar a identidade.");
+        }
+        if (campaignForIdentity.campaignProfileId !== config.operation) {
+          throw new Error(
+            "Configuração bloqueada: a campanha não pertence à operação SMTP selecionada."
+          );
+        }
+        const operationAccount = getOperationSendAccount(config.operation);
+        const officialSignature = bindSignatureToOperation(
+          config.operation,
+          useOperationSignatureStore.getState().getSignature(config.operation)
+        );
+        const signatureMismatch = getOperationSignatureMismatch(
+          config.operation,
+          officialSignature,
+          { requireOperationId: true }
+        );
+        if (signatureMismatch) throw new Error(signatureMismatch);
+        const preparedCampaignBody = removeLegacyEmbeddedOneClickSignatures(
+          campaignForIdentity.body
+        ).body;
+        useCampaignStore.getState().updateCampaign(campaignId, {
+          body: preparedCampaignBody,
+          fromName: operationAccount.fromName,
+          fromEmail: operationAccount.fromEmail,
+          replyTo: operationAccount.replyTo,
+          signature: officialSignature,
+        });
 
         // Recover recoverable config failures so Agent 3 can retry
         const campaignBefore = useCampaignStore.getState().getCampaign(campaignId);

@@ -1,13 +1,34 @@
 "use client";
 
-import { Loader2, Search } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { AlertTriangle, CheckCircle2, Database, Loader2, Search } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BulkSearchProgress } from "@/components/dashboard/bulk-search-progress";
 import { useLeadStore } from "@/store/lead-store";
+import { getLeadProcessingProgress } from "@/lib/search/processing-progress";
 
 export function SearchLoading() {
-  const { currentKeyword, currentLocation } = useLeadStore();
+  const { currentKeyword, currentLocation, currentLeads, bulkProgress } = useLeadStore();
+  const [now, setNow] = useState(() => Date.now());
+  const processing = useMemo(
+    () => getLeadProcessingProgress(currentLeads),
+    [currentLeads]
+  );
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const lastActivityMs = bulkProgress.lastActivityAt
+    ? new Date(bulkProgress.lastActivityAt).getTime()
+    : bulkProgress.startedAt ?? now;
+  const inactiveMs = Math.max(0, now - lastActivityMs);
+  const possiblyInterrupted = inactiveMs > 3 * 60_000;
+  const lastSaved = bulkProgress.lastSavedAt
+    ? new Date(bulkProgress.lastSavedAt).toLocaleTimeString("pt-BR")
+    : "aguardando primeiro checkpoint";
 
   return (
     <div className="space-y-6">
@@ -31,9 +52,47 @@ export function SearchLoading() {
             </h2>
             <p className="mt-1 flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="size-3.5 animate-spin" />
-              Extraindo, validando emails e calculando scores IA...
+              Etapa atual: {bulkProgress.currentStage ?? "search"}
             </p>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-border/60">
+        <CardContent className="space-y-4 p-5">
+          <div className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-5">
+            <p>Busca: <strong>{bulkProgress.completedCount}/{bulkProgress.totalCount}</strong></p>
+            <p>Enrichment: <strong>{processing.enrichmentCompleted}/{processing.total}</strong></p>
+            <p>Validação: <strong>{processing.validationCompleted}/{processing.total}</strong></p>
+            <p>Score: <strong>{processing.scoringCompleted}/{processing.total}</strong></p>
+            <p>Pendentes: <strong>{processing.pending}</strong> · Falhas: <strong>{processing.failed + (bulkProgress.failedCount ?? 0)}</strong></p>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+            {bulkProgress.persistenceStatus === "error" ? (
+              <span className="inline-flex items-center gap-1.5 font-medium text-red-400">
+                <AlertTriangle className="size-3.5" />
+                Falha de persistência: {bulkProgress.persistenceError}
+              </span>
+            ) : bulkProgress.persistenceStatus === "saved" ? (
+              <span className="inline-flex items-center gap-1.5 text-emerald-300">
+                <CheckCircle2 className="size-3.5" />
+                Salvo automaticamente ✓
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5">
+                <Database className="size-3.5" />
+                Salvando checkpoint…
+              </span>
+            )}
+            <span>Último salvamento: {lastSaved}</span>
+            <span>Última atividade: {Math.floor(inactiveMs / 1_000)}s atrás</span>
+          </div>
+          {possiblyInterrupted && (
+            <p className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+              <AlertTriangle className="size-4" />
+              Processamento interrompido. Os resultados já obtidos estão salvos.
+            </p>
+          )}
         </CardContent>
       </Card>
 

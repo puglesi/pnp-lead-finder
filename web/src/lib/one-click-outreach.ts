@@ -221,6 +221,9 @@ export function isOneClickEligibleLead(lead: Lead): boolean {
     createdAt: "",
     updatedAt: "",
     attemptCount: 0,
+    synthetic: lead.synthetic === true,
+    emailIsGuessed: lead.emailIsGuessed === true,
+    emailSourceUrl: lead.emailSourceUrl ?? null,
   };
   return isAgentThreeItemEligible(item);
 }

@@ -24,7 +24,12 @@ function makeLead(index, overrides = {}) {
 test("seleciona apenas leads sem e-mail que possuem website empresarial", () => {
   const candidates = selectAgentOneEmailEnrichmentCandidates([
     makeLead(1),
-    makeLead(2, { email: "hello@business-2.co.uk" }),
+    makeLead(2, {
+      email: "hello@business-2.co.uk",
+      emailSourceUrl: "https://business-2.co.uk/contact",
+      emailDiscoveryMethod: "website_contact",
+      emailIsGuessed: false,
+    }),
     makeLead(3, { website: "https://google.com/maps/search/test" }),
     makeLead(4, { website: "https://example.com" }),
     makeLead(5, { website: "—" }),
@@ -46,6 +51,9 @@ test("mescla contatos sem sobrescrever dados existentes", () => {
     makeLead(2, {
       email: "owner@business-2.co.uk",
       phone: "+44 20 7000 0002",
+      emailSourceUrl: "https://business-2.co.uk/contact",
+      emailDiscoveryMethod: "website_contact",
+      emailIsGuessed: false,
     }),
   ];
 

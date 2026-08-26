@@ -2,6 +2,30 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { LeadBatch, PipelineStage } from "@/types/batch";
 import { advancePipelineStage, createLeadBatch } from "@/lib/lead-batch";
+import { createDurableSearchBatchRepository } from "@/lib/search/batch-repository";
+import { assertLocalDataWritable } from "@/lib/local-data-client";
+
+const durableSearchBatches = createDurableSearchBatchRepository();
+
+function persistPipelineStage(batchId: string, stage: PipelineStage): void {
+  if (typeof indexedDB === "undefined") return;
+  const durableStage =
+    stage === "garimpo"
+      ? "enrichment"
+      : stage === "validation"
+        ? "validation"
+        : stage === "search"
+          ? "search"
+          : "completed";
+  void durableSearchBatches
+    .getBatch(batchId)
+    .then((batch) =>
+      batch ? durableSearchBatches.setStage(batchId, durableStage) : null
+    )
+    .catch((error) => {
+      console.error("[search-checkpoint/stage]", error);
+    });
+}
 
 interface BatchPipelineStore {
   activeBatchId: string | null;
@@ -74,6 +98,7 @@ export const useBatchPipelineStore = create<BatchPipelineStore>()(
       batches: {},
 
       registerSearchBatch: (input) => {
+        assertLocalDataWritable();
         const batch = createLeadBatch({
           sector: input.sector,
           location: input.location,
@@ -94,13 +119,13 @@ export const useBatchPipelineStore = create<BatchPipelineStore>()(
       },
 
       upsertBatch: (batch) =>
-        set((state) => ({
+        (assertLocalDataWritable(), set((state) => ({
           activeBatchId: batch.batchId,
           batches: {
             ...state.batches,
             [batch.batchId]: batch,
           },
-        })),
+        }))),
 
       setActiveBatch: (batchId) =>
         set((state) => {
@@ -112,11 +137,12 @@ export const useBatchPipelineStore = create<BatchPipelineStore>()(
         }),
 
       updateBatchStage: (batchId, stage) =>
-        set((state) => {
+        (assertLocalDataWritable(), set((state) => {
           const existing = state.batches[batchId];
           if (!existing) return state;
           const nextStage = advancePipelineStage(existing.stage, stage);
           if (nextStage === existing.stage) return state;
+          persistPipelineStage(batchId, nextStage);
           return {
             batches: {
               ...state.batches,
@@ -126,10 +152,10 @@ export const useBatchPipelineStore = create<BatchPipelineStore>()(
               },
             },
           };
-        }),
+        })),
 
       attachCampaign: (batchId, campaignId) =>
-        set((state) => {
+        (assertLocalDataWritable(), set((state) => {
           const existing = state.batches[batchId];
           if (!existing) return state;
           return {
@@ -142,7 +168,7 @@ export const useBatchPipelineStore = create<BatchPipelineStore>()(
               },
             },
           };
-        }),
+        })),
 
       getActiveBatch: () => {
         const { activeBatchId, batches } = get();

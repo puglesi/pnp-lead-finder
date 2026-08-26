@@ -18,7 +18,13 @@ export async function runWithConcurrency<T, R>(
   }
 
   const poolSize = Math.max(1, Math.min(concurrency, items.length));
-  await Promise.all(Array.from({ length: poolSize }, () => runWorker()));
+  const workers = await Promise.allSettled(
+    Array.from({ length: poolSize }, () => runWorker())
+  );
+  const rejected = workers.find(
+    (worker): worker is PromiseRejectedResult => worker.status === "rejected"
+  );
+  if (rejected) throw rejected.reason;
   return results;
 }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { isLocalDataUnavailableError } from "@/lib/local-data-client";
 
 /**
  * Development-only: log runtime errors with component stack hints
@@ -11,6 +12,10 @@ export function DevErrorLogger() {
     if (process.env.NODE_ENV === "production") return;
 
     const onError = (event: ErrorEvent) => {
+      if (isLocalDataUnavailableError(event.error ?? event.message)) {
+        event.preventDefault();
+        return;
+      }
       const message = event.error?.message ?? event.message ?? "Unknown error";
       const stack =
         typeof event.error?.stack === "string"
@@ -31,6 +36,10 @@ export function DevErrorLogger() {
     };
 
     const onRejection = (event: PromiseRejectionEvent) => {
+      if (isLocalDataUnavailableError(event.reason)) {
+        event.preventDefault();
+        return;
+      }
       const reason = event.reason;
       const message =
         reason instanceof Error

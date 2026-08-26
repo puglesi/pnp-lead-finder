@@ -10,6 +10,7 @@ import {
 } from "@/lib/email-template-library";
 import { normalizeTemplatesPersistSlice } from "@/lib/store-rehydrate";
 import { asArray } from "@/lib/safe-object";
+import { assertLocalDataWritable } from "@/lib/local-data-client";
 
 interface EmailTemplateStore {
   templates: EmailTemplate[];
@@ -59,6 +60,7 @@ export const useEmailTemplateStore = create<EmailTemplateStore>()(
       markHydrated: () => set({ hasHydrated: true }),
 
       addTemplate: (input) => {
+        assertLocalDataWritable();
         const now = new Date().toISOString();
         const template: EmailTemplate = {
           ...input,
@@ -76,7 +78,7 @@ export const useEmailTemplateStore = create<EmailTemplateStore>()(
       },
 
       updateTemplate: (id, input) =>
-        set((state) => ({
+        (assertLocalDataWritable(), set((state) => ({
           templates: normalizeEmailTemplateDefaults(
             state.templates.map((template) =>
               template.id === id
@@ -85,9 +87,10 @@ export const useEmailTemplateStore = create<EmailTemplateStore>()(
             ),
             input.isDefault ? id : undefined
           ),
-        })),
+        }))),
 
       duplicateTemplate: (id) => {
+        assertLocalDataWritable();
         const source = get().templates.find((template) => template.id === id);
         if (!source) return null;
         return get().addTemplate({
@@ -103,6 +106,7 @@ export const useEmailTemplateStore = create<EmailTemplateStore>()(
       },
 
       deleteTemplate: (id) => {
+        assertLocalDataWritable();
         const source = get().templates.find((template) => template.id === id);
         if (!source) return false;
         const scopedCount = get().templates.filter(
@@ -118,11 +122,12 @@ export const useEmailTemplateStore = create<EmailTemplateStore>()(
       },
 
       setDefaultTemplate: (id) =>
-        set((state) => ({
+        (assertLocalDataWritable(), set((state) => ({
           templates: normalizeEmailTemplateDefaults(state.templates, id),
-        })),
+        }))),
 
       restoreOriginal: (id) => {
+        assertLocalDataWritable();
         const original = getOriginalEmailTemplateContent(id);
         if (!original) return false;
         set((state) => ({

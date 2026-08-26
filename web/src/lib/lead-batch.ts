@@ -1,5 +1,16 @@
 import type { BatchLeadStats, LeadBatch, PipelineStage } from "../types/batch.ts";
 import type { Lead, SearchRecord } from "../types/lead.ts";
+import {
+  hasDiscoveredEmail,
+  stampLegacyLeadQuality,
+} from "./lead-provenance.ts";
+import { normalizeEmail } from "./email-validation.ts";
+import {
+  DEFAULT_LOCATION_FILTER,
+  isGeographicallyEligible,
+  shouldApplyGeoLocationFilter,
+  type LocationFilterOptions,
+} from "./location-match.ts";
 
 function slugPart(value: string, max = 24): string {
   const slug = value
@@ -477,68 +488,101 @@ const HARD_INVALID_REASONS = new Set([
   "no_mx_records",
 ]);
 
+export interface BatchEligibilityOptions {
+  locationFilter?: LocationFilterOptions | null;
+  requestedLocation?: string;
+}
+
 /**
  * Campaign-eligible for this product:
- * - has email
+ * - not synthetic
+ * - discovered email (provenance, not guessed)
  * - not definitively invalid / duplicate / no_email
  * - local syntax+MX ok with mailbox unconfirmed (unknown) counts as eligible
  * Does NOT re-run DNS; only reads existing validation fields.
  */
-export function isBatchCampaignEligible(lead: Lead): boolean {
-  if (!hasEmail(lead)) return false;
+export function isBatchCampaignEligible(
+  lead: Lead,
+  options: BatchEligibilityOptions = {}
+): boolean {
+  const stamped = stampLegacyLeadQuality(lead, options.requestedLocation);
+  if (stamped.synthetic) return false;
+  if (!hasDiscoveredEmail(stamped)) return false;
 
-  const status = lead.emailValidationStatus;
-  const reason = lead.emailValidationReason ?? "";
+  const status = stamped.emailValidationStatus;
+  const reason = stamped.emailValidationReason ?? "";
 
   if (status === "no_email" || status === "duplicate") return false;
   if (status === "invalid") return false;
   if (HARD_INVALID_REASONS.has(reason)) return false;
 
+  const requestedLocation =
+    options.requestedLocation ?? stamped.requestedLocation;
+  if (shouldApplyGeoLocationFilter(requestedLocation)) {
+    const geoFilter = options.locationFilter ?? DEFAULT_LOCATION_FILTER;
+    if (!isGeographicallyEligible(stamped.locationMatch, geoFilter)) {
+      return false;
+    }
+  }
+
   if (status === "valid") return true;
 
-  // Local validation outcome: syntax+MX ok, mailbox not confirmed.
   if (
     status === "unknown" ||
     status === "risky" ||
     status === "catch_all"
   ) {
-    // dns_error is recoverable unknown — not yet campaign-eligible.
     if (reason === "dns_error") return false;
     return true;
   }
 
-  // Explicit MX already verified on the lead.
-  if (lead.hasMxRecords === true) return true;
+  if (stamped.hasMxRecords === true) return true;
 
   return false;
 }
 
-export function getBatchLeadStats(leads: readonly Lead[]): BatchLeadStats {
+export function getBatchLeadStats(
+  leads: readonly Lead[],
+  options: BatchEligibilityOptions = {}
+): BatchLeadStats {
   let withWebsite = 0;
   let withEmail = 0;
   let withoutEmail = 0;
+  let guessedEmail = 0;
   let approved = 0;
   let eligible = 0;
   let unknown = 0;
+  let unconfirmed = 0;
   let invalid = 0;
   let pendingValidation = 0;
+  let duplicates = 0;
+  let realFound = 0;
+  let synthetic = 0;
+  const uniqueEmails = new Set<string>();
 
-  for (const lead of leads) {
+  for (const raw of leads) {
+    const lead = stampLegacyLeadQuality(raw, options.requestedLocation);
     if (hasWebsite(lead)) withWebsite += 1;
+    if (lead.synthetic) synthetic += 1;
+    else realFound += 1;
 
-    // Leads without email are NEVER "invalid" — only "sem e-mail".
-    if (!hasEmail(lead)) {
+    const discovered = hasDiscoveredEmail(lead);
+    const anyEmail = hasEmail(lead);
+    if (anyEmail && lead.emailIsGuessed) guessedEmail += 1;
+
+    if (!discovered) {
       withoutEmail += 1;
       continue;
     }
     withEmail += 1;
+    const email = normalizeEmail(lead.normalizedEmail) ?? normalizeEmail(lead.email);
+    if (email) uniqueEmails.add(email);
 
     const status = lead.emailValidationStatus;
     const reason = lead.emailValidationReason ?? "";
 
     if (status === "duplicate") {
-      // Duplicate is not campaign-eligible; track under invalid for batch UI.
-      invalid += 1;
+      duplicates += 1;
       continue;
     }
 
@@ -547,7 +591,6 @@ export function getBatchLeadStats(leads: readonly Lead[]): BatchLeadStats {
       continue;
     }
 
-    // no_email status with a present email is inconsistent — still not invalid.
     if (status === "no_email") {
       withoutEmail += 1;
       withEmail -= 1;
@@ -556,7 +599,7 @@ export function getBatchLeadStats(leads: readonly Lead[]): BatchLeadStats {
 
     if (status === "valid") {
       approved += 1;
-      eligible += 1;
+      if (isBatchCampaignEligible(lead, options)) eligible += 1;
       continue;
     }
 
@@ -566,22 +609,30 @@ export function getBatchLeadStats(leads: readonly Lead[]): BatchLeadStats {
       status === "catch_all"
     ) {
       unknown += 1;
-      if (isBatchCampaignEligible(lead)) eligible += 1;
+      if (reason === "mailbox_not_verified" || lead.hasMxRecords === true) {
+        unconfirmed += 1;
+      }
+      if (isBatchCampaignEligible(lead, options)) eligible += 1;
       continue;
     }
 
-    // pending / validating / unset
     pendingValidation += 1;
   }
 
   return {
     total: leads.length,
+    realFound,
+    synthetic,
     withWebsite,
     withEmail,
     withoutEmail,
+    uniqueEmails: uniqueEmails.size,
+    guessedEmail,
+    duplicates,
     approved,
     eligible,
     unknown,
+    unconfirmed,
     invalid,
     pendingValidation,
   };
@@ -598,9 +649,15 @@ export function getBatchApprovedLeads(leads: readonly Lead[]): Lead[] {
  * Campaign recipients from this lote: eligible emails only
  * (valid OR mailbox unknown after local MX — not sem e-mail, not hard invalid).
  */
-export function getBatchEligibleLeads(leads: readonly Lead[]): Lead[] {
-  return leads.filter(isBatchCampaignEligible);
+export function getBatchEligibleLeads(
+  leads: readonly Lead[],
+  options: BatchEligibilityOptions = {}
+): Lead[] {
+  return leads.filter((lead) => isBatchCampaignEligible(lead, options));
 }
+
+export { DEFAULT_LOCATION_FILTER };
+export type { LocationFilterOptions };
 
 /** Leads ready for Agent 2 = have email and not terminal-invalid without revalidation. */
 export function getBatchValidationCandidates(leads: readonly Lead[]): Lead[] {

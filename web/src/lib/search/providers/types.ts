@@ -33,6 +33,14 @@ export interface SearchProviderResult {
   apiCallConsumed?: boolean;
   apiCallsUsed?: number;
   creditExhausted?: boolean;
+  requestedCount?: number;
+  foundRealCount?: number;
+  sourceExhausted?: boolean;
+  providerResultsInspected?: number;
+  insideTargetFound?: number;
+  outsideTargetCount?: number;
+  unknownLocationCount?: number;
+  selectedCount?: number;
 }
 
 export interface SearchProvider {

@@ -29,6 +29,8 @@ export function getClearUiPreserveContract(): string[] {
     "recentSearches",
     "campaigns",
     "batches",
+    "indexedDbSearchBatches",
+    "indexedDbSearchLeads",
     "settings",
     "smtp",
     "templates",

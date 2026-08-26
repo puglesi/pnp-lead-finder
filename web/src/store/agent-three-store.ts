@@ -21,6 +21,7 @@ import {
   setAgentThreeRecipientSourceMode,
   startAgentThree,
   stopAgentThree,
+  touchAgentThreeHeartbeat,
   type AgentThreeLoadResult,
   type AgentThreePreparationResult,
   type AgentThreeQueueItem,
@@ -35,6 +36,10 @@ import {
   type AgentThreeDeliveryApplication,
 } from "@/lib/agent-three-delivery";
 import type { AgentThreeSmtpResult } from "@/lib/agent-three-smtp-contract";
+import {
+  reconcileAgentThreeOperation,
+  type AgentThreePersistedSendRecord,
+} from "@/lib/agent-three-reconciliation";
 
 interface AgentThreeStore extends AgentThreeSnapshot {
   selectProfile: (profileId: CampaignProfileId) => void;
@@ -92,6 +97,11 @@ interface AgentThreeStore extends AgentThreeSnapshot {
     itemId: string,
     result: AgentThreeSmtpResult
   ) => AgentThreeDeliveryApplication;
+  reconcileFromHistory: (
+    profileId: CampaignProfileId,
+    records: readonly AgentThreePersistedSendRecord[]
+  ) => void;
+  touchHeartbeat: (profileId: CampaignProfileId) => void;
   finish: (profileId: CampaignProfileId) => void;
 }
 
@@ -335,6 +345,19 @@ export const useAgentThreeStore = create<AgentThreeStore>()(
         });
         return application;
       },
+
+      reconcileFromHistory: (profileId, records) =>
+        set((state) =>
+          reconcileAgentThreeOperation(
+            state,
+            profileId,
+            records,
+            nowIso()
+          ).snapshot
+        ),
+
+      touchHeartbeat: (profileId) =>
+        set((state) => touchAgentThreeHeartbeat(state, profileId, nowIso())),
 
       finish: (profileId) =>
         set((state) => finishAgentThree(state, profileId, nowIso())),

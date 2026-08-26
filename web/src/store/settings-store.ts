@@ -33,6 +33,16 @@ import {
 } from "@/lib/local-production";
 import type { EmailProviderCredentials, EmailProviderId } from "@/types/email-provider";
 import type { QueueMode, SearchConfig, SearchProfile, SearchProviderType } from "@/types/search";
+import {
+  computeAutonomousDailyRemaining,
+  settingsDayKey,
+} from "@/lib/autonomous-daily-quota";
+
+export {
+  computeAutonomousDailyRemaining,
+  computeAutonomousDailySentCount,
+  settingsDayKey,
+} from "@/lib/autonomous-daily-quota";
 
 export type QuickSearchMode = "serpapi" | "autonomous-24h" | "google-cse";
 
@@ -176,10 +186,6 @@ export function selectEmailProviderCredentials(
   };
 }
 
-function todayKey() {
-  return new Date().toISOString().slice(0, 10);
-}
-
 export const useSettingsStore = create<SettingsStore>()(
   persist(
     (set, get) => ({
@@ -200,7 +206,7 @@ export const useSettingsStore = create<SettingsStore>()(
       brevoApiKey: "",
       smtpEmail: "",
       smtpPassword: "",
-      autonomousDailySentDate: todayKey(),
+      autonomousDailySentDate: settingsDayKey(),
       autonomousDailySentCount: 0,
       localProductionEnabled: false,
       nightModeAuto: true,
@@ -437,16 +443,19 @@ export const useSettingsStore = create<SettingsStore>()(
       setSmtpConfig: (smtpEmail, smtpPassword) => set({ smtpEmail, smtpPassword }),
 
       resetAutonomousDailyCountIfNeeded: () => {
-        const day = todayKey();
+        const day = settingsDayKey();
         if (get().autonomousDailySentDate !== day) {
           set({ autonomousDailySentDate: day, autonomousDailySentCount: 0 });
         }
       },
 
       getAutonomousDailyRemaining: (limit) => {
-        if (limit <= 0) return Number.POSITIVE_INFINITY;
-        get().resetAutonomousDailyCountIfNeeded();
-        return Math.max(0, limit - get().autonomousDailySentCount);
+        const { autonomousDailySentDate, autonomousDailySentCount } = get();
+        return computeAutonomousDailyRemaining(
+          autonomousDailySentDate,
+          autonomousDailySentCount,
+          limit
+        );
       },
 
       incrementAutonomousDailySent: () => {
@@ -627,7 +636,7 @@ export const useSettingsStore = create<SettingsStore>()(
           next.brevoApiKey = next.brevoApiKey ?? "";
           next.smtpEmail = next.smtpEmail ?? "";
           next.smtpPassword = next.smtpPassword ?? "";
-          next.autonomousDailySentDate = next.autonomousDailySentDate ?? todayKey();
+          next.autonomousDailySentDate = next.autonomousDailySentDate ?? settingsDayKey();
           next.autonomousDailySentCount = next.autonomousDailySentCount ?? 0;
         }
 
@@ -647,6 +656,9 @@ export const useSettingsStore = create<SettingsStore>()(
           : [...DEFAULT_AUTONOMOUS_SOURCES];
 
         return next;
+      },
+      onRehydrateStorage: () => (state) => {
+        state?.resetAutonomousDailyCountIfNeeded();
       },
       merge: (persisted, current) => {
         const state =

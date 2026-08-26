@@ -31,6 +31,7 @@ import { formatSectorQueue } from "@/lib/worker-pool";
 import { ProviderStatusBadge } from "@/components/dashboard/provider-status-badge";
 import { getSourceShortLabel } from "@/types/autonomous-sources";
 import { cn } from "@/lib/utils";
+import { resolveGeoRegion } from "@/lib/geo/regions";
 
 function StatTile({
   icon: Icon,
@@ -72,6 +73,17 @@ export function BulkSearchProgress() {
   const settings = useSettingsStore();
   const [currentTime, setCurrentTime] = useState<number | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const geoRegion = resolveGeoRegion(
+    currentLocation || bulkProgress.location
+  );
+  const selectedTotal = bulkProgress.sectors.reduce(
+    (sum, sector) => sum + (sector.selectedCount ?? 0),
+    0
+  );
+  const analyzedTotal = bulkProgress.sectors.reduce(
+    (sum, sector) => sum + (sector.providerResultsInspected ?? 0),
+    0
+  );
 
   useEffect(() => {
     if (!isSearching) return;
@@ -126,7 +138,9 @@ export function BulkSearchProgress() {
     try {
       const added = generateMoreLeads(batch);
       if (added === 0) {
-        toast.error("Não foi possível gerar mais leads.");
+        toast.error(
+          "Quantidade é um teto. A busca real não é completada com placeholders."
+        );
         return;
       }
       toast.success(`+${added} leads adicionados · total ${useLeadStore.getState().currentLeads.length}`, {
@@ -414,7 +428,12 @@ export function BulkSearchProgress() {
                           <>
                             <CheckCircle2 className="size-3.5 text-emerald-400" />
                             <span className="text-xs text-muted-foreground">
-                              {s.leadsFound}
+                              {s.selectedCount ??
+                                s.insideTargetFound ??
+                                s.foundRealCount ??
+                                s.leadsFound}
+                              {s.requestedCount ? ` / ${s.requestedCount}` : ""}
+                              {s.sourceExhausted ? " · fonte esgotada" : ""}
                               {s.durationMs
                                 ? ` · ${formatDuration(s.durationMs)}`
                                 : ""}
@@ -426,6 +445,18 @@ export function BulkSearchProgress() {
                         )}
                       </span>
                     </div>
+                    {(s.status === "done" || s.status === "running") &&
+                      s.providerResultsInspected != null && (
+                      <p className="text-[11px] text-muted-foreground">
+                        Solicitados: {s.requestedCount ?? "—"} · Analisados:{" "}
+                        {s.providerResultsInspected} · Dentro da área:{" "}
+                        {s.insideTargetFound ?? 0} · Selecionados:{" "}
+                        {s.selectedCount ?? 0} · Fora da área:{" "}
+                        {s.outsideTargetCount ?? 0} · Desconhecidos:{" "}
+                        {s.unknownLocationCount ?? 0} · Fonte esgotada:{" "}
+                        {s.sourceExhausted ? "sim" : "não"}
+                      </p>
+                    )}
                     {(s.status === "done" || s.status === "running") && (
                       <div className="h-1 overflow-hidden rounded-full bg-muted/60">
                         <div
@@ -452,12 +483,20 @@ export function BulkSearchProgress() {
           <div className="space-y-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
             <p className="flex items-center gap-2 text-sm font-medium text-emerald-100">
               <CheckCircle2 className="size-4 text-emerald-400" />
-              Busca concluída: {currentLeads.length} lead
-              {currentLeads.length === 1 ? "" : "s"}
+              Busca concluída: {selectedTotal || currentLeads.length}{" "}
+              selecionado
+              {(selectedTotal || currentLeads.length) === 1 ? "" : "s"} para o
+              lote
             </p>
             <p className="text-xs text-muted-foreground">
-              Lote registrado no fluxo guiado. Continue no Agente 1 para
-              garimpar e-mails deste lote sem misturar outras buscas.
+              {geoRegion
+                ? `${geoRegion.name}${geoRegion.displaySubtitle ? ` · ${geoRegion.displaySubtitle}` : ""}. `
+                : ""}
+              {analyzedTotal > 0
+                ? `${analyzedTotal} resultados analisados pelo provider não entram automaticamente no lote. `
+                : ""}
+              Continue no Agente 1 para garimpar e-mails deste lote sem
+              misturar outras buscas.
             </p>
             <div className="flex flex-wrap gap-2">
               <Button

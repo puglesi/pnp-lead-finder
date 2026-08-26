@@ -6,6 +6,11 @@ import {
   type AgentThreeSmtpResult,
   type AgentThreeSmtpStatus,
 } from "../agent-three-smtp-contract.ts";
+import {
+  AgentThreeTimeoutError,
+  resolveAgentThreeSmtpTimeouts,
+  withTimeout,
+} from "../agent-three-timeouts.ts";
 
 const MAX_SUBJECT_LENGTH = 998;
 const MAX_HTML_LENGTH = 500_000;
@@ -26,6 +31,9 @@ export interface AgentThreeSmtpTransportOptions {
     user: string;
     pass: string;
   };
+  connectionTimeout?: number;
+  greetingTimeout?: number;
+  socketTimeout?: number;
 }
 
 export interface AgentThreeSmtpMailOptions {
@@ -304,6 +312,12 @@ export function classifyAgentThreeSmtpError(
   const message =
     typeof shape.message === "string" ? shape.message.toLowerCase() : "";
 
+  if (
+    error instanceof AgentThreeTimeoutError ||
+    (error instanceof Error && error.name === "AgentThreeTimeoutError")
+  ) {
+    return "reconciliation_required";
+  }
   if (code === "EAUTH" || responseCode === 534 || responseCode === 535) {
     return "authentication_error";
   }
@@ -472,6 +486,7 @@ export async function sendAgentThreeSmtp(
   const config = resolveSmtpConfig(input.operation, dependencies.environment);
   if (!config) return result("configuration_error");
 
+  const timeouts = resolveAgentThreeSmtpTimeouts(dependencies.environment);
   try {
     const transport = dependencies.createTransport({
       host: config.host,
@@ -482,26 +497,30 @@ export async function sendAgentThreeSmtp(
         pass: config.password,
       },
     });
-    const info = await transport.sendMail({
-      from: {
-        name: config.fromName,
-        address: config.user,
-      },
-      to: normalizedRecipient,
-      replyTo: config.replyTo,
-      subject: input.subject.trim(),
-      html: input.html,
-      text: input.text,
-      attachments: input.attachment
-        ? [
-            {
-              filename: input.attachment.filename,
-              content: Buffer.from(input.attachment.contentBase64, "base64"),
-              contentType: "application/pdf",
-            },
-          ]
-        : undefined,
-    });
+    const info = await withTimeout(
+      transport.sendMail({
+        from: {
+          name: config.fromName,
+          address: config.user,
+        },
+        to: normalizedRecipient,
+        replyTo: config.replyTo,
+        subject: input.subject.trim(),
+        html: input.html,
+        text: input.text,
+        attachments: input.attachment
+          ? [
+              {
+                filename: input.attachment.filename,
+                content: Buffer.from(input.attachment.contentBase64, "base64"),
+                contentType: "application/pdf",
+              },
+            ]
+          : undefined,
+      }),
+      timeouts.overallTimeout,
+      "sendMail"
+    );
     return result("sent", { messageId: info.messageId });
   } catch (error) {
     return result(classifyAgentThreeSmtpError(error));

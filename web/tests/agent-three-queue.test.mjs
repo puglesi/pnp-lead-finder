@@ -108,6 +108,10 @@ function lead(id, email, validationStatus = "valid", validationReason = "confirm
     emailValidationStatus: validationStatus,
     emailValidationReason: validationReason,
     normalizedEmail: typeof email === "string" ? email.trim().toLowerCase() : undefined,
+    synthetic: false,
+    emailIsGuessed: false,
+    emailSourceUrl: email ? "https://" + id + ".example/contact" : null,
+    emailDiscoveryMethod: email ? "website_contact" : null,
   };
 }
 
@@ -338,7 +342,7 @@ test("11. ausência de provedor não altera a fila", () => {
   );
 });
 
-test("12. running e item sending restaurados viram paused e ready", () => {
+test("12. running e item sending restaurados viram paused e unknown, não ready", () => {
   const claimed = claimReady(readySnapshot());
   const restored = normalizeAgentThreeSnapshot(
     structuredClone(claimed.snapshot)
@@ -346,7 +350,7 @@ test("12. running e item sending restaurados viram paused e ready", () => {
   const operation = restored.operations["panek-puglesi"];
   assert.equal(operation.status, "paused");
   assert.equal(operation.currentItemId, null);
-  assert.equal(operation.queue[0].queueStatus, "ready");
+  assert.equal(operation.queue[0].queueStatus, "unknown");
   assert.equal(operation.queue[0].attemptCount, 1);
 });
 
@@ -435,7 +439,7 @@ test("16. métricas somam corretamente", () => {
       blocked: metrics.blocked,
       skipped: metrics.skipped,
     },
-    { total: 7, pending: 1, ready: 2, sent: 1, failed: 1, blocked: 1, skipped: 1 }
+    { total: 7, pending: 1, ready: 1, sent: 1, failed: 1, blocked: 1, skipped: 1 }
   );
 });
 

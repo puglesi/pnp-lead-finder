@@ -37,19 +37,28 @@ export interface LeadBatch {
 
 export interface BatchLeadStats {
   total: number;
+  /** Leads that are not synthetic/mock. */
+  realFound: number;
+  synthetic: number;
   withWebsite: number;
+  /** Discovered emails only (provenance + not guessed). */
   withEmail: number;
   withoutEmail: number;
+  uniqueEmails: number;
+  guessedEmail: number;
+  duplicates: number;
   /** Strict status === "valid" (rare with local DNS-only validation). */
   approved: number;
   /**
-   * Campaign-eligible: has email, not definitively invalid.
-   * Includes mailbox_not_verified / unknown after MX (not confirmed mailbox).
+   * Campaign-eligible: real lead, discovered email, not invalid/duplicate/guessed.
+   * mailbox_not_verified after MX counts as unconfirmed, not invalid.
    */
   eligible: number;
   /** mailbox unknown / risky / catch_all (subset of eligible when MX-ok). */
   unknown: number;
-  /** Real invalid emails only — never "sem e-mail". */
+  /** Discovered + MX ok, mailbox not confirmed. */
+  unconfirmed: number;
+  /** Real invalid emails only — never "sem e-mail" and never duplicates. */
   invalid: number;
   pendingValidation: number;
 }

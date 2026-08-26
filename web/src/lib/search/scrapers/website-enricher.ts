@@ -1,11 +1,21 @@
 import { decodeHtmlEntities, fetchSearchHtml } from "./fetch-html.ts";
+import { pickBestPhoneFromHtml, type ExtractedPhone } from "../../uk-phone.ts";
 
 const EMAIL_REGEX =
   /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-const UK_PHONE_REGEX =
-  /(?:\+44\s?\(?0\)?\s?|0)(?:\d\s?){9,12}/g;
 const CONTACT_PATH_REGEX =
-  /(?:^|[-_/])(contact|contact-us|get-in-touch|about|about-us|enquiries)(?:[-_/]|$)/i;
+  /(?:^|[-_/])(contact|contact-us|get-in-touch|about|about-us|enquiries|team)(?:[-_/]|$)/i;
+
+const DEFAULT_CONTACT_PATHS = [
+  "/contact",
+  "/contact-us",
+  "/about",
+  "/about-us",
+  "/team",
+];
+
+const MAILTO_REGEX =
+  /mailto:([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi;
 
 const SKIP_EMAIL_FRAGMENTS = [
   "example.com",
@@ -21,13 +31,50 @@ const SKIP_EMAIL_FRAGMENTS = [
   "cloudflare.com",
 ];
 
+export type WebsiteEmailSourceType =
+  | "website_home"
+  | "website_contact"
+  | "website_footer"
+  | "website_about"
+  | "website_team";
+
 export interface WebsiteContactInfo {
   email: string | null;
   phone: string | null;
+  emailSourceUrl?: string | null;
+  emailSourceType?: WebsiteEmailSourceType | null;
+  phoneSourceUrl?: string | null;
+  phoneRaw?: string | null;
+  phoneDiscoveryMethod?: ExtractedPhone["discoveryMethod"] | null;
+  phoneConfidence?: ExtractedPhone["confidence"] | null;
+  contactPageUrl?: string | null;
+  discoveredAddress?: string | null;
+  discoveredCompanyName?: string | null;
 }
 
 export interface WebsiteLeadContactUpdate extends WebsiteContactInfo {
   id: string;
+  enrichmentStatus: "completed" | "failed";
+  error?: string;
+}
+
+const ENRICHMENT_ITEM_TIMEOUT_MS = 11_000;
+
+async function withItemTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error(`Enrichment timeout after ${timeoutMs}ms`)),
+          timeoutMs
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
+  }
 }
 
 const SKIP_WEBSITE_HOSTS = [
@@ -117,13 +164,6 @@ function pickBestEmail(
         emailScore(b, preferredDomain) - emailScore(a, preferredDomain)
     )[0] ?? null
   );
-}
-
-function pickBestPhone(matches: string[]): string | null {
-  const cleaned = matches
-    .map((p) => p.replace(/\s+/g, " ").trim())
-    .filter((p) => p.replace(/\D/g, "").length >= 10);
-  return cleaned[0] ?? null;
 }
 
 function isPrivateIpv4(hostname: string): boolean {
@@ -223,20 +263,51 @@ function extractContactUrls(html: string, baseUrl: URL): string[] {
   }
 
   if (urls.length === 0) {
-    urls.push(new URL("/contact", baseUrl.origin).toString());
+    for (const path of DEFAULT_CONTACT_PATHS) {
+      urls.push(new URL(path, baseUrl.origin).toString());
+    }
   }
 
-  return urls.slice(0, 1);
+  return urls.slice(0, 4);
+}
+
+function sourceTypeFromUrl(pageUrl: string): WebsiteEmailSourceType {
+  try {
+    const path = new URL(pageUrl).pathname.toLowerCase();
+    if (/(contact|enquiries|get-in-touch)/.test(path)) return "website_contact";
+    if (/about/.test(path)) return "website_about";
+    if (/team/.test(path)) return "website_team";
+  } catch {
+    // homepage fallback
+  }
+  return "website_home";
 }
 
 function extractContactsFromHtml(
   html: string,
-  preferredDomain: string
+  preferredDomain: string,
+  pageUrl: string
 ): WebsiteContactInfo {
   const normalized = normalizeContactText(html);
+  const mailto = [...normalized.matchAll(MAILTO_REGEX)].map((match) => match[1]);
+  const emails = [
+    ...(normalized.match(EMAIL_REGEX) ?? []),
+    ...mailto,
+  ];
+  const email = pickBestEmail(emails, preferredDomain);
+  const extractedPhone = pickBestPhoneFromHtml(html);
+  const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
   return {
-    email: pickBestEmail(normalized.match(EMAIL_REGEX) ?? [], preferredDomain),
-    phone: pickBestPhone(normalized.match(UK_PHONE_REGEX) ?? []),
+    email,
+    phone: extractedPhone?.phone ?? null,
+    emailSourceUrl: email ? pageUrl : null,
+    emailSourceType: email ? sourceTypeFromUrl(pageUrl) : null,
+    phoneSourceUrl: extractedPhone ? pageUrl : null,
+    phoneRaw: extractedPhone?.phoneRaw ?? null,
+    phoneDiscoveryMethod: extractedPhone?.discoveryMethod ?? null,
+    phoneConfidence: extractedPhone?.confidence ?? null,
+    contactPageUrl: sourceTypeFromUrl(pageUrl) === "website_contact" ? pageUrl : null,
+    discoveredCompanyName: titleMatch?.[1]?.trim() || null,
   };
 }
 
@@ -244,17 +315,30 @@ export async function enrichWebsiteContacts(
   websiteUrl: string
 ): Promise<WebsiteContactInfo> {
   const url = normalizeWebsiteUrl(websiteUrl);
-  if (!url) return { email: null, phone: null };
+  if (!url) {
+    return {
+      email: null,
+      phone: null,
+      emailSourceUrl: null,
+      emailSourceType: null,
+      phoneSourceUrl: null,
+    };
+  }
   const preferredDomain = url.hostname.toLowerCase().replace(/^www\./, "");
+  const homepageUrl = url.toString();
 
   try {
-    const html = await fetchSearchHtml(url.toString(), {
+    const html = await fetchSearchHtml(homepageUrl, {
       timeoutMs: 4_500,
       maxLength: 750_000,
       isUrlAllowed: isEnrichableWebsiteUrl,
     });
-    const homepageContacts = extractContactsFromHtml(html, preferredDomain);
-    if (homepageContacts.email) return homepageContacts;
+    const homepageContacts = extractContactsFromHtml(
+      html,
+      preferredDomain,
+      homepageUrl
+    );
+    if (homepageContacts.email && homepageContacts.phone) return homepageContacts;
 
     for (const contactUrl of extractContactUrls(html, url)) {
       try {
@@ -265,12 +349,41 @@ export async function enrichWebsiteContacts(
         });
         const contactPageContacts = extractContactsFromHtml(
           contactHtml,
-          preferredDomain
+          preferredDomain,
+          contactUrl
         );
         if (contactPageContacts.email || contactPageContacts.phone) {
           return {
-            email: contactPageContacts.email,
+            email: homepageContacts.email ?? contactPageContacts.email,
             phone: homepageContacts.phone ?? contactPageContacts.phone,
+            emailSourceUrl:
+              (homepageContacts.email
+                ? homepageContacts.emailSourceUrl
+                : contactPageContacts.emailSourceUrl) ?? null,
+            emailSourceType:
+              (homepageContacts.email
+                ? homepageContacts.emailSourceType
+                : contactPageContacts.emailSourceType) ?? null,
+            phoneSourceUrl:
+              (homepageContacts.phone
+                ? homepageContacts.phoneSourceUrl
+                : contactPageContacts.phoneSourceUrl) ?? null,
+            phoneRaw:
+              (homepageContacts.phone
+                ? homepageContacts.phoneRaw
+                : contactPageContacts.phoneRaw) ?? null,
+            phoneDiscoveryMethod:
+              (homepageContacts.phone
+                ? homepageContacts.phoneDiscoveryMethod
+                : contactPageContacts.phoneDiscoveryMethod) ?? null,
+            phoneConfidence:
+              (homepageContacts.phone
+                ? homepageContacts.phoneConfidence
+                : contactPageContacts.phoneConfidence) ?? null,
+            contactPageUrl: contactPageContacts.contactPageUrl,
+            discoveredCompanyName:
+              homepageContacts.discoveredCompanyName ??
+              contactPageContacts.discoveredCompanyName,
           };
         }
       } catch {
@@ -280,7 +393,13 @@ export async function enrichWebsiteContacts(
 
     return homepageContacts;
   } catch {
-    return { email: null, phone: null };
+    return {
+      email: null,
+      phone: null,
+      emailSourceUrl: null,
+      emailSourceType: null,
+      phoneSourceUrl: null,
+    };
   }
 }
 
@@ -288,7 +407,11 @@ export async function enrichWebsiteLeadBatch<
   T extends { id: string; website: string }
 >(
   items: T[],
-  options: { concurrency?: number } = {}
+  options: {
+    concurrency?: number;
+    timeoutMs?: number;
+    enrich?: (website: string) => Promise<WebsiteContactInfo>;
+  } = {}
 ): Promise<WebsiteLeadContactUpdate[]> {
   if (items.length === 0) return [];
 
@@ -298,14 +421,36 @@ export async function enrichWebsiteLeadBatch<
   );
   const results = new Array<WebsiteLeadContactUpdate>(items.length);
   let cursor = 0;
+  const enrich = options.enrich ?? enrichWebsiteContacts;
+  const timeoutMs = Math.max(1, options.timeoutMs ?? ENRICHMENT_ITEM_TIMEOUT_MS);
 
   await Promise.all(
     Array.from({ length: concurrency }, async () => {
       while (cursor < items.length) {
         const index = cursor++;
         const item = items[index];
-        const contacts = await enrichWebsiteContacts(item.website);
-        results[index] = { id: item.id, ...contacts };
+        try {
+          const contacts = await withItemTimeout(
+            enrich(item.website),
+            timeoutMs
+          );
+          results[index] = {
+            id: item.id,
+            ...contacts,
+            enrichmentStatus: "completed",
+          };
+        } catch (error) {
+          results[index] = {
+            id: item.id,
+            email: null,
+            phone: null,
+            emailSourceUrl: null,
+            emailSourceType: null,
+            phoneSourceUrl: null,
+            enrichmentStatus: "failed",
+            error: error instanceof Error ? error.message : "Enrichment failed",
+          };
+        }
       }
     })
   );
@@ -317,13 +462,22 @@ export async function enrichLeadsBatch<T extends { url: string }>(
   items: T[],
   options: { maxEnrich?: number; delayMs?: number } = {}
 ): Promise<
-  (T & { enrichedEmail?: string | null; enrichedPhone?: string | null })[]
+  (T & {
+    enrichedEmail?: string | null;
+    enrichedPhone?: string | null;
+    emailSourceUrl?: string | null;
+    emailDiscoveryMethod?: WebsiteEmailSourceType | null;
+    phoneSourceUrl?: string | null;
+  })[]
 > {
   const maxEnrich = options.maxEnrich ?? 40;
   const delayMs = options.delayMs ?? 350;
   const enriched: (T & {
     enrichedEmail?: string | null;
     enrichedPhone?: string | null;
+    emailSourceUrl?: string | null;
+    emailDiscoveryMethod?: WebsiteEmailSourceType | null;
+    phoneSourceUrl?: string | null;
   })[] = [];
 
   for (let i = 0; i < items.length; i++) {
@@ -334,12 +488,22 @@ export async function enrichLeadsBatch<T extends { url: string }>(
         ...item,
         enrichedEmail: contacts.email,
         enrichedPhone: contacts.phone,
+        emailSourceUrl: contacts.emailSourceUrl ?? null,
+        emailDiscoveryMethod: contacts.emailSourceType ?? null,
+        phoneSourceUrl: contacts.phoneSourceUrl ?? null,
       });
       if (i < maxEnrich - 1 && delayMs > 0) {
         await new Promise((r) => setTimeout(r, delayMs));
       }
     } else {
-      enriched.push({ ...item, enrichedEmail: null, enrichedPhone: null });
+      enriched.push({
+        ...item,
+        enrichedEmail: null,
+        enrichedPhone: null,
+        emailSourceUrl: null,
+        emailDiscoveryMethod: null,
+        phoneSourceUrl: null,
+      });
     }
   }
 

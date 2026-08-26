@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   },
   "scripts": {
     "dev": "next dev",
@@ -11,8 +11,9 @@
     "start": "next start -p 3000",
     "local:start": "next start -p 3000",
     "local:24h": "npm run build && npm run local:start",
+    "pretest": "node --test tests/local-database-persistence.test.mjs",
     "lint": "eslint",
-    "test": "node --test tests/agent-one-queue.test.mjs tests/agent-one-leads.test.mjs tests/agent-one-enrichment.test.mjs tests/website-enricher.test.mjs tests/email-validation.test.mjs tests/agent-two-queue.test.mjs tests/agent-two-stability.test.mjs tests/agent-three-queue.test.mjs tests/agent-three-auto-validation.test.mjs tests/agent-three-campaign-load.test.mjs tests/campaign-list-metrics.test.mjs tests/lead-batch-flow.test.mjs tests/campaign-tracking-base64.test.mjs tests/website-url.test.mjs tests/collapsible-card.test.mjs tests/ui-session-clean.test.mjs tests/email-template-library.test.mjs tests/one-click-outreach.test.mjs tests/global-email-deduplication.test.mjs tests/ux-refactor-etapa1.test.mjs tests/ux-refactor-etapa2.test.mjs tests/ux-refactor-etapa3.test.mjs tests/storage-rehydrate-safety.test.mjs tests/dashboard-client-hydration.test.mjs tests/dashboard-tree-legacy.test.mjs tests/agent-three-list-mode.test.mjs tests/signature-html.test.mjs tests/operation-signature-store.test.mjs tests/settings-hydration.test.mjs tests/campaign-import-eligibility.test.mjs",
+    "test": "node --test tests/operation-signature-persistence.test.mjs tests/search-batch-persistence.test.mjs tests/agent-one-queue.test.mjs tests/agent-one-leads.test.mjs tests/agent-one-enrichment.test.mjs tests/website-enricher.test.mjs tests/email-validation.test.mjs tests/agent-two-queue.test.mjs tests/agent-two-stability.test.mjs tests/agent-three-queue.test.mjs tests/agent-three-auto-validation.test.mjs tests/agent-three-campaign-load.test.mjs tests/campaign-list-metrics.test.mjs tests/lead-batch-flow.test.mjs tests/campaign-tracking-base64.test.mjs tests/website-url.test.mjs tests/collapsible-card.test.mjs tests/ui-session-clean.test.mjs tests/email-template-library.test.mjs tests/one-click-outreach.test.mjs tests/global-email-deduplication.test.mjs tests/ux-refactor-etapa1.test.mjs tests/ux-refactor-etapa2.test.mjs tests/ux-refactor-etapa3.test.mjs tests/storage-rehydrate-safety.test.mjs tests/dashboard-client-hydration.test.mjs tests/dashboard-tree-legacy.test.mjs tests/agent-three-list-mode.test.mjs tests/signature-html.test.mjs tests/operation-signature-store.test.mjs tests/settings-hydration.test.mjs tests/settings-store-daily-quota.test.mjs tests/campaign-import-eligibility.test.mjs tests/real-search-quality.test.mjs tests/geo-phone-quality.test.mjs tests/local-data-writable.test.mjs tests/agent-three-reconciliation.test.mjs",
     "vercel:check": "npm run build"
   },
   "dependencies": {
@@ -40,7 +41,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
+    "@types/node": "^24.13.3",
     "@types/nodemailer": "^8.0.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",

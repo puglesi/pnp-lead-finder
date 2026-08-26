@@ -2,6 +2,13 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
+  bindSignatureToOperation,
+  getOperationSignatureMismatch,
+  OPERATION_SIGNATURE_MISMATCH_MESSAGE,
+  removeLegacyEmbeddedOneClickSignatures,
+} from "../src/lib/operation-signature.ts";
+import { DEFAULT_SIGNATURE_HTML } from "../src/lib/signature-template.ts";
+import {
   buildOneClickCampaignName,
   buildOneClickReport,
   clampOneClickInterval,
@@ -52,6 +59,10 @@ function lead(id, email, extras = {}) {
     address: "London",
     category: "Property Finance Broker",
     aiScore: 80,
+    synthetic: false,
+    emailIsGuessed: false,
+    emailSourceUrl: email ? `https://${id}.example.test/contact` : null,
+    emailDiscoveryMethod: email ? "website_contact" : null,
     ...extras,
   };
 }
@@ -620,4 +631,43 @@ test("one-click 20. lote nasce somente depois da busca real limitada", () => {
   assert.match(hook, /getSharedLeadBatchId/);
   assert.match(route, /strictMaxResults === true/);
   assert.match(serpApi, /strictMaxResults\s*\?\s*1/);
+});
+
+test("one-click 21. assinatura oficial fica vinculada à operação SMTP", () => {
+  const modeclean = bindSignatureToOperation("modeclean", {
+    enabled: true,
+    body: "<table><tr><td>Modeclean oficial atual</td></tr></table>",
+  });
+  assert.equal(modeclean.operation, "modeclean");
+  assert.equal(getOperationSignatureMismatch("modeclean", modeclean), null);
+  assert.equal(
+    getOperationSignatureMismatch("panek-puglesi", modeclean),
+    OPERATION_SIGNATURE_MISMATCH_MESSAGE
+  );
+});
+
+test("one-click 22. remove somente assinatura legacy exata do template", () => {
+  const legitimateBody =
+    "<p>Proposta legítima para {{company}}</p><p>Kind regards,<br>Modeclean</p>";
+  const embedded = `<section>${legitimateBody}${DEFAULT_SIGNATURE_HTML}</section>`;
+  const cleaned = removeLegacyEmbeddedOneClickSignatures(embedded);
+
+  assert.equal(cleaned.body, `<section>${legitimateBody}</section>`);
+  assert.deepEqual(cleaned.removedOperations, ["panek-puglesi"]);
+
+  const userAuthored = `${legitimateBody}<p>Panek &amp; Pugliesi</p>`;
+  assert.deepEqual(removeLegacyEmbeddedOneClickSignatures(userAuthored), {
+    body: userAuthored,
+    removedOperations: [],
+  });
+});
+
+test("one-click 23. fluxo lê assinatura oficial e a envia na campanha", () => {
+  const hook = readFileSync(
+    new URL("../src/hooks/use-one-click-outreach.ts", import.meta.url),
+    "utf8"
+  );
+  assert.match(hook, /useOperationSignatureStore\.getState\(\)\.getSignature/);
+  assert.match(hook, /signature:\s*bindSignatureToOperation/);
+  assert.match(hook, /removeLegacyEmbeddedOneClickSignatures/);
 });

@@ -412,16 +412,17 @@ function AgentTwoValidatorContent({ hydrated }: { hydrated: boolean }) {
 
   const batchSummaryCards = (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-      <SummaryCard label="Encontrados (lote)" value={batchLeadCount || batchStats.total} />
-      <SummaryCard label="Com website" value={batchStats.withWebsite} />
+      <SummaryCard label="Encontrados reais" value={batchStats.realFound} />
       <SummaryCard label="Com e-mail" value={batchStats.withEmail} />
       <SummaryCard label="Sem e-mail" value={batchStats.withoutEmail} />
-      <SummaryCard label="Elegíveis" value={batchStats.eligible} />
-      <SummaryCard
-        label="Elegíveis / mailbox desc."
-        value={batchStats.unknown}
-      />
+      <SummaryCard label="E-mail único" value={batchStats.uniqueEmails} />
+      <SummaryCard label="Duplicados" value={batchStats.duplicates} />
       <SummaryCard label="Inválidos" value={batchStats.invalid} />
+      <SummaryCard
+        label="Não confirmados"
+        value={batchStats.unconfirmed}
+      />
+      <SummaryCard label="Elegíveis" value={batchStats.eligible} />
       <SummaryCard label="Pend. validação" value={batchStats.pendingValidation} />
       <SummaryCard label="Total na fila" value={stats.total} />
       <SummaryCard label="Pendentes" value={stats.pending} />

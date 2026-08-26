@@ -1,9 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import {
-  generateLeadsForSearch,
-  MOCK_MAX_RESULTS,
-  resolveCategory,
   recentSearches as initialSearches,
 } from "@/lib/mock-data";
 import { runWithConcurrency, parseSectors } from "@/lib/worker-pool";
@@ -22,6 +19,7 @@ import type { LeadEmailValidationUpdate } from "@/types/email-validation";
 import {
   clearBatchIdFromNonMembers,
   createLeadBatch,
+  createLeadBatchId,
   findSearchRecordForBatch,
   getSharedLeadBatchId,
   migrateLegacySearchToBatch,
@@ -35,9 +33,66 @@ import {
   assessRealSearchResponse,
   REAL_SEARCH_UNAVAILABLE_MESSAGE,
 } from "@/lib/search/live-search-result";
+import { selectOperationalSearchLeads } from "@/lib/search/targeted-search";
 import { normalizeLeadPersistSlice } from "@/lib/store-rehydrate";
+import {
+  createDurableSearchBatchRepository,
+  createInitialPersistedSearchBatch,
+  getResumableSectors,
+  setActiveSearchBatchId,
+} from "@/lib/search/batch-repository";
+import type { PersistedSearchBatch } from "@/types/search";
+import { assertLocalDataWritable } from "@/lib/local-data-client";
 
 const FULL_HISTORY_LIMIT = 200;
+const SEARCH_SECTOR_TIMEOUT_MS = 120_000;
+
+const searchBatchRepository = createDurableSearchBatchRepository();
+const pendingLeadAutosaves = new Map<string, Map<string, Lead>>();
+let leadAutosaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function queueDurableLeadAutosave(leads: Lead[]): void {
+  for (const lead of leads) {
+    if (!lead.batchId) continue;
+    const batch = pendingLeadAutosaves.get(lead.batchId) ?? new Map<string, Lead>();
+    batch.set(lead.id, lead);
+    pendingLeadAutosaves.set(lead.batchId, batch);
+  }
+  if (pendingLeadAutosaves.size === 0) return;
+  useLeadStore.setState((state) => ({
+    bulkProgress: { ...state.bulkProgress, persistenceStatus: "saving" },
+  }));
+  if (leadAutosaveTimer) clearTimeout(leadAutosaveTimer);
+  leadAutosaveTimer = setTimeout(async () => {
+    leadAutosaveTimer = null;
+    const writes = [...pendingLeadAutosaves.entries()];
+    pendingLeadAutosaves.clear();
+    try {
+      let latest: PersistedSearchBatch | null = null;
+      for (const [batchId, byId] of writes) {
+        latest = await searchBatchRepository.upsertLeads(batchId, [...byId.values()]);
+      }
+      useLeadStore.setState((state) => ({
+        bulkProgress: {
+          ...state.bulkProgress,
+          persistenceStatus: "saved",
+          persistenceError: undefined,
+          lastSavedAt: latest?.lastSavedAt ?? state.bulkProgress.lastSavedAt,
+          lastActivityAt: latest?.lastActivityAt ?? state.bulkProgress.lastActivityAt,
+        },
+      }));
+    } catch (error) {
+      useLeadStore.setState((state) => ({
+        bulkProgress: {
+          ...state.bulkProgress,
+          persistenceStatus: "error",
+          persistenceError:
+            error instanceof Error ? error.message : "Falha no autosave dos leads",
+        },
+      }));
+    }
+  }, 300);
+}
 
 const INITIAL_BULK: BulkSearchProgress = {
   active: false,
@@ -57,6 +112,10 @@ interface BulkSearchOptions {
   autoSaveResults?: boolean;
   requireLiveResults?: boolean;
   maxResultsOverride?: number;
+  /** Internal recovery path. Completed/failed sectors are never requested again. */
+  resumeBatchId?: string;
+  providerOverride?: PersistedSearchBatch["provider"];
+  searchProfileOverride?: PersistedSearchBatch["searchProfile"];
 }
 
 interface LeadStore {
@@ -84,10 +143,14 @@ interface LeadStore {
     location: string,
     options?: BulkSearchOptions
   ) => Promise<void>;
+  resumeBulkSearch: (batchId: string) => Promise<void>;
+  loadPersistedSearchBatch: (batchId: string) => Promise<boolean>;
+  getRecoverableSearchBatch: () => Promise<PersistedSearchBatch | null>;
   generateMoreLeads: (batchSize?: number) => number;
   loadSearchResults: (keyword: string, location: string) => void;
   loadSearchFromHistory: (recordId: string) => boolean;
   exportSearchFromHistory: (recordId: string) => boolean;
+  exportPersistedSearchBatch: (recordId: string) => Promise<boolean>;
   getHistoryRecord: (recordId: string) => SearchRecord | undefined;
   clearRecentSearches: () => void;
   toggleLeadSelection: (id: string) => void;
@@ -144,20 +207,27 @@ async function fetchSector(
 ): Promise<SearchApiResponse> {
   const settings = useSettingsStore.getState();
   const config = settings.getSearchConfig();
-  const res = await fetch("/api/search", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SEARCH_SECTOR_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch("/api/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
       keyword: sector,
       location,
       sectorIndex,
       maxResults: options.maxResultsOverride ?? settings.maxResults,
       strictMaxResults: options.maxResultsOverride !== undefined,
       useMaxLeads: settings.useMaxLeads,
-      allowArtificialResults: options.allowArtificialResults !== false,
+      allowArtificialResults:
+        (options.providerOverride ?? config.provider) === "mock" &&
+        options.allowArtificialResults === true,
       delayMs: config.delayMs,
-      provider: config.provider,
-      searchProfile: settings.searchProfile,
+      provider: options.providerOverride ?? config.provider,
+      searchProfile: options.searchProfileOverride ?? settings.searchProfile,
       serpApiKey: settings.serpApiKey || undefined,
       googleApiKey: settings.googleApiKey || undefined,
       googleCseId: settings.googleCseId || undefined,
@@ -167,8 +237,16 @@ async function fetchSector(
       autonomousSourceStrategy: settings.autonomousSourceStrategy,
       autonomousSingleSource: settings.autonomousSingleSource,
       autonomousEnrichWebsites: settings.autonomousEnrichWebsites,
-    }),
-  });
+      }),
+    });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`Timeout de ${Math.round(SEARCH_SECTOR_TIMEOUT_MS / 1000)}s ao buscar ${sector}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
   if (!res.ok) throw new Error(`Falha ao buscar ${sector}`);
   const data = (await res.json()) as SearchApiResponse;
   if (options.requireLiveResults) {
@@ -198,23 +276,15 @@ function autoSaveAllLeads(
   return saved;
 }
 
-function dedupeLeads(leads: Lead[]): Lead[] {
-  const seen = new Set<string>();
-  return leads.filter((l) => {
-    const fp = leadFingerprint(l);
-    if (seen.has(fp)) return false;
-    seen.add(fp);
-    return true;
-  });
-}
-
 function applyEmailValidationToLeads(
   leads: Lead[],
   leadId: string,
   validation: LeadEmailValidationUpdate
 ): Lead[] {
   return leads.map((lead) =>
-    lead.id === leadId ? { ...lead, ...validation } : lead
+    lead.id === leadId
+      ? { ...lead, ...validation, lastProcessedAt: new Date().toISOString() }
+      : lead
   );
 }
 
@@ -305,50 +375,14 @@ export const useLeadStore = create<LeadStore>()(
 
       setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
 
-      generateMoreLeads: (batchSize = 50) => {
-        const { currentKeyword, currentLocation, currentLeads } = get();
-        const sectors = parseSectors(currentKeyword);
-        if (sectors.length === 0 || !currentLocation.trim()) return 0;
-
-        const settings = useSettingsStore.getState();
-        const perSector = Math.min(
-          MOCK_MAX_RESULTS,
-          Math.max(10, batchSize ?? Math.min(50, settings.getEffectiveMaxResults()))
-        );
-
-        const newLeads: Lead[] = [];
-        for (const sector of sectors) {
-          const resolved = resolveCategory(sector);
-          const existing = currentLeads.filter(
-            (l) => l.category === resolved || l.category === sector
-          ).length;
-          newLeads.push(
-            ...generateLeadsForSearch(
-              sector,
-              currentLocation,
-              perSector,
-              existing
-            )
-          );
-        }
-
-        const before = currentLeads.length;
-        const deduped = dedupeLeads([...currentLeads, ...newLeads]);
-
-        set((state) => ({
-          currentLeads: deduped,
-          bulkProgress: {
-            ...state.bulkProgress,
-            leadsFound: deduped.length,
-          },
-        }));
-
-        return deduped.length - before;
+      generateMoreLeads: () => {
+        return 0;
       },
 
       performBulkSearch: async (keywordsInput, location, options = {}) => {
-        const sectors = parseSectors(keywordsInput);
-        if (sectors.length === 0 || !location.trim()) {
+        assertLocalDataWritable();
+        const requestedSectors = parseSectors(keywordsInput);
+        if (requestedSectors.length === 0 || !location.trim()) {
           throw new Error("Setores e localização são obrigatórios");
         }
 
@@ -356,301 +390,434 @@ export const useLeadStore = create<LeadStore>()(
         const config = settings.getSearchConfig();
         const effectiveWorkers = settings.getEffectiveWorkers();
         const startedAt = Date.now();
-
-        set({
-          isSearching: true,
-          selectedLeadIds: [],
-          currentKeyword: sectors.join(" → "),
-          currentLocation: location.trim(),
-          currentLeads: [],
-          bulkProgress: {
-            active: true,
-            location: location.trim(),
-            sectors: sectors.map((s, i) => ({
-              sector: s,
-              status: "pending" as const,
-              queueIndex: i + 1,
-              leadsFound: 0,
-            })),
-            completedCount: 0,
-            totalCount: sectors.length,
-            leadsFound: 0,
-            runningSectors: [],
-            startedAt,
-            elapsedMs: 0,
-            estimatedRemainingMs: estimateRemainingMs(
-              0,
-              sectors.length,
-              0,
-              effectiveWorkers
-            ),
-          },
-        });
-
-        const allLeads: Lead[] = [];
-        let completed = 0;
+        let checkpoint: PersistedSearchBatch | null = null;
+        let persistenceFailed = false;
+        let fatalError: Error | null = null;
         let anyLive = false;
-        let lastSource = "autonomous";
+        let lastSource = "checkpoint";
         let apiCallsConsumed = 0;
         let liveCalls = 0;
         let mockFallbackCalls = 0;
         let anyCreditExhausted = false;
 
-        await runWithConcurrency(
-            sectors,
-            effectiveWorkers,
-            async (sector, index) => {
-              if (!get().isSearching) {
-                throw new Error("Busca interrompida");
-              }
+        try {
+          if (options.resumeBatchId) {
+            const restored = await searchBatchRepository.getBatch(options.resumeBatchId);
+            if (!restored) throw new Error("Checkpoint da busca não encontrado");
+            checkpoint = restored;
+          } else {
+            const createdAt = new Date().toISOString();
+            const batchId = createLeadBatchId({
+              sector: keywordsInput,
+              location: location.trim(),
+              createdAt,
+              foundCount: 0,
+            });
+            checkpoint = createInitialPersistedSearchBatch({
+              batchId,
+              sectorsInput: keywordsInput.trim(),
+              sectors: requestedSectors,
+              location: location.trim(),
+              configuredQuantity: options.maxResultsOverride ?? settings.getEffectiveMaxResults(),
+              provider: config.provider,
+              searchProfile: config.searchProfile,
+              workers: effectiveWorkers,
+              now: createdAt,
+            });
+            await searchBatchRepository.createBatch(checkpoint);
+          }
 
+          if (!checkpoint) throw new Error("Falha ao inicializar checkpoint da busca");
+          const durableBatchId = checkpoint.batchId;
+          const durableLocation = checkpoint.location;
+          const durableQuantity = checkpoint.configuredQuantity;
+          const durableProvider = checkpoint.provider;
+          const durableSearchProfile = checkpoint.searchProfile;
+          setActiveSearchBatchId(checkpoint.batchId);
+          const initialLeads = stampLeadsWithBatchId(
+            await searchBatchRepository.getLeads(checkpoint.batchId),
+            checkpoint.batchId
+          );
+          const sectors = checkpoint.sectors.map((sector) => sector.sector);
+          const completedAtStart = checkpoint.sectors.filter(
+            (sector) => sector.status === "completed" || sector.status === "failed"
+          ).length;
+
+          set({
+            isSearching: true,
+            selectedLeadIds: [],
+            currentKeyword: checkpoint.sectorsInput,
+            currentLocation: checkpoint.location,
+            currentLeads: initialLeads,
+            bulkProgress: {
+              batchId: checkpoint.batchId,
+              active: true,
+              location: checkpoint.location,
+              sectors: checkpoint.sectors.map((sector) => ({
+                sector: sector.sector,
+                status:
+                  sector.status === "completed"
+                    ? "done"
+                    : sector.status === "failed"
+                      ? "error"
+                      : "pending",
+                queueIndex: sector.index + 1,
+                leadsFound: sector.leadsFound,
+                error: sector.error,
+              })),
+              completedCount: completedAtStart,
+              totalCount: sectors.length,
+              leadsFound: initialLeads.length,
+              runningSectors: [],
+              startedAt,
+              elapsedMs: 0,
+              estimatedRemainingMs: estimateRemainingMs(
+                completedAtStart,
+                sectors.length,
+                0,
+                effectiveWorkers
+              ),
+              currentStage: checkpoint.currentStage,
+              lastActivityAt: checkpoint.lastActivityAt,
+              lastSavedAt: checkpoint.lastSavedAt,
+              persistenceStatus: "saved",
+              failedCount: checkpoint.failedSectors,
+            },
+          });
+
+          const pendingSectors = getResumableSectors(checkpoint);
+
+          await runWithConcurrency(
+            pendingSectors,
+            effectiveWorkers,
+            async (sectorCheckpoint) => {
+              if (persistenceFailed || !get().isSearching) return;
+              const sector = sectorCheckpoint.sector;
+              const index = sectorCheckpoint.index;
               const t0 = Date.now();
-              set((state) => ({
-                bulkProgress: {
-                  ...state.bulkProgress,
-                  runningSectors: [
-                    ...state.bulkProgress.runningSectors,
-                    sector,
-                  ],
-                  sectors: state.bulkProgress.sectors.map((s) =>
-                    s.sector === sector
-                      ? { ...s, status: "running" }
-                      : s.status === "pending" &&
-                          config.queueMode === "sequential"
-                        ? { ...s, status: "queued" }
-                        : s
-                  ),
-                  ...updateTiming(
-                    state.bulkProgress,
-                    completed,
-                    effectiveWorkers
-                  ),
-                },
-              }));
 
               try {
-                const data = await fetchSector(
-                  sector,
-                  location.trim(),
-                  index,
-                  options
+                const running = await searchBatchRepository.markSectorRunning(
+                  durableBatchId,
+                  index
                 );
-                return {
-                  sector,
-                  index,
-                  leads: data.leads,
-                  isLive: data.isLive,
-                  source: data.source,
-                  apiCallConsumed: data.apiCallConsumed ?? false,
-                  apiCallsUsed: data.apiCallsUsed,
-                  creditExhausted: data.creditExhausted ?? false,
-                  error: null,
-                  durationMs: Date.now() - t0,
-                };
-              } catch (e) {
-                return {
-                  sector,
-                  index,
-                  leads: [] as Lead[],
-                  isLive: false,
-                  source: "error",
-                  apiCallConsumed: false,
-                  creditExhausted: false,
-                  error: e instanceof Error ? e.message : "Erro",
-                  durationMs: Date.now() - t0,
-                };
-              }
-            },
-            (result) => {
-              completed++;
-              allLeads.push(...result.leads);
-              if (result.isLive) anyLive = true;
-              if (result.apiCallConsumed) {
-                const used = result.apiCallsUsed ?? 1;
-                apiCallsConsumed += used;
-                if (result.isLive) liveCalls += used;
-                else mockFallbackCalls += used;
-              }
-              if (result.creditExhausted) anyCreditExhausted = true;
-              lastSource = result.source;
-              const deduped = dedupeLeads(allLeads);
+                set((state) => ({
+                  bulkProgress: {
+                    ...state.bulkProgress,
+                    runningSectors: [...new Set([...state.bulkProgress.runningSectors, sector])],
+                    sectors: state.bulkProgress.sectors.map((item) =>
+                      item.queueIndex === index + 1 ? { ...item, status: "running" } : item
+                    ),
+                    lastActivityAt: running.lastActivityAt,
+                    persistenceStatus: "saved",
+                  },
+                }));
 
-              set((state) => {
-                const timing = updateTiming(
-                  state.bulkProgress,
-                  completed,
-                  effectiveWorkers
-                );
-                const nextPending = state.bulkProgress.sectors.find(
-                  (s) => s.status === "pending" || s.status === "queued"
-                );
+                let data: SearchApiResponse | null = null;
+                let itemError: string | undefined;
+                try {
+                  data = await fetchSector(sector, durableLocation, index, {
+                    ...options,
+                    maxResultsOverride: durableQuantity,
+                  });
+                } catch (error) {
+                  itemError = error instanceof Error ? error.message : "Erro na busca do setor";
+                }
 
-                return {
+                const saved = await searchBatchRepository.saveSectorResult({
+                  batchId: durableBatchId,
+                  sectorIndex: index,
+                  leads: data?.leads ?? [],
+                  error: itemError,
+                });
+                checkpoint = saved;
+
+                if (data) {
+                  anyLive ||= data.isLive;
+                  lastSource = data.source;
+                  if (data.apiCallConsumed) {
+                    const used = data.apiCallsUsed ?? 1;
+                    apiCallsConsumed += used;
+                    if (data.isLive) liveCalls += used;
+                    else mockFallbackCalls += used;
+                    if (durableSearchProfile === "serpapi" && durableProvider === "serpapi") {
+                      useUsageStore.getState().recordSerpApiCalls(used);
+                    }
+                  }
+                  anyCreditExhausted ||= Boolean(data.creditExhausted);
+                  if (data.creditExhausted) useUsageStore.getState().markCreditExhausted();
+                }
+
+                const durableLeads = stampLeadsWithBatchId(
+                  await searchBatchRepository.getLeads(durableBatchId),
+                  durableBatchId
+                );
+                const completed = saved.completedSectors + saved.failedSectors;
+                set((state) => ({
+                  currentLeads: durableLeads,
                   bulkProgress: {
                     ...state.bulkProgress,
                     completedCount: completed,
-                    leadsFound: deduped.length,
+                    leadsFound: durableLeads.length,
+                    failedCount: saved.failedSectors,
                     runningSectors: state.bulkProgress.runningSectors.filter(
-                      (s) => s !== result.sector
+                      (runningSector) => runningSector !== sector
                     ),
-                    sectors: state.bulkProgress.sectors.map((s) => {
-                      if (s.sector === result.sector) {
-                        return {
-                          ...s,
-                          status: result.error ? "error" : "done",
-                          leadsFound: result.leads.length,
-                          error: result.error ?? undefined,
-                          durationMs: result.durationMs,
-                        };
-                      }
-                      if (
-                        config.queueMode === "sequential" &&
-                        nextPending?.sector === s.sector &&
-                        s.status !== "done"
-                      ) {
-                        return { ...s, status: "queued" as const };
-                      }
-                      return s;
-                    }),
-                    ...timing,
+                    sectors: state.bulkProgress.sectors.map((item) =>
+                      item.queueIndex === index + 1
+                        ? {
+                            ...item,
+                            status: itemError ? "error" : "done",
+                            leadsFound: data?.leads.length ?? 0,
+                            requestedCount: data?.requestedCount,
+                            foundRealCount: data?.foundRealCount ?? data?.leads.length ?? 0,
+                            sourceExhausted: data?.sourceExhausted,
+                            providerResultsInspected: data?.providerResultsInspected,
+                            insideTargetFound: data?.insideTargetFound,
+                            outsideTargetCount: data?.outsideTargetCount,
+                            unknownLocationCount: data?.unknownLocationCount,
+                            selectedCount:
+                              data?.selectedCount ??
+                              selectOperationalSearchLeads(
+                                data?.leads ?? [],
+                                data?.requestedCount ?? durableQuantity
+                              ).length,
+                            error: itemError,
+                            durationMs: Date.now() - t0,
+                          }
+                        : item
+                    ),
+                    ...updateTiming(state.bulkProgress, completed, effectiveWorkers),
+                    lastActivityAt: saved.lastActivityAt,
+                    lastSavedAt: saved.lastSavedAt,
+                    persistenceStatus: "saved",
+                    persistenceError: undefined,
                   },
-                  currentLeads: deduped,
-                };
-              });
+                }));
+              } catch (error) {
+                persistenceFailed = true;
+                fatalError = error instanceof Error ? error : new Error("Falha ao salvar checkpoint");
+                set((state) => ({
+                  bulkProgress: {
+                    ...state.bulkProgress,
+                    persistenceStatus: "error",
+                    persistenceError: fatalError?.message ?? "Falha ao salvar checkpoint",
+                    runningSectors: state.bulkProgress.runningSectors.filter(
+                      (runningSector) => runningSector !== sector
+                    ),
+                  },
+                }));
+              }
             }
-        );
+          );
 
-        const finalLeads = dedupeLeads(allLeads);
-        const elapsedMs = Date.now() - startedAt;
-        const realSearchFailed =
-          options.requireLiveResults &&
-          (!anyLive ||
-            finalLeads.length === 0 ||
-            get().bulkProgress.sectors.some(
-              (sector) => sector.status === "error"
-            ));
-        if (realSearchFailed) {
+          if (fatalError) throw fatalError;
+
+          checkpoint = (await searchBatchRepository.getBatch(checkpoint.batchId)) ?? checkpoint;
+          const finalLeads = stampLeadsWithBatchId(
+            await searchBatchRepository.getLeads(checkpoint.batchId),
+            checkpoint.batchId
+          );
+          const elapsedMs = Date.now() - startedAt;
+          const realSearchFailed =
+            options.requireLiveResults && (!anyLive || finalLeads.length === 0);
+          if (realSearchFailed) throw new Error(REAL_SEARCH_UNAVAILABLE_MESSAGE);
+
+          const searchRecordId = checkpoint.historyRecordId ?? `${Date.now()}`;
+          const requestedTotal =
+            durableQuantity * Math.max(1, sectors.length);
+          const operationalLeads = selectOperationalSearchLeads(
+            finalLeads,
+            requestedTotal
+          );
+          const batch = createLeadBatch({
+            sector: checkpoint.sectorsInput,
+            location: checkpoint.location,
+            foundCount: operationalLeads.length,
+            searchRecordId,
+            createdAt: checkpoint.createdAt,
+            batchId: checkpoint.batchId,
+            leadIds: operationalLeads.map((lead) => lead.id),
+          });
+          useBatchPipelineStore.getState().upsertBatch(batch);
+
+          const isAutonomousRun =
+            checkpoint.searchProfile === "autonomous-24h" || checkpoint.provider === "autonomous";
+          let autoSavedCount = 0;
+          if (
+            options.autoSaveResults !== false &&
+            (settings.autoSaveLeads || isAutonomousRun) &&
+            finalLeads.length > 0
+          ) {
+            autoSavedCount = autoSaveAllLeads(finalLeads, get().saveLead);
+          }
+
+          const searchSummary = {
+            apiCallsConsumed,
+            liveCalls,
+            mockFallbackCalls,
+            leadsFound: finalLeads.length,
+            elapsedMs,
+            creditExhausted: anyCreditExhausted,
+            autoSavedCount,
+          };
+          useUsageStore.getState().setLastSearchSummary(searchSummary);
+
+          const search: SearchRecord = {
+            id: searchRecordId,
+            keyword: checkpoint.sectorsInput,
+            location: checkpoint.location,
+            resultsCount: finalLeads.length,
+            date: checkpoint.createdAt,
+            // Large payload stays in IndexedDB; history keeps only its batch reference.
+            batchId: checkpoint.batchId,
+          };
+
+          checkpoint = await searchBatchRepository.finishBatch(
+            checkpoint.batchId,
+            searchRecordId
+          );
+          const completedCheckpoint = checkpoint;
+          set((state) => {
+            const fullSearchHistory = [
+              search,
+              ...state.fullSearchHistory.filter((record) => record.id !== search.id),
+            ].slice(0, FULL_HISTORY_LIMIT);
+            const recentSearches = [
+              search,
+              ...state.recentSearches.filter((record) => record.id !== search.id),
+            ].slice(0, RECENT_SEARCHES_LIMIT);
+            return {
+              currentLeads: finalLeads,
+              currentKeyword: completedCheckpoint.sectorsInput,
+              currentLocation: completedCheckpoint.location,
+              lastSearchIsLive: anyLive || options.resumeBatchId !== undefined,
+              lastSearchSource: lastSource,
+              lastBulkSearchSectors: completedCheckpoint.sectorsInput,
+              lastBulkSearchLocation: completedCheckpoint.location,
+              sectorHistory: mergeSectorHistory(state.sectorHistory, sectors),
+              bulkProgress: {
+                ...state.bulkProgress,
+                active: false,
+                completedCount: sectors.length,
+                leadsFound: finalLeads.length,
+                runningSectors: [],
+                elapsedMs,
+                estimatedRemainingMs: 0,
+                currentStage: "completed",
+                lastActivityAt: completedCheckpoint.lastActivityAt,
+                lastSavedAt: completedCheckpoint.lastSavedAt,
+                persistenceStatus: "saved",
+                failedCount: completedCheckpoint.failedSectors,
+                searchSummary,
+              },
+              fullSearchHistory,
+              recentSearches,
+            };
+          });
+
+          const after = get();
+          useLifetimeStatsStore.getState().syncFromPersistedData({
+            fullSearchHistory: after.fullSearchHistory,
+            recentSearches: after.recentSearches,
+            savedLeads: after.savedLeads,
+            importedLeads: after.importedLeads,
+            campaigns: [],
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Busca interrompida";
+          if (!checkpoint) {
+            persistenceFailed = true;
+            set((state) => ({
+              bulkProgress: {
+                ...state.bulkProgress,
+                persistenceStatus: "error",
+                persistenceError: message,
+              },
+            }));
+          }
+          if (checkpoint) {
+            try {
+              checkpoint = await searchBatchRepository.failBatch(checkpoint.batchId, message);
+            } catch {
+              // A falha original de persistência já está exposta no estado da UI.
+            }
+          }
+          throw error;
+        } finally {
           set((state) => ({
             isSearching: false,
-            currentLeads: [],
-            lastSearchIsLive: false,
-            lastSearchSource: lastSource,
             bulkProgress: {
               ...state.bulkProgress,
               active: false,
               runningSectors: [],
-              elapsedMs,
               estimatedRemainingMs: 0,
+              persistenceStatus: persistenceFailed ? "error" : state.bulkProgress.persistenceStatus,
             },
           }));
-          throw new Error(REAL_SEARCH_UNAVAILABLE_MESSAGE);
         }
-        const searchRecordId = `${Date.now()}`;
-        const searchDate = new Date().toISOString();
-        const batch = useBatchPipelineStore.getState().registerSearchBatch({
-          sector: keywordsInput.trim(),
-          location: location.trim(),
-          foundCount: finalLeads.length,
-          searchRecordId,
-          createdAt: searchDate,
-          leadIds: finalLeads.map((lead) => lead.id),
-        });
-        const batchedLeads = stampLeadsWithBatchId(finalLeads, batch.batchId);
-
-        const isAutonomousRun =
-          settings.searchProfile === "autonomous-24h" ||
-          config.provider === "autonomous";
-        let autoSavedCount = 0;
-        if (
-          options.autoSaveResults !== false &&
-          (settings.autoSaveLeads || isAutonomousRun) &&
-          batchedLeads.length > 0
-        ) {
-          autoSavedCount = autoSaveAllLeads(batchedLeads, get().saveLead);
-        }
-
-        const searchSummary = {
-          apiCallsConsumed,
-          liveCalls,
-          mockFallbackCalls,
-          leadsFound: batchedLeads.length,
-          elapsedMs,
-          creditExhausted: anyCreditExhausted,
-          autoSavedCount,
-        };
-
-        const usage = useUsageStore.getState();
-        usage.ensureCurrentMonth();
-        if (
-          config.searchProfile === "serpapi" &&
-          config.provider === "serpapi" &&
-          apiCallsConsumed > 0
-        ) {
-          usage.recordSerpApiCalls(apiCallsConsumed);
-        }
-        if (anyCreditExhausted) usage.markCreditExhausted();
-        usage.setLastSearchSummary(searchSummary);
-
-        const search: SearchRecord = {
-          id: searchRecordId,
-          keyword: keywordsInput.trim(),
-          location: location.trim(),
-          resultsCount: batchedLeads.length,
-          date: searchDate,
-          leads: batchedLeads,
-          batchId: batch.batchId,
-        };
-
-        set((state) => {
-          const withoutDup = state.fullSearchHistory.filter(
-            (r) => r.id !== search.id
-          );
-          const fullSearchHistory = [search, ...withoutDup].slice(
-            0,
-            FULL_HISTORY_LIMIT
-          );
-          const recentWithoutDup = state.recentSearches.filter(
-            (r) => r.id !== search.id
-          );
-
-          return {
-            isSearching: false,
-            currentLeads: batchedLeads,
-            currentKeyword: keywordsInput.trim(),
-            currentLocation: location.trim(),
-            lastSearchIsLive: anyLive,
-            lastSearchSource: lastSource,
-            lastBulkSearchSectors: keywordsInput.trim(),
-            lastBulkSearchLocation: location.trim(),
-            sectorHistory: mergeSectorHistory(state.sectorHistory, sectors),
-            bulkProgress: {
-              ...state.bulkProgress,
-              active: false,
-              completedCount: sectors.length,
-              leadsFound: batchedLeads.length,
-              runningSectors: [],
-              elapsedMs,
-              estimatedRemainingMs: 0,
-              searchSummary,
-            },
-            fullSearchHistory,
-            recentSearches: [search, ...recentWithoutDup].slice(
-              0,
-              RECENT_SEARCHES_LIMIT
-            ),
-          };
-        });
-
-        // Lifetime floors only rise (never reset on UI clear / batch switch).
-        const after = get();
-        useLifetimeStatsStore.getState().syncFromPersistedData({
-          fullSearchHistory: after.fullSearchHistory,
-          recentSearches: after.recentSearches,
-          savedLeads: after.savedLeads,
-          importedLeads: after.importedLeads,
-          campaigns: [],
-        });
       },
+
+      resumeBulkSearch: async (batchId) => {
+        const checkpoint = await searchBatchRepository.getBatch(batchId);
+        if (!checkpoint) throw new Error("Checkpoint da busca não encontrado");
+        await get().performBulkSearch(
+          checkpoint.sectorsInput,
+          checkpoint.location,
+          {
+            resumeBatchId: batchId,
+            maxResultsOverride: checkpoint.configuredQuantity,
+            providerOverride: checkpoint.provider,
+            searchProfileOverride: checkpoint.searchProfile,
+          }
+        );
+      },
+
+      loadPersistedSearchBatch: async (batchId) => {
+        const checkpoint = await searchBatchRepository.getBatch(batchId);
+        if (!checkpoint) return false;
+        const leads = stampLeadsWithBatchId(
+          await searchBatchRepository.getLeads(batchId),
+          batchId
+        );
+        setActiveSearchBatchId(batchId);
+        useBatchPipelineStore.getState().setActiveBatch(batchId);
+        set({
+          currentLeads: leads,
+          currentKeyword: checkpoint.sectorsInput,
+          currentLocation: checkpoint.location,
+          isSearching: false,
+          selectedLeadIds: [],
+          bulkProgress: {
+            batchId,
+            active: false,
+            location: checkpoint.location,
+            sectors: checkpoint.sectors.map((sector) => ({
+              sector: sector.sector,
+              status: sector.status === "completed" ? "done" : sector.status === "failed" ? "error" : "pending",
+              queueIndex: sector.index + 1,
+              leadsFound: sector.leadsFound,
+              error: sector.error,
+            })),
+            completedCount: checkpoint.completedSectors + checkpoint.failedSectors,
+            totalCount: checkpoint.sectors.length,
+            leadsFound: leads.length,
+            runningSectors: [],
+            startedAt: null,
+            elapsedMs: 0,
+            estimatedRemainingMs: 0,
+            currentStage: checkpoint.currentStage,
+            lastActivityAt: checkpoint.lastActivityAt,
+            lastSavedAt: checkpoint.lastSavedAt,
+            persistenceStatus: "saved",
+            failedCount: checkpoint.failedSectors,
+          },
+        });
+        return true;
+      },
+
+      getRecoverableSearchBatch: () =>
+        searchBatchRepository.getLatestRecoverableBatch(),
 
       clearRecentSearches: () => set({ recentSearches: [] }),
 
@@ -667,24 +834,14 @@ export const useLeadStore = create<LeadStore>()(
         if (!record) return false;
 
         const sectors = parseSectors(record.keyword);
-        const settings = useSettingsStore.getState();
-        const maxResults = settings.getEffectiveMaxResults();
+        // New durable records keep their payload in IndexedDB. Never fabricate
+        // replacements when that payload must be loaded by batchId.
+        if (record.batchId && (!record.leads || record.leads.length === 0)) {
+          return false;
+        }
         const leads =
-          record.leads && record.leads.length > 0
-            ? record.leads
-            : (() => {
-                const generated: Lead[] = [];
-                for (const sector of sectors) {
-                  generated.push(
-                    ...generateLeadsForSearch(
-                      sector,
-                      record.location,
-                      maxResults
-                    )
-                  );
-                }
-                return dedupeLeads(generated);
-              })();
+          record.leads && record.leads.length > 0 ? record.leads : [];
+        if (leads.length === 0) return false;
 
         set({
           currentLeads: leads,
@@ -724,17 +881,21 @@ export const useLeadStore = create<LeadStore>()(
         return true;
       },
 
+      exportPersistedSearchBatch: async (recordId) => {
+        const record = get().getHistoryRecord(recordId);
+        if (!record) return false;
+        if (record.leads?.length) return get().exportSearchFromHistory(recordId);
+        if (!record.batchId) return false;
+        const leads = await searchBatchRepository.getLeads(record.batchId);
+        if (leads.length === 0) return false;
+        const slug = record.location.replace(/\s+/g, "-").toLowerCase();
+        exportLeadsToCSV(leads, `pnp-${slug}-${record.date.slice(0, 10)}.csv`);
+        return true;
+      },
+
       loadSearchResults: (keyword, location) => {
         const sectors = parseSectors(keyword);
-        const settings = useSettingsStore.getState();
-        const maxResults = settings.getEffectiveMaxResults();
-        const allLeads: Lead[] = [];
-        for (const sector of sectors) {
-          allLeads.push(
-            ...generateLeadsForSearch(sector, location, maxResults)
-          );
-        }
-        const deduped = dedupeLeads(allLeads);
+        const deduped: Lead[] = [];
         set({
           currentLeads: deduped,
           currentKeyword: keyword,
@@ -784,6 +945,7 @@ export const useLeadStore = create<LeadStore>()(
       },
 
       saveLead: (lead) => {
+        assertLocalDataWritable();
         if (get().isLeadSaved(lead)) return false;
         const activeBatchId =
           lead.batchId ??
@@ -800,6 +962,7 @@ export const useLeadStore = create<LeadStore>()(
       },
 
       ensureCurrentSearchBatch: () => {
+        assertLocalDataWritable();
         const state = get();
         if (state.currentLeads.length === 0) return null;
 
@@ -1081,6 +1244,7 @@ export const useLeadStore = create<LeadStore>()(
       },
 
       applyAgentOneContactUpdates: (updates) => {
+        assertLocalDataWritable();
         if (updates.length === 0) return;
         set((state) => ({
           currentLeads: mergeAgentOneContactUpdates(
@@ -1101,9 +1265,14 @@ export const useLeadStore = create<LeadStore>()(
             updates
           ),
         }));
+        const updatedIds = new Set(updates.map((update) => update.id));
+        queueDurableLeadAutosave(
+          get().currentLeads.filter((lead) => updatedIds.has(lead.id))
+        );
       },
 
       updateLeadEmailValidation: (leadId, validation) => {
+        assertLocalDataWritable();
         const state = get();
         const found =
           state.currentLeads.some((lead) => lead.id === leadId) ||
@@ -1139,17 +1308,21 @@ export const useLeadStore = create<LeadStore>()(
             validation
           ),
         }));
+        const durableLead = get().currentLeads.find((lead) => lead.id === leadId);
+        if (durableLead) queueDurableLeadAutosave([durableLead]);
         return true;
       },
 
       removeSavedLead: (id) =>
-        set((state) => ({
+        (assertLocalDataWritable(), set((state) => ({
           savedLeads: state.savedLeads.filter((l) => l.id !== id),
-        })),
+        }))),
 
-      clearAllSavedLeads: () => set({ savedLeads: [] }),
+      clearAllSavedLeads: () =>
+        (assertLocalDataWritable(), set({ savedLeads: [] })),
 
       importExternalLeads: (leads) => {
+        assertLocalDataWritable();
         const existingEmails = new Set(
           get()
             .importedLeads.map((l) =>
@@ -1192,7 +1365,8 @@ export const useLeadStore = create<LeadStore>()(
         return fresh;
       },
 
-      clearImportedLeads: () => set({ importedLeads: [] }),
+      clearImportedLeads: () =>
+        (assertLocalDataWritable(), set({ importedLeads: [] })),
     }),
     {
       name: "pnp-lead-finder",

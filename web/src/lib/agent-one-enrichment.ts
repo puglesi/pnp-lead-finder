@@ -1,4 +1,5 @@
 import type { Lead } from "../types/lead";
+import { hasDiscoveredEmail, stampLegacyLeadQuality } from "./lead-provenance.ts";
 
 export const AGENT_ONE_ENRICHMENT_BATCH_SIZE = 8;
 
@@ -6,6 +7,14 @@ export interface AgentOneContactUpdate {
   id: string;
   email: string | null;
   phone: string | null;
+  enrichmentStatus?: "completed" | "failed";
+  error?: string;
+  emailSourceUrl?: string | null;
+  emailSourceType?: string | null;
+  phoneSourceUrl?: string | null;
+  phoneRaw?: string | null;
+  phoneDiscoveryMethod?: string | null;
+  phoneConfidence?: string | null;
 }
 
 export interface AgentOneEnrichmentProgress {
@@ -17,14 +26,6 @@ export interface AgentOneEnrichmentProgress {
 interface EnrichmentRequestOptions {
   onBatch?: (updates: AgentOneContactUpdate[]) => void;
   onProgress?: (progress: AgentOneEnrichmentProgress) => void;
-}
-
-function hasUsableEmail(email: string | null | undefined): boolean {
-  return Boolean(
-    email &&
-      email !== "—" &&
-      /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
-  );
 }
 
 function hasUsablePhone(phone: string | null | undefined): boolean {
@@ -56,10 +57,11 @@ function hasEnrichableWebsite(website: string): boolean {
 export function selectAgentOneEmailEnrichmentCandidates(
   leads: Lead[]
 ): Lead[] {
-  return leads.filter(
-    (lead) =>
-      !hasUsableEmail(lead.email) && hasEnrichableWebsite(lead.website)
-  );
+  return leads.filter((lead) => {
+    const stamped = stampLegacyLeadQuality(lead);
+    if (stamped.locationMatch === "outside_target") return false;
+    return !hasDiscoveredEmail(stamped) && hasEnrichableWebsite(lead.website);
+  });
 }
 
 export function mergeAgentOneContactUpdates(
@@ -74,16 +76,28 @@ export function mergeAgentOneContactUpdates(
     if (!update) return lead;
 
     const email =
-      hasUsableEmail(lead.email) || !update.email ? lead.email : update.email;
+      hasDiscoveredEmail(lead) || !update.email ? lead.email : update.email;
     const phone =
       hasUsablePhone(lead.phone) || !update.phone ? lead.phone : update.phone;
 
-    if (email === lead.email && phone === lead.phone) return lead;
+    const enrichmentStatus = update.enrichmentStatus ?? "completed";
+    if (email === lead.email && phone === lead.phone) {
+      return {
+        ...lead,
+        enrichmentStatus,
+        enrichmentError: update.error,
+        lastProcessedAt: new Date().toISOString(),
+      };
+    }
     if (email !== lead.email) {
+      const foundAt = new Date().toISOString();
       return {
         ...lead,
         email,
         phone,
+        enrichmentStatus,
+        enrichmentError: update.error,
+        lastProcessedAt: foundAt,
         emailValidationStatus: undefined,
         emailValidationReason: undefined,
         normalizedEmail: undefined,
@@ -92,9 +106,37 @@ export function mergeAgentOneContactUpdates(
         emailDomain: undefined,
         hasMxRecords: undefined,
         isRoleBasedEmail: undefined,
+        emailIsGuessed: false,
+        emailSourceUrl: update.emailSourceUrl ?? null,
+        emailSourceType: (update.emailSourceType as Lead["emailSourceType"]) ?? null,
+        emailDiscoveryMethod:
+          (update.emailSourceType as Lead["emailDiscoveryMethod"]) ?? null,
+        emailFoundAt: email ? foundAt : null,
+        phoneSourceUrl: update.phoneSourceUrl ?? lead.phoneSourceUrl ?? null,
+        phoneFoundAt: phone && phone !== lead.phone ? foundAt : lead.phoneFoundAt,
+        phoneRaw: update.phoneRaw ?? lead.phoneRaw,
+        phoneDiscoveryMethod:
+          (update.phoneDiscoveryMethod as Lead["phoneDiscoveryMethod"]) ??
+          lead.phoneDiscoveryMethod,
+        phoneConfidence:
+          (update.phoneConfidence as Lead["phoneConfidence"]) ??
+          lead.phoneConfidence,
       };
     }
-    return { ...lead, phone };
+    const foundAt = new Date().toISOString();
+    return {
+      ...lead,
+      phone,
+      enrichmentStatus,
+      enrichmentError: update.error,
+      lastProcessedAt: foundAt,
+      phoneSourceUrl:
+        phone !== lead.phone
+          ? update.phoneSourceUrl ?? lead.phoneSourceUrl ?? null
+          : lead.phoneSourceUrl,
+      phoneFoundAt:
+        phone !== lead.phone ? foundAt : lead.phoneFoundAt,
+    };
   });
 }
 
@@ -116,7 +158,11 @@ function isContactUpdate(value: unknown): value is AgentOneContactUpdate {
   return (
     typeof update.id === "string" &&
     (typeof update.email === "string" || update.email === null) &&
-    (typeof update.phone === "string" || update.phone === null)
+    (typeof update.phone === "string" || update.phone === null) &&
+    (!update.enrichmentStatus ||
+      update.enrichmentStatus === "completed" ||
+      update.enrichmentStatus === "failed") &&
+    (!update.error || typeof update.error === "string")
   );
 }
 

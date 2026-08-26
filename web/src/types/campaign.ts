@@ -100,6 +100,8 @@ export interface CampaignFollowUp {
 export interface CampaignSignature {
   enabled: boolean;
   body: string;
+  /** Present when the signature was explicitly bound to a send operation. */
+  operation?: CampaignProfileId;
 }
 
 export interface Campaign {

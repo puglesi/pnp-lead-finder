@@ -34,6 +34,7 @@ function campaign(profileId) {
     signature: {
       enabled: true,
       body: "<p>Equipe {{company}}</p>",
+      operation: profileId,
     },
     attachment: null,
   };
@@ -184,4 +185,34 @@ test("base64 12. token inválido retorna erro controlado", () => {
   assert.equal(decodeUtf8Base64Url("a"), null);
   assert.equal(decodeUtf8Base64Url("inválido"), null);
   assert.equal(decodeTrackingToken("%%%"), null);
+});
+
+test("base64 13. bloqueia SMTP Modeclean com assinatura vinculada a P&P", () => {
+  const mismatched = campaign("modeclean");
+  mismatched.signature.operation = "panek-puglesi";
+
+  const result = buildAgentThreeSendRequest(
+    "modeclean",
+    mismatched,
+    queueItem("modeclean"),
+    lead
+  );
+
+  assert.equal(result.request, null);
+  assert.match(result.errorMessage ?? "", /assinatura/i);
+});
+
+test("base64 14. assinatura oficial vazia bloqueia antes do SMTP", () => {
+  const unsigned = campaign("panek-puglesi");
+  unsigned.signature.body = "";
+
+  const result = buildAgentThreeSendRequest(
+    "panek-puglesi",
+    unsigned,
+    queueItem("panek-puglesi"),
+    lead
+  );
+
+  assert.equal(result.request, null);
+  assert.match(result.errorMessage ?? "", /Assinatura não configurada/);
 });

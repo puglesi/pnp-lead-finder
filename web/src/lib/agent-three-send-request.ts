@@ -11,6 +11,10 @@ import type { Campaign } from "../types/campaign.ts";
 import type { CampaignProfileId } from "../types/campaign-profile.ts";
 import type { CampaignTrackingPayload } from "../types/campaign-tracking.ts";
 import type { Lead } from "../types/lead.ts";
+import {
+  getOperationSignatureMismatch,
+  OPERATION_SIGNATURE_MISMATCH_MESSAGE,
+} from "./operation-signature.ts";
 
 export const AGENT_THREE_TRACKING_ERROR_MESSAGE =
   "Não foi possível preparar o rastreamento da mensagem.";
@@ -69,6 +73,20 @@ export function buildAgentThreeSendRequest(
   lead: Lead | null,
   dependencies: AgentThreeSendRequestBuilderDependencies = {}
 ): AgentThreeSendRequestBuildResult {
+  if (campaign.campaignProfileId !== profileId) {
+    return {
+      request: null,
+      errorMessage: OPERATION_SIGNATURE_MISMATCH_MESSAGE,
+    };
+  }
+  const signatureMismatch = getOperationSignatureMismatch(
+    profileId,
+    campaign.signature,
+    { requireOperationId: true }
+  );
+  if (signatureMismatch) {
+    return { request: null, errorMessage: signatureMismatch };
+  }
   if (!item.normalizedEmail) {
     return {
       request: null,

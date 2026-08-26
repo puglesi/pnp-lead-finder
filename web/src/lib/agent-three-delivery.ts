@@ -13,6 +13,7 @@ import {
   blockAgentThreeSendingItem,
   completeAgentThreeItem,
   failAgentThreeItem,
+  markAgentThreeItemUnknown,
   pauseAgentThree,
   releaseAgentThreeSendingItem,
   type AgentThreeSnapshot,
@@ -214,6 +215,16 @@ export function applyAgentThreeSmtpResult(
         deliveryResult.status
       );
       return applyBreaker(blocked, false);
+    }
+    case "reconciliation_required": {
+      const unknown = markAgentThreeItemUnknown(
+        snapshot,
+        profileId,
+        itemId,
+        occurredAt,
+        deliveryResult.message
+      );
+      return applyBreaker(unknown, false);
     }
     case "transient_error":
     case "permanent_error": {

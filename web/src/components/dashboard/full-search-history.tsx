@@ -27,6 +27,9 @@ export function FullSearchHistory() {
   const exportSearchFromHistory = useLeadStore(
     (s) => s.exportSearchFromHistory
   );
+  const exportPersistedSearchBatch = useLeadStore(
+    (s) => s.exportPersistedSearchBatch
+  );
 
   const [filter, setFilter] = useState("");
 
@@ -41,8 +44,12 @@ export function FullSearchHistory() {
     );
   }, [filter, fullSearchHistory]);
 
-  const handleView = (id: string, keyword: string, location: string) => {
-    if (!loadSearchFromHistory(id)) {
+  const handleView = async (id: string, keyword: string, location: string) => {
+    const record = useLeadStore.getState().getHistoryRecord(id);
+    const loaded = record?.batchId
+      ? await useLeadStore.getState().loadPersistedSearchBatch(record.batchId)
+      : loadSearchFromHistory(id);
+    if (!loaded) {
       toast.error("Registro não encontrado no histórico.");
       return;
     }
@@ -50,8 +57,12 @@ export function FullSearchHistory() {
     router.push("/resultados");
   };
 
-  const handleExport = (id: string) => {
-    if (exportSearchFromHistory(id)) {
+  const handleExport = async (id: string) => {
+    const record = useLeadStore.getState().getHistoryRecord(id);
+    const exported = record?.batchId
+      ? await exportPersistedSearchBatch(id)
+      : exportSearchFromHistory(id);
+    if (exported) {
       toast.success("CSV exportado novamente!", { icon: "📥" });
       return;
     }
@@ -138,7 +149,7 @@ export function FullSearchHistory() {
                     <span className="text-xs">
                       {formatDistanceToNow(record.date)}
                     </span>
-                    {record.leads?.length ? (
+                    {record.leads?.length || record.batchId ? (
                       <Badge variant="outline" className="text-[10px]">
                         snapshot salvo
                       </Badge>
@@ -150,7 +161,7 @@ export function FullSearchHistory() {
                     size="sm"
                     variant="default"
                     onClick={() =>
-                      handleView(record.id, record.keyword, record.location)
+                      void handleView(record.id, record.keyword, record.location)
                     }
                   >
                     <ExternalLink className="size-3.5" />
@@ -159,8 +170,8 @@ export function FullSearchHistory() {
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => handleExport(record.id)}
-                    disabled={!record.leads?.length}
+                    onClick={() => void handleExport(record.id)}
+                    disabled={!record.leads?.length && !record.batchId}
                   >
                     <Download className="size-3.5" />
                     Exportar novamente

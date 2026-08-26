@@ -13,6 +13,7 @@ import { LocalProductionPanel } from "@/components/dashboard/local-production-pa
 import { SearchSettingsForm } from "@/components/settings/search-settings-form";
 import { EmailTemplateLibrary } from "@/components/settings/email-template-library";
 import { OperationSignatureSettings } from "@/components/settings/operation-signature-settings";
+import { DataIntegrityCard } from "@/components/settings/data-integrity-card";
 
 export default function ConfiguracoesPage() {
   return (
@@ -28,6 +29,8 @@ export default function ConfiguracoesPage() {
       </div>
 
       <LocalProductionPanel />
+
+      <DataIntegrityCard />
 
       <Card className="border-border/60 bg-gradient-to-r from-blue-500/5 to-emerald-500/5">
         <CardContent className="flex flex-wrap items-center justify-between gap-4 p-6">

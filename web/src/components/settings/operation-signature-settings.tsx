@@ -1,7 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { PenLine, RotateCcw, Save } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Download,
+  PenLine,
+  RotateCcw,
+  Save,
+  Upload,
+} from "lucide-react";
 import toast from "react-hot-toast";
 import {
   CollapsibleCard,
@@ -37,62 +45,139 @@ import {
 export function OperationSignatureSettings() {
   const [operation, setOperation] =
     useState<CampaignProfileId>("panek-puglesi");
-
-  // CRITICAL: select the map (stable when untouched), then resolve entry with
-  // a pure helper that returns the store reference or frozen EMPTY — never
-  // allocate inside a Zustand selector.
-  const signatures = useOperationSignatureStore((s) => s.signatures);
-  const saveOfficial = useOperationSignatureStore((s) => s.saveOfficial);
+  const signatures = useOperationSignatureStore((state) => state.signatures);
+  const records = useOperationSignatureStore((state) => state.records);
+  const hasHydrated = useOperationSignatureStore(
+    (state) => state.hasHydrated
+  );
+  const isHydrating = useOperationSignatureStore(
+    (state) => state.isHydrating
+  );
+  const persistenceError = useOperationSignatureStore(
+    (state) => state.persistenceError
+  );
+  const hydrate = useOperationSignatureStore((state) => state.hydrate);
+  const saveOfficial = useOperationSignatureStore(
+    (state) => state.saveOfficial
+  );
+  const exportBackup = useOperationSignatureStore(
+    (state) => state.exportBackup
+  );
+  const importBackup = useOperationSignatureStore(
+    (state) => state.importBackup
+  );
 
   const signature = useMemo(
     () => selectOperationSignature(signatures, operation),
     [signatures, operation]
   );
-
   const account = useMemo(
     () => getOperationSendAccount(operation),
     [operation]
   );
 
-  // Local draft only. Sync from store when operation changes or after save.
-  const [boundOperation, setBoundOperation] = useState(operation);
   const [draftBody, setDraftBody] = useState(signature.body);
   const [draftEnabled, setDraftEnabled] = useState(signature.enabled);
   const [dirty, setDirty] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const importInputRef = useRef<HTMLInputElement>(null);
+  const officialDraftKey = `${operation}:${signature.enabled}:${signature.body}`;
+  const [draftSourceKey, setDraftSourceKey] = useState(officialDraftKey);
 
-  // Operation switch: reload last saved for that op (discard in-flight draft).
-  if (boundOperation !== operation) {
-    setBoundOperation(operation);
+  useEffect(() => {
+    void hydrate().catch((error) => {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Falha ao carregar assinaturas oficiais."
+      );
+    });
+  }, [hydrate]);
+
+  if (draftSourceKey !== officialDraftKey) {
+    setDraftSourceKey(officialDraftKey);
     setDraftBody(signature.body);
     setDraftEnabled(signature.enabled);
     setDirty(false);
   }
 
-  function handleSave() {
-    const official = saveOfficial(operation, {
-      body: draftBody,
-      enabled: draftEnabled,
-    });
-    setDraftBody(official.body);
-    setDraftEnabled(official.enabled);
-    setDirty(false);
-    toast.success(`Assinatura de ${account.signatureLabel} salva.`);
+  async function handleSave() {
+    setBusy(true);
+    try {
+      const official = await saveOfficial(operation, {
+        body: draftBody,
+        enabled: draftEnabled,
+      });
+      setDraftBody(official.body);
+      setDraftEnabled(official.enabled);
+      setDirty(false);
+      toast.success(`Assinatura de ${account.signatureLabel} salva.`);
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Falha ao salvar assinatura oficial."
+      );
+    } finally {
+      setBusy(false);
+    }
   }
 
   function handleDiscard() {
-    // Last official snapshot for this operation (store reference fields).
     const saved = selectOperationSignature(signatures, operation);
     setDraftBody(saved.body);
     setDraftEnabled(saved.enabled);
     setDirty(false);
     toast.success(
-      "Alterações descartadas — última assinatura salva restaurada."
+      "Alterações descartadas — última assinatura oficial restaurada."
     );
+  }
+
+  async function handleExportBackup() {
+    setBusy(true);
+    try {
+      const json = await exportBackup();
+      const blob = new Blob([json], { type: "application/json" });
+      const href = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = href;
+      anchor.download = `pnp-assinaturas-${new Date()
+        .toISOString()
+        .slice(0, 10)}.json`;
+      anchor.click();
+      URL.revokeObjectURL(href);
+      toast.success("Backup das assinaturas exportado.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Falha ao exportar backup."
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleImportBackup(file: File) {
+    setBusy(true);
+    try {
+      await importBackup(await file.text());
+      toast.success("Backup importado e salvo no IndexedDB.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Falha ao importar backup."
+      );
+    } finally {
+      setBusy(false);
+    }
   }
 
   const previewHtml = draftEnabled
     ? sanitizeSignatureHtml(draftBody)
     : "<p style='color:#9ca3af'>(assinatura desativada)</p>";
+  const record = records[operation];
+  const signatureEmpty = isSignatureHtmlEmpty(draftBody);
+  const savedAt = record?.updatedAt
+    ? new Date(record.updatedAt).toLocaleString("pt-BR")
+    : null;
 
   return (
     <CollapsibleCard
@@ -112,19 +197,32 @@ export function OperationSignatureSettings() {
         </CardDescription>
       </CollapsibleCardHeader>
       <CollapsibleCardContent className="space-y-4">
+        {persistenceError && (
+          <div className="flex gap-2 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-300">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+            <div>
+              <strong>Falha na persistência da assinatura.</strong>
+              <p>{persistenceError}</p>
+            </div>
+          </div>
+        )}
+
         <div className="max-w-sm space-y-1.5">
           <Label>Operação</Label>
           <Select
             value={operation}
-            onValueChange={(v) => setOperation(v as CampaignProfileId)}
+            onValueChange={(value) => {
+              setDirty(false);
+              setOperation(value as CampaignProfileId);
+            }}
           >
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {CAMPAIGN_PROFILES.map((p) => (
-                <SelectItem key={p.id} value={p.id}>
-                  {p.name}
+              {CAMPAIGN_PROFILES.map((profile) => (
+                <SelectItem key={profile.id} value={profile.id}>
+                  {profile.name}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -140,14 +238,35 @@ export function OperationSignatureSettings() {
             <span className="text-muted-foreground">Assinatura: </span>
             <strong>{account.signatureLabel}</strong>
           </p>
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+            {record ? (
+              <span className="inline-flex items-center gap-1 text-emerald-400">
+                <CheckCircle2 className="size-3.5" />
+                Salva ✓
+              </span>
+            ) : (
+              <span className="font-medium text-amber-400">
+                Assinatura não configurada
+              </span>
+            )}
+            <span className="text-muted-foreground">
+              {isHydrating
+                ? "Carregando do IndexedDB…"
+                : savedAt
+                  ? `Última atualização: ${savedAt}`
+                  : hasHydrated
+                    ? "Nenhuma versão oficial salva"
+                    : "Aguardando persistência"}
+            </span>
+          </div>
         </div>
 
         <div className="flex items-center gap-2">
           <Checkbox
             id="op-sig-enabled"
             checked={draftEnabled}
-            onCheckedChange={(v) => {
-              setDraftEnabled(v === true);
+            onCheckedChange={(value) => {
+              setDraftEnabled(value === true);
               setDirty(true);
             }}
           />
@@ -173,16 +292,20 @@ export function OperationSignatureSettings() {
             className="max-w-full overflow-x-auto text-sm text-foreground"
             dangerouslySetInnerHTML={{ __html: previewHtml }}
           />
-          {draftEnabled && isSignatureHtmlEmpty(draftBody) && (
-            <p className="mt-2 text-xs text-muted-foreground">
-              Nada para exibir ainda. Abra o Gmail → Nova mensagem → copie a
-              assinatura → cole acima.
+          {signatureEmpty && (
+            <p className="mt-2 text-xs font-medium text-amber-400">
+              Assinatura não configurada. O preflight e o envio desta operação
+              permanecerão bloqueados até existir HTML oficial salvo.
             </p>
           )}
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <Button type="button" onClick={handleSave} disabled={!dirty}>
+          <Button
+            type="button"
+            onClick={() => void handleSave()}
+            disabled={!dirty || busy || signatureEmpty}
+          >
             <Save className="size-4" />
             Salvar assinatura
           </Button>
@@ -190,11 +313,40 @@ export function OperationSignatureSettings() {
             type="button"
             variant="outline"
             onClick={handleDiscard}
-            disabled={!dirty}
+            disabled={!dirty || busy}
           >
             <RotateCcw className="size-4" />
             Descartar alterações
           </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void handleExportBackup()}
+            disabled={busy || Object.keys(records).length === 0}
+          >
+            <Download className="size-4" />
+            Exportar backup
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => importInputRef.current?.click()}
+            disabled={busy}
+          >
+            <Upload className="size-4" />
+            Importar backup
+          </Button>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void handleImportBackup(file);
+              event.target.value = "";
+            }}
+          />
         </div>
       </CollapsibleCardContent>
     </CollapsibleCard>

@@ -61,6 +61,7 @@ import { AUTONOMOUS_MODE_LABEL, SERPAPI_PREMIUM_LABEL } from "@/lib/mode-labels"
 import {
   getSourceShortLabel,
 } from "@/types/autonomous-sources";
+import { DEFAULT_GEO_SEARCH_LOCATION } from "@/lib/geo/regions";
 import { ActiveModeBadge } from "./active-mode-badge";
 import { QuickConfigBar } from "./quick-config-bar";
 
@@ -90,7 +91,7 @@ export function QuickSearch(props: QuickSearchProps) {
 }
 
 function QuickSearchContent({
-  defaultLocation = "London",
+  defaultLocation = DEFAULT_GEO_SEARCH_LOCATION,
   cardStorageKey = "search-volume",
   hydrated,
 }: QuickSearchProps & { hydrated: boolean }) {
@@ -484,7 +485,7 @@ function QuickSearchContent({
         <div className="relative">
           <MapPin className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            placeholder="Ex: London, Manchester, Birmingham..."
+            placeholder="P&P Target Area — West & South West London"
             value={location}
             onChange={(e) => setLocation(e.target.value)}
             className="h-11 bg-background/50 pl-10"

@@ -46,11 +46,20 @@ export interface SectorProgress {
   status: SectorStatus;
   queueIndex: number;
   leadsFound: number;
+  requestedCount?: number;
+  foundRealCount?: number;
+  sourceExhausted?: boolean;
+  providerResultsInspected?: number;
+  insideTargetFound?: number;
+  outsideTargetCount?: number;
+  unknownLocationCount?: number;
+  selectedCount?: number;
   error?: string;
   durationMs?: number;
 }
 
 export interface BulkSearchProgress {
+  batchId?: string;
   active: boolean;
   location: string;
   sectors: SectorProgress[];
@@ -61,7 +70,74 @@ export interface BulkSearchProgress {
   startedAt: number | null;
   elapsedMs: number;
   estimatedRemainingMs: number;
+  currentStage?: SearchBatchStage;
+  lastActivityAt?: string;
+  lastSavedAt?: string;
+  persistenceStatus?: "idle" | "saving" | "saved" | "error";
+  persistenceError?: string;
+  failedCount?: number;
   searchSummary?: SearchSummary;
+}
+
+export type SearchSectorCheckpointStatus =
+  | "pending"
+  | "running"
+  | "completed"
+  | "failed";
+
+export type SearchBatchStatus =
+  | "running"
+  | "interrupted"
+  | "completed"
+  | "completed_with_errors"
+  | "failed";
+
+export type SearchBatchStage =
+  | "search"
+  | "enrichment"
+  | "validation"
+  | "scoring"
+  | "completed";
+
+export interface PersistedSearchSector {
+  index: number;
+  sector: string;
+  status: SearchSectorCheckpointStatus;
+  leadsFound: number;
+  startedAt?: string;
+  completedAt?: string;
+  updatedAt: string;
+  error?: string;
+}
+
+export interface PersistedSearchBatch {
+  batchId: string;
+  createdAt: string;
+  updatedAt: string;
+  lastActivityAt: string;
+  lastSavedAt: string;
+  status: SearchBatchStatus;
+  currentStage: SearchBatchStage;
+  sectorsInput: string;
+  sectors: PersistedSearchSector[];
+  location: string;
+  configuredQuantity: number;
+  provider: SearchProviderType;
+  searchProfile: SearchProfile;
+  workers: number;
+  leadsFound: number;
+  deduplicatedLeads: number;
+  completedSectors: number;
+  pendingSectors: number;
+  failedSectors: number;
+  enrichmentCompleted: number;
+  enrichmentFailed: number;
+  validationCompleted: number;
+  validationFailed: number;
+  scoringCompleted: number;
+  scoringFailed: number;
+  error?: string;
+  historyRecordId?: string;
 }
 
 export interface SearchApiResponse {
@@ -77,6 +153,14 @@ export interface SearchApiResponse {
   apiCallConsumed?: boolean;
   apiCallsUsed?: number;
   creditExhausted?: boolean;
+  requestedCount?: number;
+  foundRealCount?: number;
+  sourceExhausted?: boolean;
+  providerResultsInspected?: number;
+  insideTargetFound?: number;
+  outsideTargetCount?: number;
+  unknownLocationCount?: number;
+  selectedCount?: number;
 }
 
 export interface ProviderStatusResponse {

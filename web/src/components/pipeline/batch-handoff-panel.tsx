@@ -51,13 +51,14 @@ export function BatchHandoffPanel({
         </Button>
       </div>
       <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        <Stat label="Encontrados" value={stats.total} />
-        <Stat label="Com website" value={stats.withWebsite} />
+        <Stat label="Encontrados reais" value={stats.realFound} />
         <Stat label="Com e-mail" value={stats.withEmail} />
         <Stat label="Sem e-mail" value={stats.withoutEmail} />
-        <Stat label="Elegíveis" value={stats.eligible} />
-        <Stat label="Mailbox desc." value={stats.unknown} />
+        <Stat label="E-mail único" value={stats.uniqueEmails} />
+        <Stat label="Duplicados" value={stats.duplicates} />
         <Stat label="Inválidos" value={stats.invalid} />
+        <Stat label="Não confirmados" value={stats.unconfirmed} />
+        <Stat label="Elegíveis" value={stats.eligible} />
         {extraStats?.map((item) => (
           <Stat key={item.label} label={item.label} value={item.value} />
         ))}

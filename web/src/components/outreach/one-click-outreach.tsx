@@ -60,6 +60,7 @@ import {
 } from "@/lib/email-template-library";
 import { useEmailTemplateStore } from "@/store/email-template-store";
 import { cn } from "@/lib/utils";
+import { DEFAULT_GEO_SEARCH_LOCATION } from "@/lib/geo/regions";
 import { GlobalDeduplicationPreviewPanel } from "@/components/campaigns/global-deduplication-preview";
 
 function Stat({
@@ -106,7 +107,7 @@ function OneClickFlowPanel() {
   const [operation, setOperation] =
     useState<CampaignProfileId>("panek-puglesi");
   const [sector, setSector] = useState("Property Finance Broker");
-  const [location, setLocation] = useState("London");
+  const [location, setLocation] = useState(DEFAULT_GEO_SEARCH_LOCATION);
   const [quantity, setQuantity] = useState(50);
   const [templateId, setTemplateId] = useState(
     () =>
@@ -206,7 +207,7 @@ function OneClickFlowPanel() {
                   value={location}
                   onChange={(e) => setLocation(e.target.value)}
                   className="pl-10"
-                  placeholder="London"
+                  placeholder={DEFAULT_GEO_SEARCH_LOCATION}
                 />
               </div>
             </div>
