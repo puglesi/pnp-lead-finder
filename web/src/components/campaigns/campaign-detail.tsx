@@ -503,7 +503,7 @@ function CampaignDetailContent({
               <CampaignOverview campaign={campaign} events={trackingEvents} />
             </CollapsibleCardContent>
           </CollapsibleCard>
-          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-100/90">
+          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-950 dark:text-emerald-100/90">
             Envio legado desativado nesta página. Use{" "}
             <strong>Abrir no Agente 3</strong> ou <strong>Enviar agora</strong>{" "}
             (mesmo motor do Agente 3: preflight, dedupe, blocklist, fila).
@@ -520,7 +520,7 @@ function CampaignDetailContent({
             </CollapsibleCardContent>
           </CollapsibleCard>
           {campaign.followUp.enabled && (
-            <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-100/90">
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-sm text-amber-950 dark:text-amber-100/90">
               Follow-up automático ativo — {campaign.followUp.delayDays} dias após
               o primeiro envio
             </div>

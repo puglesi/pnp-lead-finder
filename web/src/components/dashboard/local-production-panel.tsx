@@ -100,7 +100,7 @@ export function LocalProductionPanel({ compact }: { compact?: boolean }) {
             {localProductionEnabled && (
               <Badge
                 variant="outline"
-                className="border-violet-400/40 bg-violet-500/10 text-violet-200"
+                className="border-violet-400/40 bg-violet-500/10 text-violet-800 dark:text-violet-200"
               >
                 Ativo
               </Badge>
@@ -111,8 +111,8 @@ export function LocalProductionPanel({ compact }: { compact?: boolean }) {
               className={cn(
                 "gap-1",
                 nightModeActive
-                  ? "bg-indigo-500/20 text-indigo-200"
-                  : "bg-amber-500/15 text-amber-200"
+                  ? "bg-indigo-500/20 text-indigo-800 dark:text-indigo-200"
+                  : "bg-amber-500/15 text-amber-900 dark:text-amber-200"
               )}
             >
               <PhaseIcon className="size-3" />

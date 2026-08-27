@@ -49,7 +49,7 @@ export function ActiveModeBadge({
     return (
       <Badge
         className={cn(
-          "gap-1.5 border-indigo-500/40 bg-indigo-500/15 px-3 py-1.5 text-indigo-200",
+          "gap-1.5 border-indigo-500/40 bg-indigo-500/15 px-3 py-1.5 text-indigo-800 dark:text-indigo-200",
           className
         )}
       >
@@ -65,7 +65,7 @@ export function ActiveModeBadge({
     return (
       <Badge
         className={cn(
-          "gap-1.5 border-blue-500/40 bg-blue-500/15 px-3 py-1.5 text-blue-200",
+          "gap-1.5 border-blue-500/40 bg-blue-500/15 px-3 py-1.5 text-blue-800 dark:text-blue-200",
           className
         )}
       >
@@ -80,7 +80,7 @@ export function ActiveModeBadge({
       className={cn(
         "gap-1.5 px-3 py-1.5 shadow-sm",
         volumeHigh
-          ? "border-orange-500/40 bg-orange-500/15 text-orange-200 shadow-orange-500/15"
+          ? "border-orange-500/40 bg-orange-500/15 text-orange-800 shadow-orange-500/15 dark:text-orange-200"
           : "shadow-emerald-500/15",
         className
       )}

@@ -198,7 +198,7 @@ export function OperationSignatureSettings() {
       </CollapsibleCardHeader>
       <CollapsibleCardContent className="space-y-4">
         {persistenceError && (
-          <div className="flex gap-2 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-300">
+          <div className="flex gap-2 rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-800 dark:text-red-300">
             <AlertTriangle className="mt-0.5 size-4 shrink-0" />
             <div>
               <strong>Falha na persistência da assinatura.</strong>
@@ -239,13 +239,15 @@ export function OperationSignatureSettings() {
             <strong>{account.signatureLabel}</strong>
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-            {record ? (
-              <span className="inline-flex items-center gap-1 text-emerald-400">
+            {isHydrating || !hasHydrated ? (
+              <span className="text-muted-foreground">Carregando…</span>
+            ) : record ? (
+              <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400">
                 <CheckCircle2 className="size-3.5" />
                 Salva ✓
               </span>
             ) : (
-              <span className="font-medium text-amber-400">
+              <span className="font-medium text-amber-800 dark:text-amber-400">
                 Assinatura não configurada
               </span>
             )}
@@ -292,8 +294,8 @@ export function OperationSignatureSettings() {
             className="max-w-full overflow-x-auto text-sm text-foreground"
             dangerouslySetInnerHTML={{ __html: previewHtml }}
           />
-          {signatureEmpty && (
-            <p className="mt-2 text-xs font-medium text-amber-400">
+          {signatureEmpty && hasHydrated && !isHydrating && (
+            <p className="mt-2 text-xs font-medium text-amber-800 dark:text-amber-400">
               Assinatura não configurada. O preflight e o envio desta operação
               permanecerão bloqueados até existir HTML oficial salvo.
             </p>

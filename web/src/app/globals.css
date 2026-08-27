@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Follow the explicit theme selected by ThemeProvider, not the OS preference. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* Dark theme (default / .dark) */
 :root,
 html.dark {

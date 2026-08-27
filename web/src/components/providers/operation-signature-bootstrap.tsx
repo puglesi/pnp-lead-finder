@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import toast from "react-hot-toast";
 import { ensureOperationSignaturesHydrated } from "@/store/operation-signature-store";
 
-/** Loads the IndexedDB source of truth before any send workflow is used. */
+/** Loads the official SQLite signatures (IndexedDB is cache/fallback) before send. */
 export function OperationSignatureBootstrap() {
   useEffect(() => {
     void ensureOperationSignaturesHydrated().catch((error) => {

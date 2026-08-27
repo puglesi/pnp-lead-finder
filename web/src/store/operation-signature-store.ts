@@ -121,8 +121,11 @@ export const useOperationSignatureStore = create<OperationSignatureStore>()(
       selectOperationSignature(get().signatures, operation),
 
     hydrate: async () => {
-      if (get().hasHydrated) return;
       if (hydrationPromise) return hydrationPromise;
+      const configured = Object.values(get().records).some(
+        (record) => record && !isSignatureHtmlEmpty(record.html)
+      );
+      if (get().hasHydrated && configured) return;
       hydrationPromise = (async () => {
         set({ isHydrating: true, persistenceError: null });
         try {

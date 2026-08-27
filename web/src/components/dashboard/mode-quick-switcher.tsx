@@ -86,10 +86,10 @@ export function ModeQuickSwitcher({ compact }: { compact?: boolean }) {
               compact && "px-2.5 py-1.5 text-xs",
               isActive
                 ? mode.id === "autonomous-24h"
-                  ? "bg-indigo-500/25 text-indigo-100 shadow-sm ring-1 ring-indigo-400/30"
+                  ? "bg-indigo-500/25 text-indigo-900 shadow-sm ring-1 ring-indigo-400/30 dark:text-indigo-100"
                   : mode.id === "google-cse"
-                    ? "bg-blue-500/20 text-blue-200 shadow-sm"
-                    : "bg-emerald-500/15 text-emerald-200 shadow-sm"
+                    ? "bg-blue-500/20 text-blue-800 shadow-sm dark:text-blue-200"
+                    : "bg-emerald-500/15 text-emerald-800 shadow-sm dark:text-emerald-200"
                 : "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
               mode.primary && !isActive && "font-semibold"
             )}

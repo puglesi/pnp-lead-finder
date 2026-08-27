@@ -202,7 +202,7 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
                     <CampaignStatusBadge status={effective} />
                   </td>
                   <td className="px-5 py-4 tabular-nums">
-                    <span className="font-medium text-emerald-400">
+                    <span className="font-medium text-emerald-700 dark:text-emerald-400">
                       {confirmedSent}
                     </span>
                     <span className="text-muted-foreground">
@@ -215,7 +215,7 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
                         className={cn(
                           "inline-flex items-center gap-1 font-medium",
                           responseRate >= 10
-                            ? "text-emerald-400"
+                            ? "text-emerald-700 dark:text-emerald-400"
                             : "text-muted-foreground"
                         )}
                       >
@@ -286,7 +286,7 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
                         type="button"
                         variant="outline"
                         size="sm"
-                        className="h-8 gap-1 text-xs text-red-300"
+                        className="h-8 gap-1 text-xs text-red-700 dark:text-red-300"
                         onClick={() => void handleDelete(campaign)}
                         disabled={localDataWriteBlocked}
                         title="Apagar"

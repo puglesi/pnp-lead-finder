@@ -129,7 +129,7 @@ export function GlobalHistorySearch() {
                       className={cn(
                         "mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg",
                         hit.kind === "blocked"
-                          ? "bg-red-500/15 text-red-300"
+                          ? "bg-red-500/15 text-red-800 dark:text-red-300"
                           : "bg-primary/10 text-primary"
                       )}
                     >

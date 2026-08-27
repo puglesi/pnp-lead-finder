@@ -133,7 +133,7 @@ export function LeadPicker({
             className={cn(
               "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-all",
               source === "saved"
-                ? "border-blue-400/50 bg-blue-500/15 text-blue-100"
+                ? "border-blue-400/50 bg-blue-500/15 text-blue-900 dark:text-blue-100"
                 : "border-border/60 text-muted-foreground hover:border-blue-400/30"
             )}
           >
@@ -149,7 +149,7 @@ export function LeadPicker({
             className={cn(
               "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-all",
               source === "recent"
-                ? "border-emerald-400/50 bg-emerald-500/15 text-emerald-100"
+                ? "border-emerald-400/50 bg-emerald-500/15 text-emerald-900 dark:text-emerald-100"
                 : "border-border/60 text-muted-foreground hover:border-emerald-400/30"
             )}
           >
@@ -165,7 +165,7 @@ export function LeadPicker({
             className={cn(
               "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-all",
               source === "imported"
-                ? "border-violet-400/50 bg-violet-500/15 text-violet-100"
+                ? "border-violet-400/50 bg-violet-500/15 text-violet-900 dark:text-violet-100"
                 : "border-border/60 text-muted-foreground hover:border-violet-400/30"
             )}
           >
@@ -273,7 +273,7 @@ export function LeadPicker({
                 />
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-medium">{lead.company}</p>
-                  <p className="truncate text-xs text-emerald-400">
+                  <p className="truncate text-xs text-emerald-700 dark:text-emerald-400">
                     {lead.email}
                   </p>
                   <p className="truncate text-[11px] text-muted-foreground">
@@ -285,7 +285,7 @@ export function LeadPicker({
                     variant="outline"
                     className={cn(
                       "text-[10px]",
-                      lead.aiScore >= 85 && "border-amber-500/40 text-amber-300"
+                      lead.aiScore >= 85 && "border-amber-500/40 text-amber-800 dark:text-amber-300"
                     )}
                   >
                     {lead.aiScore}

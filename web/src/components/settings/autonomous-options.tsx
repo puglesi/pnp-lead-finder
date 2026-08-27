@@ -56,7 +56,7 @@ export function AutonomousOptions() {
           <Badge variant="success">Sempre ativo</Badge>
         </div>
         {s.useMaxLeads && (
-          <div className="rounded-xl border border-amber-500/35 bg-amber-500/8 px-4 py-3 text-sm text-amber-100/90">
+          <div className="rounded-xl border border-amber-500/35 bg-amber-500/8 px-4 py-3 text-sm text-amber-950 dark:text-amber-100/90">
             <p className="font-medium">{AUTONOMOUS_VOLUME_24H_LABEL}</p>
             <p className="mt-1 text-xs text-muted-foreground">
               Máximo possível: {AUTONOMOUS_VOLUME_MIN}–{AUTONOMOUS_VOLUME_MAX}{" "}

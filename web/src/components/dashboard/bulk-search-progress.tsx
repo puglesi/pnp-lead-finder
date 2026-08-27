@@ -176,7 +176,7 @@ export function BulkSearchProgress() {
             {settings.useMaxLeads ? "Máx." : settings.maxResults}/setor
           </Badge>
             {settings.mode24h && (
-              <Badge className="border-amber-500/40 bg-amber-500/15 text-amber-300">
+              <Badge className="border-amber-500/40 bg-amber-500/15 text-amber-900 dark:text-amber-300">
                 Modo 24h
               </Badge>
             )}
@@ -186,7 +186,7 @@ export function BulkSearchProgress() {
                 {activeSources.map((id) => (
                   <Badge
                     key={id}
-                    className="border-indigo-400/30 bg-indigo-500/15 text-[10px] text-indigo-200"
+                    className="border-indigo-400/30 bg-indigo-500/15 text-[10px] text-indigo-800 dark:text-indigo-200"
                   >
                     {getSourceShortLabel(id)}
                   </Badge>

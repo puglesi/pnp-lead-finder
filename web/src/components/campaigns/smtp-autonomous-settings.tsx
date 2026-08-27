@@ -66,7 +66,7 @@ export function SmtpAutonomousSettings() {
         </div>
 
         <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 px-4 py-3 text-xs text-muted-foreground">
-          <p className="flex items-center gap-1.5 font-medium text-emerald-200">
+          <p className="flex items-center gap-1.5 font-medium text-emerald-800 dark:text-emerald-200">
             <Shield className="size-3.5" />
             Dicas anti-bloqueio
           </p>

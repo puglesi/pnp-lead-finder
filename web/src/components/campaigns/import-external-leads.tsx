@@ -52,7 +52,7 @@ function StatRow({
       <span
         className={cn(
           "font-semibold tabular-nums",
-          accent && "text-emerald-400"
+          accent && "text-emerald-700 dark:text-emerald-400"
         )}
       >
         {value}
@@ -193,7 +193,7 @@ export function ImportExternalLeads({
           className={cn(
             "inline-flex flex-1 items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm transition-all",
             mode === "paste"
-              ? "border-violet-400/50 bg-violet-500/15 text-violet-100"
+              ? "border-violet-400/50 bg-violet-500/15 text-violet-900 dark:text-violet-100"
               : "border-border/60 text-muted-foreground hover:border-violet-400/30"
           )}
         >
@@ -206,7 +206,7 @@ export function ImportExternalLeads({
           className={cn(
             "inline-flex flex-1 items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm transition-all",
             mode === "csv"
-              ? "border-blue-400/50 bg-blue-500/15 text-blue-100"
+              ? "border-blue-400/50 bg-blue-500/15 text-blue-900 dark:text-blue-100"
               : "border-border/60 text-muted-foreground hover:border-blue-400/30"
           )}
         >
@@ -288,7 +288,7 @@ export function ImportExternalLeads({
             ), não o histórico global.
           </p>
           {lastStats.invalid > 0 && (
-            <p className="flex items-center gap-1 text-xs text-amber-200/90">
+            <p className="flex items-center gap-1 text-xs text-amber-800 dark:text-amber-200/90">
               <AlertCircle className="size-3.5" />
               {lastStats.invalid} linha(s) inválidas ou sem e-mail válido.
             </p>

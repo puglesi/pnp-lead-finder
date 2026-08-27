@@ -53,7 +53,7 @@ export function EmailProviderSettings() {
               key={p.id}
               className={`rounded-full border px-2.5 py-1 text-xs ${
                 p.configured
-                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+                  ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-800 dark:text-emerald-200"
                   : "border-border/60 text-muted-foreground"
               }`}
             >

@@ -299,22 +299,22 @@ function QuickSearchContent({
           </Badge>
           <Badge variant="outline">{renderSettings.delayMs}ms</Badge>
           {equilibriumMode && (
-            <Badge className="border-emerald-500/40 bg-emerald-500/15 text-emerald-300">
+            <Badge className="border-emerald-500/40 bg-emerald-500/15 text-emerald-800 dark:text-emerald-300">
               Equilíbrio
             </Badge>
           )}
           {autonomousVolume && (
-            <Badge className="border-amber-500/40 bg-amber-500/15 text-amber-300">
+            <Badge className="border-amber-500/40 bg-amber-500/15 text-amber-900 dark:text-amber-300">
               Volume Alto 24h
             </Badge>
           )}
           {volumeMode && (
-            <Badge className="border-orange-500/40 bg-orange-500/15 text-orange-300">
+            <Badge className="border-orange-500/40 bg-orange-500/15 text-orange-800 dark:text-orange-300">
               Volume Máximo
             </Badge>
           )}
           {renderSettings.mode24h && (
-            <Badge className="border-amber-500/40 bg-amber-500/15 text-amber-300">
+            <Badge className="border-amber-500/40 bg-amber-500/15 text-amber-900 dark:text-amber-300">
               24h
             </Badge>
           )}
@@ -325,7 +325,7 @@ function QuickSearchContent({
           <div
             className={`flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm ${
               autonomousVolume
-                ? "border-amber-500/35 bg-amber-500/8 text-amber-100/90"
+                ? "border-amber-500/35 bg-amber-500/8 text-amber-950 dark:text-amber-100/90"
                 : "border-indigo-500/30 bg-indigo-500/5 text-muted-foreground"
             }`}
           >
@@ -352,7 +352,7 @@ function QuickSearchContent({
                   {activeAutonomousSources.map((id) => (
                     <Badge
                       key={id}
-                      className="border-indigo-400/30 bg-indigo-500/10 text-[10px] text-indigo-200"
+                      className="border-indigo-400/30 bg-indigo-500/10 text-[10px] text-indigo-800 dark:text-indigo-200"
                     >
                       {getSourceShortLabel(id)}
                     </Badge>
@@ -387,7 +387,7 @@ function QuickSearchContent({
           <div
             className={`flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm ${
               volumeMode || estimatedCalls > remaining || creditExhausted
-                ? "border-orange-500/40 bg-orange-500/10 text-orange-100/90"
+                ? "border-orange-500/40 bg-orange-500/10 text-orange-950 dark:text-orange-100/90"
                 : equilibriumMode
                   ? "border-emerald-500/35 bg-emerald-500/8 text-muted-foreground"
                   : "border-blue-500/30 bg-blue-500/5 text-muted-foreground"

@@ -19,10 +19,17 @@ import {
   recoverNotConfiguredCampaignLeadStatuses,
 } from "@/lib/agent-three-campaign-load";
 import { localEmailValidationProvider } from "@/lib/client-email-validation";
+import { evaluateAgentThreePreflight } from "@/lib/agent-three-preflight";
 import {
   AGENT_THREE_TRACKING_ERROR_MESSAGE,
   buildAgentThreeSendRequest,
 } from "@/lib/agent-three-send-request";
+import { getOperationSendAccount } from "@/lib/operation-identity";
+import { OPERATION_SIGNATURE_NOT_CONFIGURED_MESSAGE } from "@/lib/operation-signature";
+import {
+  ensureOperationSignaturesHydrated,
+  useOperationSignatureStore,
+} from "@/store/operation-signature-store";
 import {
   AGENT_THREE_SMTP_MESSAGES,
   type AgentThreeSmtpResult,
@@ -525,6 +532,54 @@ export function useAgentThreeRunner() {
     options: { verify?: boolean } = { verify: true }
   ): Promise<AgentThreeSmtpResult> {
     setStatus(profileId, "validating");
+    try {
+      await ensureOperationSignaturesHydrated();
+    } catch (error) {
+      const result: AgentThreeSmtpResult = {
+        status: "configuration_error",
+        message:
+          error instanceof Error
+            ? error.message
+            : OPERATION_SIGNATURE_NOT_CONFIGURED_MESSAGE,
+      };
+      setSmtpResult(profileId, result);
+      return result;
+    }
+    const signatureState = useOperationSignatureStore.getState();
+    const agentOperation = useAgentThreeStore.getState().operations[profileId];
+    const metrics = getAgentThreeMetrics(agentOperation);
+    const campaign = useCampaignStore
+      .getState()
+      .campaigns.find((item) => item.id === agentOperation.currentCampaignId);
+    const dbWritable = await prepareLocalDataWrite();
+    const preflight = evaluateAgentThreePreflight({
+      operation: profileId,
+      hasHydrated: signatureState.hasHydrated,
+      isHydrating: signatureState.isHydrating,
+      officialSignature: signatureState.getSignature(profileId),
+      senderFromEmail: getOperationSendAccount(profileId).fromEmail,
+      campaign: campaign
+        ? {
+            id: campaign.id,
+            campaignProfileId: campaign.campaignProfileId,
+            subject: campaign.subject,
+            body: campaign.body,
+          }
+        : null,
+      dbWritable,
+      readyCount: metrics.ready,
+      confirmedCount: metrics.sent,
+    });
+    if (!preflight.ok) {
+      const result: AgentThreeSmtpResult = {
+        status: "configuration_error",
+        message:
+          preflight.errorMessage ??
+          OPERATION_SIGNATURE_NOT_CONFIGURED_MESSAGE,
+      };
+      setSmtpResult(profileId, result);
+      return result;
+    }
     const result = await checkAgentThreeSmtpAvailability(profileId, {
       verify: options.verify !== false,
     });
@@ -765,12 +820,17 @@ export function useAgentThreeRunner() {
           );
           continue;
         }
+        await ensureOperationSignaturesHydrated();
+        const officialSignature = useOperationSignatureStore
+          .getState()
+          .getSignature(profileId);
         const requestBuild = campaign
           ? buildAgentThreeSendRequest(
               profileId,
               campaign,
               item,
-              findLead(item.leadId)
+              findLead(item.leadId),
+              { officialSignature }
             )
           : {
               request: null,
@@ -778,6 +838,8 @@ export function useAgentThreeRunner() {
             };
         if (!requestBuild.request) {
           sendLock.release();
+          const trackingFailed =
+            requestBuild.errorMessage === AGENT_THREE_TRACKING_ERROR_MESSAGE;
           useAgentThreeStore.getState().applyDeliveryResult(
             profileId,
             item.id,
@@ -788,7 +850,10 @@ export function useAgentThreeRunner() {
                 AGENT_THREE_TRACKING_ERROR_MESSAGE,
             }
           );
-          setStatus(profileId, "request_error");
+          setStatus(
+            profileId,
+            trackingFailed ? "request_error" : "configuration_error"
+          );
           break;
         }
         let smtpResult: Awaited<ReturnType<typeof requestAgentThreeSmtpSend>>;

@@ -89,17 +89,17 @@ export function ActiveModeBanner() {
                     : GOOGLE_CSE_LABEL}
               </span>
               {isAutonomous && (
-                <span className="rounded-full border border-indigo-400/40 bg-indigo-500/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-indigo-200">
+                <span className="rounded-full border border-indigo-400/40 bg-indigo-500/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-indigo-800 dark:text-indigo-200">
                   Padrão
                 </span>
               )}
               {localProductionEnabled && (
-                <span className="rounded-full border border-violet-400/40 bg-violet-500/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-200">
+                <span className="rounded-full border border-violet-400/40 bg-violet-500/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-800 dark:text-violet-200">
                   Local 24h{nightModeActive ? " · noturno" : ""}
                 </span>
               )}
               {isPremium && (
-                <span className="rounded-full border border-amber-400/35 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-200">
+                <span className="rounded-full border border-amber-400/35 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-900 dark:text-amber-200">
                   Uso ocasional
                 </span>
               )}

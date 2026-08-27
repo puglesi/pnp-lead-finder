@@ -1,6 +1,10 @@
 "use client";
 
 import { useEffect } from "react";
+import {
+  handleDevRuntimeError,
+  handleDevUnhandledRejection,
+} from "@/lib/dev-error-logger";
 import { isLocalDataUnavailableError } from "@/lib/local-data-client";
 
 /**
@@ -16,23 +20,7 @@ export function DevErrorLogger() {
         event.preventDefault();
         return;
       }
-      const message = event.error?.message ?? event.message ?? "Unknown error";
-      const stack =
-        typeof event.error?.stack === "string"
-          ? event.error.stack
-              .split("\n")
-              .slice(0, 8)
-              .map((line: string) => line.trim())
-              .join(" | ")
-          : "";
-      console.error(
-        "[P&P runtime]",
-        message,
-        stack ? `\nstack: ${stack}` : "",
-        event.filename
-          ? `\nfile: ${event.filename}:${event.lineno ?? "?"}:${event.colno ?? "?"}`
-          : ""
-      );
+      handleDevRuntimeError(event);
     };
 
     const onRejection = (event: PromiseRejectionEvent) => {
@@ -40,14 +28,7 @@ export function DevErrorLogger() {
         event.preventDefault();
         return;
       }
-      const reason = event.reason;
-      const message =
-        reason instanceof Error
-          ? reason.message
-          : typeof reason === "string"
-            ? reason
-            : "Unhandled promise rejection";
-      console.error("[P&P promise]", message);
+      handleDevUnhandledRejection(event);
     };
 
     window.addEventListener("error", onError);

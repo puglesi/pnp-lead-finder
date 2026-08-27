@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { DatabaseSync } from "node:sqlite";
 import {
   claimNextAgentThreeItem,
   createInitialAgentThreeSnapshot,
@@ -28,37 +27,47 @@ import {
   withTimeout,
 } from "../src/lib/agent-three-timeouts.ts";
 import { sendAgentThreeSmtp } from "../src/lib/server/agent-three-smtp-core.ts";
+import { assertNoCommercialDatabaseAccess } from "./helpers/commercial-database-guard.mjs";
+
+assertNoCommercialDatabaseAccess(import.meta.url);
 
 const now = "2026-08-26T17:14:24.192Z";
 const later = "2026-08-26T17:20:00.000Z";
-const REAL_DB = "C:/Users/Pugliese/Documents/pnp_lead_finder/data/pnp-lead-finder.sqlite";
-const CASTELNAU_ID =
-  "agent-three-panek-puglesi-camp-1787764449795-2026-08-26T17:14:14.585Z-0-serp-ChIJ07Rl_bIPdkgRIXt37CkX6-M";
-const DENTISTRY_ID =
-  "agent-three-panek-puglesi-camp-1787764449795-2026-08-26T17:14:14.585Z-1-serp-ChIJ1wCtu2UEdkgRntouC5-kNxY";
-const READY_ID =
-  "agent-three-panek-puglesi-camp-1787764449795-2026-08-26T17:14:14.585Z-2-serp-ChIJ2UHJgogNdkgRSGJazDdt8jA";
+const CAMPAIGN_ID = "fixture-reconciliation-campaign";
+const QUEUE_IDS = Array.from({ length: 5 }, (_, index) =>
+  `fixture-reconciliation-queue-${index + 1}`
+);
+const LEAD_IDS = Array.from({ length: 5 }, (_, index) =>
+  `fixture-reconciliation-lead-${index + 1}`
+);
+const EMAILS = Array.from({ length: 5 }, (_, index) =>
+  `recipient-${index + 1}@example.test`
+);
+const PROVIDER_MESSAGE_IDS = [
+  "<fixture-provider-message-1@example.test>",
+  "<fixture-provider-message-2@example.test>",
+];
 
 const confirmedRecords = [
   {
-    id: "intent-5a16e25e-9037-4183-a8ac-c5acfe4f5ffc",
-    campaignId: "camp-1787764449795",
-    leadId: "serp-ChIJ07Rl_bIPdkgRIXt37CkX6-M",
-    email: "info@castelnaudentists.com",
+    id: "fixture-send-intent-1",
+    campaignId: CAMPAIGN_ID,
+    leadId: LEAD_IDS[0],
+    email: EMAILS[0],
     operation: "panek-puglesi",
-    queueItemId: CASTELNAU_ID,
-    providerMessageId: "<e29263ca-9dbe-4c0e-ccb1-8250f538261b@gmail.com>",
+    queueItemId: QUEUE_IDS[0],
+    providerMessageId: PROVIDER_MESSAGE_IDS[0],
     confirmedAt: "2026-08-26T17:14:24.192Z",
     status: "confirmed",
   },
   {
-    id: "intent-fc113eb7-3090-4499-8686-2c6c767e3947",
-    campaignId: "camp-1787764449795",
-    leadId: "serp-ChIJ1wCtu2UEdkgRntouC5-kNxY",
-    email: "support@dentistryforyou.co.uk",
+    id: "fixture-send-intent-2",
+    campaignId: CAMPAIGN_ID,
+    leadId: LEAD_IDS[1],
+    email: EMAILS[1],
     operation: "panek-puglesi",
-    queueItemId: DENTISTRY_ID,
-    providerMessageId: "<bc0d70ff-b0b7-d80e-7650-33d4eb2a1cf2@gmail.com>",
+    queueItemId: QUEUE_IDS[1],
+    providerMessageId: PROVIDER_MESSAGE_IDS[1],
     confirmedAt: "2026-08-26T17:14:24.656Z",
     status: "confirmed",
   },
@@ -88,21 +97,23 @@ function loadedSnapshot() {
   const selected = selectAgentThreeCampaign(
     createInitialAgentThreeSnapshot(),
     "panek-puglesi",
-    "camp-1787764449795",
+    CAMPAIGN_ID,
     now
   );
-  return loadAgentThreeLeads(
+  const loaded = loadAgentThreeLeads(
     selected,
     "panek-puglesi",
-    "camp-1787764449795",
+    CAMPAIGN_ID,
     [
-      lead("serp-ChIJ07Rl_bIPdkgRIXt37CkX6-M", "info@castelnaudentists.com"),
-      lead("serp-ChIJ1wCtu2UEdkgRntouC5-kNxY", "support@dentistryforyou.co.uk"),
-      lead("serp-ChIJ2UHJgogNdkgRSGJazDdt8jA", "info@pmcdental.uk"),
+      ...LEAD_IDS.map((leadId, index) => lead(leadId, EMAILS[index])),
     ],
-    50,
+    5,
     now
   ).snapshot;
+  loaded.operations["panek-puglesi"].queue = loaded.operations[
+    "panek-puglesi"
+  ].queue.map((item, index) => ({ ...item, id: QUEUE_IDS[index] }));
+  return loaded;
 }
 
 test("A: SMTP sucesso + updateCampaign falha mantém SENT_CONFIRMED", async () => {
@@ -112,7 +123,7 @@ test("A: SMTP sucesso + updateCampaign falha mantém SENT_CONFIRMED", async () =
   const smtpResult = {
     status: "sent",
     message: "E-mail enviado.",
-    messageId: "<e29263ca-9dbe-4c0e-ccb1-8250f538261b@gmail.com>",
+    messageId: PROVIDER_MESSAGE_IDS[0],
   };
   const applied = applyAgentThreeSmtpResult(
     claimed.snapshot,
@@ -128,7 +139,7 @@ test("A: SMTP sucesso + updateCampaign falha mantém SENT_CONFIRMED", async () =
   assert.equal(applied.snapshot.operations["panek-puglesi"].queue[0].queueStatus, "sent");
   assert.equal(
     applied.snapshot.operations["panek-puglesi"].queue[0].providerMessageId,
-    "<e29263ca-9dbe-4c0e-ccb1-8250f538261b@gmail.com>"
+    PROVIDER_MESSAGE_IDS[0]
   );
   assert.equal(isConfirmedSmtpDelivery(smtpResult), true);
   const next = decideRunnerContinuation({
@@ -142,12 +153,12 @@ test("A: SMTP sucesso + updateCampaign falha mantém SENT_CONFIRMED", async () =
 
 test("B: SMTP sucesso + falha de UI não duplica", () => {
   const item = {
-    id: CASTELNAU_ID,
-    leadId: "serp-ChIJ07Rl_bIPdkgRIXt37CkX6-M",
-    campaignId: "camp-1787764449795",
+    id: QUEUE_IDS[0],
+    leadId: LEAD_IDS[0],
+    campaignId: CAMPAIGN_ID,
     campaignProfileId: "panek-puglesi",
-    normalizedEmail: "info@castelnaudentists.com",
-    originalEmail: "info@castelnaudentists.com",
+    normalizedEmail: EMAILS[0],
+    originalEmail: EMAILS[0],
     queueStatus: "ready",
   };
   const first = shouldSkipSmtpForItem(item, confirmedRecords);
@@ -162,9 +173,8 @@ test("B: SMTP sucesso + falha de UI não duplica", () => {
 test("C: reload READY no client mas confirmed no SQLite vira SENT_CONFIRMED", () => {
   let snapshot = loadedSnapshot();
   snapshot.operations["panek-puglesi"].queue = snapshot.operations["panek-puglesi"].queue.map(
-    (item, index) => ({
+    (item) => ({
       ...item,
-      id: index === 0 ? CASTELNAU_ID : index === 1 ? DENTISTRY_ID : item.id,
       queueStatus: "ready",
     })
   );
@@ -185,8 +195,6 @@ test("D: restart SENDING + confirmed history vira sent", () => {
   let snapshot = loadedSnapshot();
   snapshot = startAgentThree(snapshot, "panek-puglesi", true, now).snapshot;
   const claimed = claimNextAgentThreeItem(snapshot, "panek-puglesi", now);
-  claimed.snapshot.operations["panek-puglesi"].queue[0].id = CASTELNAU_ID;
-  claimed.item.id = CASTELNAU_ID;
   const result = reconcileAgentThreeOperation(
     claimed.snapshot,
     "panek-puglesi",
@@ -251,12 +259,12 @@ test("I: timeout não deixa promise pendurada", async () => {
 test("J: SENT_CONFIRMED nunca chama SMTP outra vez", async () => {
   let smtpCalls = 0;
   const item = {
-    id: CASTELNAU_ID,
-    leadId: "serp-ChIJ07Rl_bIPdkgRIXt37CkX6-M",
-    campaignId: "camp-1787764449795",
+    id: QUEUE_IDS[0],
+    leadId: LEAD_IDS[0],
+    campaignId: CAMPAIGN_ID,
     campaignProfileId: "panek-puglesi",
-    normalizedEmail: "info@castelnaudentists.com",
-    originalEmail: "info@castelnaudentists.com",
+    normalizedEmail: EMAILS[0],
+    originalEmail: EMAILS[0],
     queueStatus: "sent",
     providerMessageId: confirmedRecords[0].providerMessageId,
   };
@@ -274,9 +282,9 @@ test("J: SENT_CONFIRMED nunca chama SMTP outra vez", async () => {
     await sendAgentThreeSmtp(
       {
         operation: "panek-puglesi",
-        recipient: "info@castelnaudentists.com",
+        recipient: EMAILS[0],
         subject: "x",
-        campaignId: "camp-1787764449795",
+        campaignId: CAMPAIGN_ID,
         leadId: item.leadId,
         queueItemId: item.id,
       },
@@ -305,31 +313,42 @@ test("K: providerMessageId obrigatório para confirmed", () => {
   );
 });
 
-test("L: fila atual 2 sent / 48 ready permanece intacta no SQLite real", () => {
-  const db = new DatabaseSync(REAL_DB, { readOnly: true });
-  try {
-    const agent = JSON.parse(
-      db.prepare("SELECT data_json FROM commercial_state WHERE store_key=?").get("pnp-agent-three").data_json
-    );
-    const op = agent.operations["panek-puglesi"];
-    const counts = op.queue.reduce((acc, item) => {
-      acc[item.queueStatus] = (acc[item.queueStatus] || 0) + 1;
-      return acc;
-    }, {});
-    const sends = db.prepare("SELECT id, status, provider_message_id FROM send_history").all();
-    assert.equal(op.queue.length, 50);
-    assert.equal(counts.sent, 2);
-    assert.equal(counts.ready, 48);
-    assert.equal(counts.sending || 0, 0);
-    assert.equal(op.status, "paused");
-    assert.equal(op.queue[0].id, CASTELNAU_ID);
-    assert.equal(op.queue[1].id, DENTISTRY_ID);
-    assert.equal(op.queue[2].id, READY_ID);
-    assert.equal(sends.length, 2);
-    assert.equal(sends.every((row) => row.status === "confirmed"), true);
-  } finally {
-    db.close();
-  }
+test("L: fixture stale reconcilia 2 confirmed / 3 ready sem banco externo", () => {
+  const staleSnapshot = loadedSnapshot();
+  const staleOperation = staleSnapshot.operations["panek-puglesi"];
+  staleOperation.status = "paused";
+  staleOperation.processedCount = 0;
+  staleOperation.queue = staleOperation.queue.map((item) => ({
+    ...item,
+    queueStatus: "ready",
+    providerMessageId: undefined,
+    sentAt: undefined,
+  }));
+
+  const result = reconcileAgentThreeOperation(
+    staleSnapshot,
+    "panek-puglesi",
+    confirmedRecords,
+    later
+  );
+  const operation = result.snapshot.operations["panek-puglesi"];
+  const counts = operation.queue.reduce((acc, item) => {
+    acc[item.queueStatus] = (acc[item.queueStatus] || 0) + 1;
+    return acc;
+  }, {});
+
+  assert.equal(operation.queue.length, 5);
+  assert.equal(counts.sent, 2);
+  assert.equal(counts.ready, 3);
+  assert.equal(counts.sending || 0, 0);
+  assert.equal(operation.status, "paused");
+  assert.deepEqual(operation.queue.map((item) => item.id), QUEUE_IDS);
+  assert.deepEqual(
+    operation.queue.slice(0, 2).map((item) => item.providerMessageId),
+    PROVIDER_MESSAGE_IDS
+  );
+  assert.equal(operation.processedCount, 2);
+  assert.equal(result.confirmedCount, 2);
 });
 
 test("M: zero emails reais nesta suíte", () => {
@@ -352,31 +371,23 @@ test("N: zero SerpAPI real nesta suíte", () => {
 
 test("matchPersistedSend usa queueItemId e não recria ids", () => {
   const item = {
-    id: CASTELNAU_ID,
-    leadId: "serp-ChIJ07Rl_bIPdkgRIXt37CkX6-M",
-    campaignId: "camp-1787764449795",
+    id: QUEUE_IDS[0],
+    leadId: LEAD_IDS[0],
+    campaignId: CAMPAIGN_ID,
     campaignProfileId: "panek-puglesi",
-    normalizedEmail: "info@castelnaudentists.com",
-    originalEmail: "info@castelnaudentists.com",
+    normalizedEmail: EMAILS[0],
+    originalEmail: EMAILS[0],
   };
-  assert.equal(matchPersistedSend(item, confirmedRecords).queueItemId, CASTELNAU_ID);
+  assert.equal(matchPersistedSend(item, confirmedRecords).queueItemId, QUEUE_IDS[0]);
 });
 
 test("campaign reconciliation preenche sentCount a partir do history", () => {
   const campaign = reconcileCampaignFromSendHistory(
     {
-      id: "camp-1787764449795",
+      id: CAMPAIGN_ID,
       campaignProfileId: "panek-puglesi",
-      leadIds: [
-        "serp-ChIJ07Rl_bIPdkgRIXt37CkX6-M",
-        "serp-ChIJ1wCtu2UEdkgRntouC5-kNxY",
-        "serp-ChIJ2UHJgogNdkgRSGJazDdt8jA",
-      ],
-      leadStatuses: [
-        { leadId: "serp-ChIJ07Rl_bIPdkgRIXt37CkX6-M", status: "pending" },
-        { leadId: "serp-ChIJ1wCtu2UEdkgRntouC5-kNxY", status: "pending" },
-        { leadId: "serp-ChIJ2UHJgogNdkgRSGJazDdt8jA", status: "pending" },
-      ],
+      leadIds: LEAD_IDS,
+      leadStatuses: LEAD_IDS.map((leadId) => ({ leadId, status: "pending" })),
       sentCount: 0,
       failedCount: 0,
     },

@@ -29,9 +29,9 @@ import type { CampaignTrackingEvent } from "@/types/campaign-tracking";
 import { cn } from "@/lib/utils";
 
 const EVENT_LABELS = {
-  open: { label: "Abertura", className: "text-cyan-400 bg-cyan-500/10 border-cyan-500/30" },
-  click: { label: "Clique", className: "text-violet-400 bg-violet-500/10 border-violet-500/30" },
-  reply: { label: "Resposta", className: "text-amber-400 bg-amber-500/10 border-amber-500/30" },
+  open: { label: "Abertura", className: "text-cyan-800 bg-cyan-500/10 border-cyan-500/30 dark:text-cyan-400" },
+  click: { label: "Clique", className: "text-violet-800 bg-violet-500/10 border-violet-500/30 dark:text-violet-400" },
+  reply: { label: "Resposta", className: "text-amber-900 bg-amber-500/10 border-amber-500/30 dark:text-amber-400" },
 } as const;
 
 function formatEventTime(iso: string) {
@@ -135,7 +135,7 @@ export function CampaignPerformanceReport({
             value: delivery.sentCount,
             sub: `de ${campaign.leadIds.length} leads`,
             icon: Mail,
-            color: "text-emerald-400",
+            color: "text-emerald-700 dark:text-emerald-400",
             border: "border-emerald-500/25",
             bg: "from-emerald-500/10",
           },
@@ -144,7 +144,7 @@ export function CampaignPerformanceReport({
             value: delivery.openedCount,
             sub: `${getOpenRate(campaign)}% taxa`,
             icon: Activity,
-            color: "text-cyan-400",
+            color: "text-cyan-700 dark:text-cyan-400",
             border: "border-cyan-500/25",
             bg: "from-cyan-500/10",
           },
@@ -153,7 +153,7 @@ export function CampaignPerformanceReport({
             value: delivery.clickedCount,
             sub: `${getClickRate(campaign)}% taxa`,
             icon: ExternalLink,
-            color: "text-violet-400",
+            color: "text-violet-700 dark:text-violet-400",
             border: "border-violet-500/25",
             bg: "from-violet-500/10",
           },
@@ -162,7 +162,7 @@ export function CampaignPerformanceReport({
             value: delivery.repliedCount,
             sub: `${getResponseRate(campaign)}% taxa`,
             icon: TrendingUp,
-            color: "text-amber-400",
+            color: "text-amber-700 dark:text-amber-400",
             border: "border-amber-500/25",
             bg: "from-amber-500/10",
           },
@@ -233,7 +233,7 @@ export function CampaignPerformanceReport({
             <ul className="space-y-2 text-sm text-muted-foreground">
               {insights.map((line, i) => (
                 <li key={i} className="flex gap-2">
-                  <span className="text-blue-400">•</span>
+                  <span className="text-blue-700 dark:text-blue-400">•</span>
                   {line}
                 </li>
               ))}

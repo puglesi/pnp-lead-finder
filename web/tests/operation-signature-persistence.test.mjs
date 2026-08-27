@@ -8,6 +8,7 @@ import {
   loadOfficialSignatureRecords,
   OFFICIAL_SIGNATURE_DB_NAME,
   parseOfficialSignatureBackup,
+  resolveOfficialSignaturesFromSources,
 } from "../src/lib/operation-signature-repository.ts";
 import {
   bindSignatureToOperation,
@@ -104,6 +105,47 @@ test("enabled + HTML vazio é rejeitado e bloqueia preflight", () => {
     }),
     OPERATION_SIGNATURE_NOT_CONFIGURED_MESSAGE
   );
+});
+
+test("SQLite válido vence IndexedDB vazio na mesma operação", () => {
+  const sqlite = [
+    createOfficialSignatureRecord({
+      operationId: "panek-puglesi",
+      enabled: true,
+      html: PNP_HTML,
+    }),
+  ];
+  const resolved = resolveOfficialSignaturesFromSources({
+    sqlite,
+    indexedDb: [],
+  });
+  assert.equal(resolved.records[0]?.html, PNP_HTML);
+  assert.equal(resolved.migrateToSqlite.length, 0);
+});
+
+test("P&P e Modeclean não fazem fallback cruzado", () => {
+  const resolved = resolveOfficialSignaturesFromSources({
+    sqlite: [
+      createOfficialSignatureRecord({
+        operationId: "modeclean",
+        enabled: true,
+        html: MODECLEAN_HTML,
+      }),
+    ],
+    indexedDb: [
+      createOfficialSignatureRecord({
+        operationId: "panek-puglesi",
+        enabled: true,
+        html: PNP_HTML,
+      }),
+    ],
+  });
+  const pnp = resolved.records.find((item) => item.operationId === "panek-puglesi");
+  const mode = resolved.records.find((item) => item.operationId === "modeclean");
+  assert.equal(pnp?.html, PNP_HTML);
+  assert.equal(mode?.html, MODECLEAN_HTML);
+  assert.doesNotMatch(pnp?.html ?? "", /Modeclean/);
+  assert.doesNotMatch(mode?.html ?? "", /Panek/);
 });
 
 test("P&P e Modeclean permanecem isoladas por chave operacional", async () => {

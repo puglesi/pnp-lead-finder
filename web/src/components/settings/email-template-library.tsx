@@ -150,7 +150,7 @@ export function EmailTemplateLibrary() {
                     <div className="flex flex-wrap items-center gap-2">
                       <FileText className="size-4 text-violet-300" />
                       <p className="font-semibold">{template.name}</p>
-                      {template.isDefault && <Badge className="gap-1 bg-amber-500/15 text-amber-200"><Star className="size-3 fill-current" /> Padrão</Badge>}
+                      {template.isDefault && <Badge className="gap-1 bg-amber-500/15 text-amber-900 dark:text-amber-200"><Star className="size-3 fill-current" /> Padrão</Badge>}
                     </div>
                     <p className="mt-2 truncate text-sm text-muted-foreground">{template.subject}</p>
                     <p className="mt-1 text-xs text-muted-foreground">Remetente: {template.sender} · Reply-To: {template.replyTo}</p>

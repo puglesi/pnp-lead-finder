@@ -51,7 +51,10 @@ import {
 import { useAgentThreeStore } from "@/store/agent-three-store";
 import { useCampaignStore } from "@/store/campaign-store";
 import { useEmailTemplateStore } from "@/store/email-template-store";
-import { useOperationSignatureStore } from "@/store/operation-signature-store";
+import {
+  ensureOperationSignaturesHydrated,
+  useOperationSignatureStore,
+} from "@/store/operation-signature-store";
 import { GlobalDeduplicationPreviewPanel } from "@/components/campaigns/global-deduplication-preview";
 import {
   CAMPAIGN_PROFILES,
@@ -70,7 +73,12 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { bindSignatureToOperation } from "@/lib/operation-signature";
+import {
+  bindSignatureToOperation,
+  getOperationSignatureUiStatus,
+  OPERATION_SIGNATURE_NOT_CONFIGURED_MESSAGE,
+} from "@/lib/operation-signature";
+import { isSignatureHtmlEmpty } from "@/lib/signature-html";
 
 const subscribeToHydration = () => () => {};
 const getClientHydrationSnapshot = () => true;
@@ -151,6 +159,12 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
   const officialSignatures = useOperationSignatureStore(
     (state) => state.signatures
   );
+  const signaturesHasHydrated = useOperationSignatureStore(
+    (state) => state.hasHydrated
+  );
+  const signaturesIsHydrating = useOperationSignatureStore(
+    (state) => state.isHydrating
+  );
   const runner = useAgentThreeRunner();
 
   const profileId: CampaignProfileId = hydrated
@@ -165,6 +179,12 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
   const isImportMode = recipientSourceMode === "import";
   const stepTwo = agentThreeStepTwoKind(recipientSourceMode);
   const sendAccount = getOperationSendAccount(profileId);
+  const signatureStatus = getOperationSignatureUiStatus({
+    operation: profileId,
+    hasHydrated: signaturesHasHydrated,
+    isHydrating: signaturesIsHydrating,
+    signature: officialSignatures[profileId],
+  });
   const operationTemplates = getEmailTemplatesForOperation(
     templates,
     profileId
@@ -215,20 +235,25 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
 
   useEffect(() => {
     if (!hydrated) return;
+    void ensureOperationSignaturesHydrated().catch(() => undefined);
     void runner.loadCampaign(profileId, operation.currentCampaignId);
     // Auto-load when profile/campaign selection changes after hydration.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runner methods are stable for this UI flow
   }, [hydrated, profileId, operation.currentCampaignId]);
 
-  // Operation change → account + signature must switch immediately on current campaign.
+  // Bind the official current signature after hydration. Never copy empty HTML.
   useEffect(() => {
     if (!hydrated || !currentCampaign) return;
     if (currentCampaign.campaignProfileId !== profileId) return;
+    if (!signaturesHasHydrated || signaturesIsHydrating) return;
     const account = getOperationSendAccount(profileId);
     const signature = officialSignatures[profileId];
+    const official = bindSignatureToOperation(profileId, signature);
+    if (isSignatureHtmlEmpty(official.body)) return;
     if (
       currentCampaign.fromEmail === account.fromEmail &&
-      currentCampaign.signature?.body === signature.body
+      currentCampaign.signature?.body === official.body &&
+      currentCampaign.signature?.operation === profileId
     ) {
       return;
     }
@@ -236,7 +261,7 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
       fromName: account.fromName,
       fromEmail: account.fromEmail,
       replyTo: account.replyTo,
-      signature: bindSignatureToOperation(profileId, signature),
+      signature: official,
     });
   }, [
     hydrated,
@@ -245,6 +270,8 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
     currentCampaign?.id,
     currentCampaign?.campaignProfileId,
     officialSignatures,
+    signaturesHasHydrated,
+    signaturesIsHydrating,
     updateCampaign,
   ]);
 
@@ -446,6 +473,7 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
     if (!template || !currentCampaign) return;
     const account = getOperationSendAccount(profileId);
     const signature = getSignature(profileId);
+    const official = bindSignatureToOperation(profileId, signature);
     setImportTemplateId(templateId);
     setSessionSubject(template.subject);
     setSessionBody(template.body);
@@ -459,7 +487,7 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
       fromName: account.fromName,
       fromEmail: account.fromEmail,
       replyTo: account.replyTo,
-      signature: bindSignatureToOperation(profileId, signature),
+      ...(isSignatureHtmlEmpty(official.body) ? {} : { signature: official }),
       leadIds: currentCampaign.leadIds,
     });
     toast.success(`Modelo “${template.name}” aplicado a esta execução.`);
@@ -576,6 +604,12 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
         smtpMessage: smtpResult?.message,
       });
     }
+    if (signatureStatus === "checking") {
+      return "Carregando assinatura oficial…";
+    }
+    if (signatureStatus === "not_configured") {
+      return OPERATION_SIGNATURE_NOT_CONFIGURED_MESSAGE;
+    }
     if (connectionStatus === "configuration_error") {
       return describeAgentThreeStartBlock({
         configurationError: true,
@@ -660,6 +694,23 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
               <span className="text-muted-foreground">Assinatura: </span>
               <strong>{sendAccount.signatureLabel}</strong>
             </p>
+            {signatureStatus === "checking" ? (
+              <p className="mt-2 text-xs text-muted-foreground" role="status">
+                Carregando assinatura oficial…
+              </p>
+            ) : signatureStatus === "configured" ? (
+              <p
+                className="mt-2 flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400"
+                role="status"
+              >
+                <CheckCircle2 className="size-3.5" />
+                Assinatura oficial configurada
+              </p>
+            ) : (
+              <p className="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300">
+                {OPERATION_SIGNATURE_NOT_CONFIGURED_MESSAGE}
+              </p>
+            )}
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">

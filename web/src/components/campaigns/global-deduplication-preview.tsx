@@ -28,7 +28,7 @@ export function GlobalDeduplicationPreviewPanel({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <p className="flex items-center gap-2 font-semibold">
-            <ShieldCheck className="size-5 text-violet-300" />
+            <ShieldCheck className="size-5 text-violet-700 dark:text-violet-300" />
             Prévia obrigatória de deduplicação global
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
@@ -53,14 +53,14 @@ export function GlobalDeduplicationPreviewPanel({
       </div>
 
       {crossOperation.length > 0 && (
-        <div className="rounded-lg border border-sky-500/35 bg-sky-500/10 p-3 text-sm text-sky-100">
+        <div className="rounded-lg border border-sky-500/35 bg-sky-500/10 p-3 text-sm text-sky-950 dark:text-sky-100">
           <p className="flex items-center gap-2 font-medium">
-            <AlertTriangle className="size-4 text-sky-300" />
+            <AlertTriangle className="size-4 text-sky-700 dark:text-sky-300" />
             Alerta: já contatado pela outra operação — não é erro de envio nem
             bloqueio automático
           </p>
           {crossOperation.map((decision) => (
-            <p key={`${decision.leadId}-cross`} className="mt-1 text-xs text-sky-50/90">
+            <p key={`${decision.leadId}-cross`} className="mt-1 text-xs text-sky-800 dark:text-sky-50/90">
               {decision.company} · {decision.normalizedEmail} — campanha{" "}
               {decision.otherOperationContact?.campaignName}
             </p>
@@ -96,9 +96,9 @@ export function GlobalDeduplicationPreviewPanel({
                 <span
                   className={
                     isBlock
-                      ? "text-red-300"
+                      ? "text-red-800 dark:text-red-300"
                       : isDup
-                        ? "text-orange-200"
+                        ? "text-orange-800 dark:text-orange-200"
                         : "text-muted-foreground"
                   }
                 >
@@ -111,7 +111,7 @@ export function GlobalDeduplicationPreviewPanel({
       )}
 
       {preview.finalSendCount > 0 && (
-        <p className="flex items-center gap-2 text-sm text-emerald-300">
+        <p className="flex items-center gap-2 text-sm text-emerald-800 dark:text-emerald-300">
           <CheckCircle2 className="size-4" />
           {preview.finalSendCount} destinatário(s) autorizado(s) após a verificação global.
         </p>

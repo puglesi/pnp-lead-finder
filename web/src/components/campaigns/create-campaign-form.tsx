@@ -492,7 +492,7 @@ function CreateCampaignFormContent({
               <MapPin className="size-3.5" />
               {location}
             </span>
-            <span className="inline-flex items-center gap-1 font-medium text-emerald-300">
+            <span className="inline-flex items-center gap-1 font-medium text-emerald-700 dark:text-emerald-300">
               <Users className="size-3.5" />
               {eligibleCount} elegíveis
             </span>
@@ -790,7 +790,7 @@ function CreateCampaignFormContent({
     >
       <div className="space-y-6">
         {reuseSourceName && (
-          <div className="rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-3 text-sm text-violet-100">
+          <div className="rounded-xl border border-violet-500/30 bg-violet-500/10 px-4 py-3 text-sm text-violet-950 dark:text-violet-100">
             Reutilizando template de <strong>{reuseSourceName}</strong>. O email,
             assinatura, anexo e configurações de envio foram copiados — escolha uma
             <strong> nova lista de leads</strong> abaixo.
@@ -909,7 +909,7 @@ function CreateCampaignFormContent({
                 </div>
                 <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
                   <p className="text-[11px] text-muted-foreground">Elegíveis</p>
-                  <p className="text-xl font-semibold tabular-nums text-emerald-400">
+                  <p className="text-xl font-semibold tabular-nums text-emerald-700 dark:text-emerald-400">
                     {topCards.eligible}
                   </p>
                 </div>

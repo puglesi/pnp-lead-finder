@@ -14,7 +14,9 @@ import type { Lead } from "../types/lead.ts";
 import {
   getOperationSignatureMismatch,
   OPERATION_SIGNATURE_MISMATCH_MESSAGE,
+  resolveOfficialSendSignature,
 } from "./operation-signature.ts";
+import type { CampaignSignature } from "../types/campaign.ts";
 
 export const AGENT_THREE_TRACKING_ERROR_MESSAGE =
   "Não foi possível preparar o rastreamento da mensagem.";
@@ -29,6 +31,8 @@ export interface AgentThreeSendRequestBuilderDependencies {
     html: string,
     payload: CampaignTrackingPayload
   ) => string;
+  /** Official current operation signature. Wins over campaign.signature. */
+  officialSignature?: CampaignSignature | null;
 }
 
 function templateLead(
@@ -79,9 +83,12 @@ export function buildAgentThreeSendRequest(
       errorMessage: OPERATION_SIGNATURE_MISMATCH_MESSAGE,
     };
   }
+  const signature = dependencies.officialSignature
+    ? resolveOfficialSendSignature(profileId, dependencies.officialSignature)
+    : campaign.signature;
   const signatureMismatch = getOperationSignatureMismatch(
     profileId,
-    campaign.signature,
+    signature,
     { requireOperationId: true }
   );
   if (signatureMismatch) {
@@ -99,7 +106,7 @@ export function buildAgentThreeSendRequest(
     const baseHtml = appendUnsubscribeFooter(
       renderFullCampaignEmail(
         campaign.body,
-        campaign.signature,
+        signature,
         recipientLead
       ),
       campaign.unsubscribeLink,

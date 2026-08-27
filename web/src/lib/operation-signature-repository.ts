@@ -131,6 +131,45 @@ export function readLegacyOfficialSignatures(
   }
 }
 
+/**
+ * SQLite is the official source. IndexedDB is a per-operation recovery
+ * fallback only when SQLite has no valid HTML for that operation.
+ * Valid P&P never falls back to Modeclean, and vice versa.
+ */
+export function resolveOfficialSignaturesFromSources(input: {
+  sqlite: readonly OfficialSignatureRecord[];
+  indexedDb?: readonly OfficialSignatureRecord[] | null;
+}): {
+  records: OfficialSignatureRecord[];
+  migrateToSqlite: OfficialSignatureRecord[];
+} {
+  const sqliteByOp = new Map<CampaignProfileId, OfficialSignatureRecord>();
+  const indexedByOp = new Map<CampaignProfileId, OfficialSignatureRecord>();
+  for (const raw of input.sqlite) {
+    const normalized = normalizeOfficialSignatureRecord(raw);
+    if (normalized) sqliteByOp.set(normalized.operationId, normalized);
+  }
+  for (const raw of input.indexedDb ?? []) {
+    const normalized = normalizeOfficialSignatureRecord(raw);
+    if (normalized) indexedByOp.set(normalized.operationId, normalized);
+  }
+  const records: OfficialSignatureRecord[] = [];
+  const migrateToSqlite: OfficialSignatureRecord[] = [];
+  for (const operationId of SIGNATURE_OPERATIONS) {
+    const sqlite = sqliteByOp.get(operationId);
+    if (sqlite) {
+      records.push(sqlite);
+      continue;
+    }
+    const indexed = indexedByOp.get(operationId);
+    if (indexed) {
+      records.push(indexed);
+      migrateToSqlite.push(indexed);
+    }
+  }
+  return { records, migrateToSqlite };
+}
+
 export async function loadOfficialSignatureRecords(
   repository: OfficialSignatureRepository,
   legacyRaw: string | null
@@ -342,31 +381,37 @@ export function createDurableOfficialSignatureRepository(): OfficialSignatureRep
   const cache = createIndexedDbOfficialSignatureRepository();
   return {
     async getAll() {
+      let sqlite: OfficialSignatureRecord[] = [];
       try {
         const records = await requestLocalSignatures();
-        if (Array.isArray(records) && records.length > 0) {
-          await cache.putMany(records).catch(() => undefined);
-          return records.map(normalizeOfficialSignatureRecord).filter(
-            (record): record is OfficialSignatureRecord => Boolean(record)
-          );
+        if (Array.isArray(records)) {
+          sqlite = records
+            .map(normalizeOfficialSignatureRecord)
+            .filter((record): record is OfficialSignatureRecord => Boolean(record));
         }
       } catch {
         // Browser cache remains a secondary read fallback.
       }
-      return cache.getAll();
+      let indexedDb: OfficialSignatureRecord[] = [];
+      try {
+        indexedDb = (await cache.getAll())
+          .map(normalizeOfficialSignatureRecord)
+          .filter((record): record is OfficialSignatureRecord => Boolean(record));
+      } catch {
+        indexedDb = [];
+      }
+      const resolved = resolveOfficialSignaturesFromSources({ sqlite, indexedDb });
+      if (resolved.migrateToSqlite.length > 0) {
+        await putLocalSignatures(resolved.migrateToSqlite).catch(() => undefined);
+      }
+      if (resolved.records.length > 0) {
+        await cache.putMany(resolved.records).catch(() => undefined);
+      }
+      return resolved.records;
     },
     async get(operationId) {
-      try {
-        const record = await requestLocalSignatures(operationId);
-        const normalized = normalizeOfficialSignatureRecord(record);
-        if (normalized) {
-          await cache.put(normalized).catch(() => undefined);
-          return normalized;
-        }
-      } catch {
-        // Browser cache remains a secondary read fallback.
-      }
-      return cache.get(operationId);
+      const all = await this.getAll();
+      return all.find((record) => record.operationId === operationId) ?? null;
     },
     async put(record) {
       const normalized = normalizeOfficialSignatureRecord(record);

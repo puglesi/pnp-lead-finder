@@ -151,7 +151,7 @@ export function CampaignSendNowDialog({
       aria-modal="true"
       aria-labelledby="send-now-title"
     >
-      <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-border bg-card p-5 shadow-xl">
+      <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-2xl border border-border bg-card p-5 text-[#111111] shadow-xl dark:text-slate-100">
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <h2 id="send-now-title" className="text-lg font-semibold">

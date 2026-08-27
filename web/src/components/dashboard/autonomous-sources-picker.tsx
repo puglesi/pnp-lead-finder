@@ -101,7 +101,7 @@ export function AutonomousSourcesPicker({
               className={cn(
                 "inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-all",
                 checked
-                  ? "border-indigo-400/50 bg-indigo-500/20 text-indigo-100"
+                  ? "border-indigo-400/50 bg-indigo-500/20 text-indigo-900 dark:text-indigo-100"
                   : "border-border/60 bg-background/40 text-muted-foreground hover:border-indigo-400/30"
               )}
             >
@@ -145,7 +145,7 @@ export function AutonomousSourcesPicker({
                 className={cn(
                   "rounded-lg border px-3 py-2 text-left text-sm transition-all",
                   active
-                    ? "border-indigo-400/50 bg-indigo-500/15 text-indigo-100"
+                    ? "border-indigo-400/50 bg-indigo-500/15 text-indigo-900 dark:text-indigo-100"
                     : "border-border/60 hover:border-indigo-400/25"
                 )}
               >
@@ -171,7 +171,7 @@ export function AutonomousSourcesPicker({
               className={cn(
                 "rounded-full border px-3 py-1 text-xs transition-all",
                 singleSource === id
-                  ? "border-indigo-400/60 bg-indigo-500/20 text-indigo-100"
+                  ? "border-indigo-400/60 bg-indigo-500/20 text-indigo-900 dark:text-indigo-100"
                   : "border-border/60 text-muted-foreground"
               )}
             >
@@ -187,7 +187,7 @@ export function AutonomousSourcesPicker({
         {activeSources.map((id) => (
           <Badge
             key={id}
-            className="border-indigo-400/30 bg-indigo-500/15 text-[10px] text-indigo-200"
+            className="border-indigo-400/30 bg-indigo-500/15 text-[10px] text-indigo-800 dark:text-indigo-200"
           >
             {getSourceShortLabel(id)}
           </Badge>

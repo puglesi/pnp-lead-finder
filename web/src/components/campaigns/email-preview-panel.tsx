@@ -116,7 +116,7 @@ export function EmailPreviewPanel({
                 className={cn(
                   "rounded-full border px-2.5 py-1 text-xs transition-all",
                   lead.id === l.id
-                    ? "border-emerald-400/50 bg-emerald-500/15 text-emerald-100"
+                    ? "border-emerald-400/50 bg-emerald-500/15 text-emerald-900 dark:text-emerald-100"
                     : "border-border/60 text-muted-foreground hover:border-emerald-400/30"
                 )}
               >

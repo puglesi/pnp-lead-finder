@@ -289,7 +289,7 @@ export function RichEmailEditor({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-xl border border-border/60 bg-white shadow-sm",
+        "overflow-hidden rounded-xl border border-border/60 bg-card shadow-sm",
         className
       )}
     >
@@ -482,8 +482,8 @@ export function RichEmailEditor({
                 className={cn(
                   "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-sm font-medium transition-all",
                   variablesOpen
-                    ? "border-blue-500/40 bg-blue-500/15 text-blue-200"
-                    : "border-blue-500/30 bg-blue-500/10 text-blue-300 hover:border-blue-400/50 hover:bg-blue-500/15",
+                    ? "border-blue-500/40 bg-blue-500/15 text-blue-800 dark:text-blue-200"
+                    : "border-blue-500/30 bg-blue-500/10 text-blue-700 hover:border-blue-400/50 hover:bg-blue-500/15 dark:text-blue-300",
                   disabled && "pointer-events-none opacity-40"
                 )}
               >
@@ -503,7 +503,7 @@ export function RichEmailEditor({
                         onClick={() => insertVariable(v.key)}
                         className="flex items-center justify-between rounded-lg px-3 py-2 text-left text-sm hover:bg-blue-500/10"
                       >
-                        <span className="font-mono text-xs text-blue-300">{v.key}</span>
+                        <span className="font-mono text-xs text-blue-700 dark:text-blue-300">{v.key}</span>
                         <span className="text-xs text-muted-foreground">{v.label}</span>
                       </button>
                     ))}

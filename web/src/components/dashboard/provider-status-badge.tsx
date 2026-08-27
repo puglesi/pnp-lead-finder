@@ -35,7 +35,7 @@ export function ProviderStatusBadge({
       <Badge
         variant="outline"
         className={cn(
-          "gap-1.5 border-indigo-500/40 bg-indigo-500/10 text-indigo-300",
+          "gap-1.5 border-indigo-500/40 bg-indigo-500/10 text-indigo-800 dark:text-indigo-300",
           className
         )}
       >
@@ -50,7 +50,7 @@ export function ProviderStatusBadge({
       <Badge
         variant="outline"
         className={cn(
-          "gap-1.5 border-indigo-500/40 bg-indigo-500/10 text-indigo-300",
+          "gap-1.5 border-indigo-500/40 bg-indigo-500/10 text-indigo-800 dark:text-indigo-300",
           className
         )}
       >

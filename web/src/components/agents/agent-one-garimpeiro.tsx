@@ -635,7 +635,7 @@ export function AgentOneGarimpeiro() {
               {agentError && (
                 <p
                   role="alert"
-                  className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-400"
+                  className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-800 dark:text-red-400"
                 >
                   {agentError}
                 </p>
@@ -847,7 +847,7 @@ export function AgentOneGarimpeiro() {
                         {item.errorMessage && (
                           <p
                             role="alert"
-                            className="mt-3 rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-400"
+                            className="mt-3 rounded-md bg-red-500/10 px-3 py-2 text-sm text-red-800 dark:text-red-400"
                           >
                             {item.errorMessage}
                           </p>

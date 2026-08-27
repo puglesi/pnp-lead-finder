@@ -146,9 +146,9 @@ export function SignatureHtmlEditor({
           aria-label="Editor de assinatura"
           data-signature-editor="true"
           className={cn(
-            "overflow-auto rounded-xl border border-border/60 bg-white p-4 text-sm text-foreground shadow-sm",
+            "overflow-auto rounded-xl border border-border/60 bg-white p-4 text-sm text-[#111111] shadow-sm",
             "focus:outline-none focus:ring-2 focus:ring-primary/30",
-            "prose prose-sm max-w-none dark:prose-invert",
+            "prose prose-sm max-w-none",
             // Important: do not force prose table resets that break email tables
             "[&_table]:max-w-full [&_img]:max-w-full",
             disabled && "pointer-events-none opacity-50"

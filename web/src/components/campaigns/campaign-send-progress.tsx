@@ -173,7 +173,7 @@ export function CampaignSendProgress({
                 ✓ {sendingProgress.successCount} enviados
               </span>
               {sendingProgress.failedCount > 0 && (
-                <span className="text-red-300">
+                <span className="text-red-800 dark:text-red-300">
                   ✗ {sendingProgress.failedCount} falhas
                 </span>
               )}

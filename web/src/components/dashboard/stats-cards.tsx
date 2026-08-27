@@ -153,7 +153,7 @@ export function StatsCards() {
       <div className="flex flex-wrap items-center gap-2">
         <Badge
           variant="outline"
-          className="border-emerald-500/40 bg-emerald-500/10 text-[10px] uppercase tracking-wide text-emerald-300"
+          className="border-emerald-500/40 bg-emerald-500/10 text-[10px] uppercase tracking-wide text-emerald-800 dark:text-emerald-300"
         >
           Lifetime
         </Badge>

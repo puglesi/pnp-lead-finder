@@ -15,27 +15,27 @@ const STATUS_CONFIG: Record<
 > = {
   pending: {
     label: "Pendente",
-    className: "border-slate-500/40 bg-slate-500/15 text-slate-300",
+    className: "border-slate-500/40 bg-slate-500/15 text-slate-800 dark:text-slate-300",
   },
   failed: {
     label: "Falhou",
-    className: "border-red-500/40 bg-red-500/15 text-red-300",
+    className: "border-red-500/40 bg-red-500/15 text-red-800 dark:text-red-300",
   },
   sent: {
     label: "Enviado",
-    className: "border-blue-500/40 bg-blue-500/15 text-blue-300",
+    className: "border-blue-500/40 bg-blue-500/15 text-blue-800 dark:text-blue-300",
   },
   opened: {
     label: "Aberto",
-    className: "border-cyan-500/40 bg-cyan-500/15 text-cyan-300",
+    className: "border-cyan-500/40 bg-cyan-500/15 text-cyan-900 dark:text-cyan-300",
   },
   clicked: {
     label: "Clicou",
-    className: "border-violet-500/40 bg-violet-500/15 text-violet-300",
+    className: "border-violet-500/40 bg-violet-500/15 text-violet-800 dark:text-violet-300",
   },
   replied: {
     label: "Respondeu",
-    className: "border-emerald-500/40 bg-emerald-500/15 text-emerald-300",
+    className: "border-emerald-500/40 bg-emerald-500/15 text-emerald-800 dark:text-emerald-300",
   },
 };
 
@@ -121,7 +121,7 @@ export function CampaignLeadsTable({
                   )}
                 >
                   <td className="px-5 py-3.5 font-medium">{lead.company}</td>
-                  <td className="px-5 py-3.5 text-emerald-400">{lead.email}</td>
+                  <td className="px-5 py-3.5 text-emerald-700 dark:text-emerald-400">{lead.email}</td>
                   <td className="px-5 py-3.5">
                     <Badge variant="outline" className={cn("font-medium", cfg.className)}>
                       {cfg.label}

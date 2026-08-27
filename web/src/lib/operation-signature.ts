@@ -24,6 +24,11 @@ export function bindSignatureToOperation(
   };
 }
 
+export type OperationSignatureUiStatus =
+  | "checking"
+  | "configured"
+  | "not_configured";
+
 /** Identity and completeness guard; it never guesses from brands or HTML. */
 export function getOperationSignatureMismatch(
   senderOperation: CampaignProfileId,
@@ -32,7 +37,9 @@ export function getOperationSignatureMismatch(
 ): string | null {
   if (!signature?.operation) {
     return options.requireOperationId
-      ? OPERATION_SIGNATURE_MISMATCH_MESSAGE
+      ? isSignatureHtmlEmpty(signature?.body ?? "")
+        ? OPERATION_SIGNATURE_NOT_CONFIGURED_MESSAGE
+        : OPERATION_SIGNATURE_MISMATCH_MESSAGE
       : isSignatureHtmlEmpty(signature?.body ?? "")
         ? OPERATION_SIGNATURE_NOT_CONFIGURED_MESSAGE
         : null;
@@ -43,6 +50,44 @@ export function getOperationSignatureMismatch(
   return isSignatureHtmlEmpty(signature.body)
     ? OPERATION_SIGNATURE_NOT_CONFIGURED_MESSAGE
     : null;
+}
+
+export function isOfficialSignatureConfigured(
+  operation: CampaignProfileId,
+  signature: CampaignSignature | null | undefined
+): boolean {
+  return (
+    getOperationSignatureMismatch(operation, signature, {
+      requireOperationId: true,
+    }) === null
+  );
+}
+
+/**
+ * checking → configured | not_configured.
+ * Never reports not_configured while hydration is still in flight.
+ */
+export function getOperationSignatureUiStatus(input: {
+  operation: CampaignProfileId;
+  hasHydrated: boolean;
+  isHydrating?: boolean;
+  signature?: CampaignSignature | null;
+}): OperationSignatureUiStatus {
+  if (!input.hasHydrated || input.isHydrating) return "checking";
+  return isOfficialSignatureConfigured(input.operation, input.signature)
+    ? "configured"
+    : "not_configured";
+}
+
+/**
+ * Send/preflight always uses the official current signature for the operation.
+ * Campaign snapshots are ignored unless the caller passes them as official.
+ */
+export function resolveOfficialSendSignature(
+  operation: CampaignProfileId,
+  official: Pick<CampaignSignature, "enabled" | "body"> | null | undefined
+): OperationBoundSignature {
+  return bindSignatureToOperation(operation, official ?? { enabled: false, body: "" });
 }
 
 function removeLiteral(source: string, fragment: string): string {

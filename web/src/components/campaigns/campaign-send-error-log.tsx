@@ -52,7 +52,7 @@ export function CampaignSendErrorLog({
   return (
     <Card className={cn("border-red-500/25", className)}>
       <CardHeader className="flex flex-row items-center justify-between pb-3">
-        <CardTitle className="flex items-center gap-2 text-base text-red-300">
+        <CardTitle className="flex items-center gap-2 text-base text-red-800 dark:text-red-300">
           <AlertCircle className="size-4" />
           Log de erros
           <Badge variant="outline" className="tabular-nums">
@@ -81,14 +81,14 @@ export function CampaignSendErrorLog({
                   key={err.id}
                   className="border-t border-border/40 hover:bg-red-500/5"
                 >
-                  <td className="px-4 py-2.5 font-mono text-xs text-red-200">
+                  <td className="px-4 py-2.5 font-mono text-xs text-red-800 dark:text-red-200">
                     {err.email}
                   </td>
                   <td className="px-4 py-2.5">{err.company}</td>
                   <td className="px-4 py-2.5">
                     <Badge
                       variant="outline"
-                      className="mb-1 font-mono text-[10px] text-red-300"
+                      className="mb-1 font-mono text-[10px] text-red-800 dark:text-red-300"
                     >
                       {err.errorCode}
                     </Badge>

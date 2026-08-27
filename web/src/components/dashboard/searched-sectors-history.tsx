@@ -194,8 +194,8 @@ export function SearchedSectorsHistory({
                   title={`Buscar apenas ${sector} em ${searchLocation}`}
                   className={cn(
                     "inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-sm transition-all",
-                    "border-violet-500/25 bg-violet-500/5 hover:border-violet-400/50 hover:bg-violet-500/15 hover:text-violet-200",
-                    isLoading && "border-violet-400/60 bg-violet-500/20 text-violet-100",
+                    "border-violet-500/25 bg-violet-500/5 hover:border-violet-400/50 hover:bg-violet-500/15 hover:text-violet-800 dark:hover:text-violet-200",
+                    isLoading && "border-violet-400/60 bg-violet-500/20 text-violet-900 dark:text-violet-100",
                     (isSearching || loadingSector) &&
                       !isLoading &&
                       "cursor-not-allowed opacity-50"

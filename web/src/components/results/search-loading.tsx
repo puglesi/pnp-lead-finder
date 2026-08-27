@@ -88,7 +88,7 @@ export function SearchLoading() {
             <span>Última atividade: {Math.floor(inactiveMs / 1_000)}s atrás</span>
           </div>
           {possiblyInterrupted && (
-            <p className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+            <p className="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-200">
               <AlertTriangle className="size-4" />
               Processamento interrompido. Os resultados já obtidos estão salvos.
             </p>
