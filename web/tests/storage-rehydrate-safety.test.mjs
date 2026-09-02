@@ -201,3 +201,42 @@ test("nested leadStatuses null slots: delivery + lifetime never throw", () => {
   assert.equal(stats.campaignsActive, 1);
   assert.equal(stats.campaignsSent, 0);
 });
+
+import {
+  sqliteWinsArrayMerge,
+  sqliteWinsStringMerge,
+} from "../src/lib/store-rehydrate.ts";
+
+test("B/C/I: cache vazio nunca substitui array oficial do SQLite", () => {
+  const official = [{ id: "camp-1", name: "SQLite" }];
+  assert.deepEqual(
+    sqliteWinsArrayMerge(official, [], (item) => item.id),
+    official
+  );
+  assert.deepEqual(
+    sqliteWinsArrayMerge(official, null, (item) => item.id),
+    official
+  );
+  assert.equal(
+    sqliteWinsArrayMerge([], [{ id: "cache-only" }], (item) => item.id)[0].id,
+    "cache-only"
+  );
+  const merged = sqliteWinsArrayMerge(
+    [{ id: "camp-1", name: "SQLite" }],
+    [{ id: "camp-1", name: "STALE" }, { id: "cache-only" }],
+    (item) => item.id
+  );
+  assert.equal(merged.find((item) => item.id === "camp-1").name, "SQLite");
+  assert.ok(merged.some((item) => item.id === "cache-only"));
+});
+
+test("E: histórico de buscas vazio no cache não apaga o oficial", () => {
+  assert.deepEqual(
+    sqliteWinsStringMerge(["dentist"], []),
+    ["dentist"]
+  );
+  assert.deepEqual(
+    sqliteWinsStringMerge(["dentist"], ["accountant"]),
+    ["dentist", "accountant"]
+  );
+});

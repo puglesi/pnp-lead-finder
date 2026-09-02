@@ -51,6 +51,7 @@ import {
   acquireGlobalEmailSendLock,
   auditGlobalEmailRecipients,
   buildGlobalEmailHistory,
+  buildGlobalEmailHistoryFromSendHistory,
   buildPermanentContactBlocks,
   type GlobalDeduplicationPreview,
 } from "@/lib/global-email-deduplication";
@@ -59,6 +60,14 @@ import {
   mergePermanentBlocks,
 } from "@/lib/email-blocklist";
 import { useEmailBlocklistStore } from "@/store/email-blocklist-store";
+import { useOfficialHistoryStore } from "@/store/official-history-store";
+import type { AgentThreePersistedSendRecord } from "@/lib/agent-three-reconciliation";
+import {
+  fingerprintsMatch,
+  PREVIEW_QUEUE_MISMATCH_MESSAGE,
+  previewEligibleFingerprint,
+  queueReadyFingerprint,
+} from "@/lib/eligibility-fingerprint";
 import {
   isLocalDataUnavailableError,
   prepareLocalDataWrite,
@@ -170,10 +179,45 @@ function getAllKnownLeads(): Lead[] {
   return [...byId.values()];
 }
 
+function collectOfficialSendHistory(
+  extra: readonly AgentThreePersistedSendRecord[] = []
+): AgentThreePersistedSendRecord[] {
+  const merged = new Map<string, AgentThreePersistedSendRecord>();
+  for (const row of [
+    ...useOfficialHistoryStore.getState().sendHistory,
+    ...extra,
+  ]) {
+    const key = [
+      row.operation,
+      row.email,
+      row.providerMessageId ?? "",
+      row.campaignId ?? "",
+      row.status,
+    ].join("|");
+    merged.set(key, {
+      id: row.id,
+      intentKey: "intentKey" in row ? row.intentKey : undefined,
+      campaignId: row.campaignId,
+      leadId: row.leadId,
+      email: row.email,
+      operation: row.operation,
+      queueItemId: row.queueItemId,
+      providerMessageId: row.providerMessageId,
+      confirmedAt: row.confirmedAt,
+      attemptedAt: row.attemptedAt,
+      status: row.status,
+      error: "error" in row ? row.error : null,
+    });
+  }
+  return [...merged.values()];
+}
+
 function buildCampaignDeduplicationPreview(
   campaign: Campaign,
   recipients: readonly Lead[],
-  companiesFound = campaign.leadIds.length
+  companiesFound = campaign.leadIds.length,
+  officialSendHistory: readonly AgentThreePersistedSendRecord[] = [],
+  includeQuality = true
 ): GlobalDeduplicationPreview {
   const campaigns = useCampaignStore.getState().campaigns;
   const operations = useAgentThreeStore.getState().operations;
@@ -181,6 +225,18 @@ function buildCampaignDeduplicationPreview(
   const evidence = { campaigns, operations, leads };
   const manualBlocks = emailBlocklistToPermanentBlocks(
     useEmailBlocklistStore.getState().entries
+  );
+  const history = new Map(
+    [
+      ...buildGlobalEmailHistory(evidence),
+      ...buildGlobalEmailHistoryFromSendHistory(
+        collectOfficialSendHistory(officialSendHistory),
+        campaigns
+      ),
+    ].map((item) => [
+      `${item.operation}\u0000${item.normalizedEmail}\u0000${item.providerMessageId}`,
+      item,
+    ])
   );
   return auditGlobalEmailRecipients({
     operation: campaign.campaignProfileId,
@@ -191,8 +247,9 @@ function buildCampaignDeduplicationPreview(
       leadId: lead.id,
       company: lead.company,
       email: lead.normalizedEmail ?? lead.email,
+      ...(includeQuality ? { lead } : {}),
     })),
-    history: buildGlobalEmailHistory(evidence),
+    history: [...history.values()],
     // Same suppression list for global dedupe + Agent 3.
     permanentBlocks: mergePermanentBlocks(
       buildPermanentContactBlocks(evidence),
@@ -271,28 +328,75 @@ async function prepareSelectedCampaign(
   const campaignLeads = activeCampaign.leadIds
     .map((leadId) => findLead(leadId))
     .filter(Boolean) as Lead[];
+  const officialSendHistory = (
+    await Promise.all([
+      fetchAgentThreeSendHistory({ operation: "panek-puglesi" }),
+      fetchAgentThreeSendHistory({ operation: "modeclean" }),
+    ])
+  ).flat();
+  const preliminaryPreview = buildCampaignDeduplicationPreview(
+    activeCampaign,
+    campaignLeads,
+    activeCampaign.leadIds.length,
+    officialSendHistory,
+    false
+  );
+  const preliminaryLeadIds = new Set(
+    preliminaryPreview.decisions
+      .filter((decision) => decision.included)
+      .map((decision) => decision.leadId)
+  );
+  const validationCandidates: Lead[] = [];
+  let missingLeadCount = 0;
+  for (const leadId of loadableLeadIds) {
+    const lead = findLead(leadId);
+    if (!lead) {
+      missingLeadCount += 1;
+      continue;
+    }
+    if (preliminaryLeadIds.has(lead.id)) validationCandidates.push(lead);
+  }
+
+  const suppressedLeadIds = new Set(
+    useAgentThreeStore
+      .getState()
+      .operations[profileId].queue.filter(
+        (item) =>
+          item.campaignId === activeCampaign.id &&
+          item.exclusionReason === "suppressed"
+      )
+      .map((item) => item.leadId)
+  );
+  const validation = await validateAgentThreeCampaignLeads(
+    validationCandidates,
+    (email) => localEmailValidationProvider.validate(email),
+    {
+      shouldSkip: (lead) => suppressedLeadIds.has(lead.id),
+    }
+  );
+  const leadStore = useLeadStore.getState();
+  for (const update of validation.updates) {
+    leadStore.updateLeadEmailValidation(update.leadId, update.validation);
+  }
+  const validatedById = new Map(validation.leads.map((lead) => [lead.id, lead]));
+  const authoritativeLeads = campaignLeads.map(
+    (lead) => validatedById.get(lead.id) ?? lead
+  );
   const deduplicationPreview = buildCampaignDeduplicationPreview(
     activeCampaign,
-    campaignLeads
+    authoritativeLeads,
+    activeCampaign.leadIds.length,
+    officialSendHistory,
+    true
   );
   const includedLeadIds = new Set(
     deduplicationPreview.decisions
       .filter((decision) => decision.included)
       .map((decision) => decision.leadId)
   );
-  agentStore.applyDeduplicationPreview(
-    profileId,
-    activeCampaign.id,
-    deduplicationPreview
+  const resolvedLeads = authoritativeLeads.filter((lead) =>
+    includedLeadIds.has(lead.id) && loadableLeadIds.includes(lead.id)
   );
-  const resolvedLeads: Lead[] = [];
-  let missingLeadCount = 0;
-  for (const leadId of loadableLeadIds) {
-    const lead = findLead(leadId);
-    if (lead && includedLeadIds.has(lead.id)) resolvedLeads.push(lead);
-    else missingLeadCount += 1;
-  }
-
   let alreadySentCount = 0;
   let excludedOnLoadCount = 0;
   if (resolvedLeads.length > 0) {
@@ -308,28 +412,16 @@ async function prepareSelectedCampaign(
       loadResult.ignoredCount - loadResult.alreadySentCount
     );
   }
-
-  const suppressedLeadIds = new Set(
-    useAgentThreeStore
-      .getState()
-      .operations[profileId].queue.filter(
-        (item) =>
-          item.campaignId === activeCampaign.id &&
-          item.exclusionReason === "suppressed"
-      )
-      .map((item) => item.leadId)
+  agentStore.applyDeduplicationPreview(
+    profileId,
+    activeCampaign.id,
+    deduplicationPreview
   );
-  const validation = await validateAgentThreeCampaignLeads(
-    resolvedLeads,
-    (email) => localEmailValidationProvider.validate(email),
-    {
-      shouldSkip: (lead) => suppressedLeadIds.has(lead.id),
-    }
+  agentStore.syncQueueToPreview(
+    profileId,
+    activeCampaign.id,
+    deduplicationPreview
   );
-  const leadStore = useLeadStore.getState();
-  for (const update of validation.updates) {
-    leadStore.updateLeadEmailValidation(update.leadId, update.validation);
-  }
   const preparation = useAgentThreeStore
     .getState()
     .prepareCampaign(profileId, activeCampaign.id, validation.leads);
@@ -529,11 +621,14 @@ export function useAgentThreeRunner() {
    */
   async function verifySend(
     profileId: CampaignProfileId,
-    options: { verify?: boolean } = { verify: true }
+    options: {
+      verify?: boolean;
+      preview?: GlobalDeduplicationPreview | null;
+    } = { verify: true }
   ): Promise<AgentThreeSmtpResult> {
     setStatus(profileId, "validating");
     try {
-      await ensureOperationSignaturesHydrated();
+      await ensureOperationSignaturesHydrated(profileId);
     } catch (error) {
       const result: AgentThreeSmtpResult = {
         status: "configuration_error",
@@ -552,6 +647,17 @@ export function useAgentThreeRunner() {
       .getState()
       .campaigns.find((item) => item.id === agentOperation.currentCampaignId);
     const dbWritable = await prepareLocalDataWrite();
+    const preview =
+      options.preview ??
+      preparations[profileId]?.deduplicationPreview ??
+      null;
+    const campaignQueue = agentOperation.queue.filter(
+      (item) => item.campaignId === agentOperation.currentCampaignId
+    );
+    const queueMatchesPreview = fingerprintsMatch(
+      previewEligibleFingerprint(preview),
+      queueReadyFingerprint(campaignQueue)
+    );
     const preflight = evaluateAgentThreePreflight({
       operation: profileId,
       hasHydrated: signatureState.hasHydrated,
@@ -569,6 +675,7 @@ export function useAgentThreeRunner() {
       dbWritable,
       readyCount: metrics.ready,
       confirmedCount: metrics.sent,
+      queueMatchesPreview,
     });
     if (!preflight.ok) {
       const result: AgentThreeSmtpResult = {
@@ -614,7 +721,14 @@ export function useAgentThreeRunner() {
     if (inflight) return inflight;
 
     const operation = useAgentThreeStore.getState().operations[profileId];
-    if (operation.status === "running" || operation.status === "paused") {
+    const hasSelectedCampaignQueue = operation.queue.some(
+      (item) => item.campaignId === resolvedCampaignId
+    );
+    if (
+      (operation.status === "running" || operation.status === "paused") &&
+      operation.currentCampaignId === resolvedCampaignId &&
+      hasSelectedCampaignQueue
+    ) {
       const metrics = getAgentThreeMetrics(operation);
       const current: AgentThreeCampaignPreparation = {
         ...EMPTY_PREPARATION,
@@ -753,12 +867,16 @@ export function useAgentThreeRunner() {
         const item = store.claimNext(profileId);
         if (!item) {
           const latest = useAgentThreeStore.getState().operations[profileId];
-          const hasUnknown = latest.queue.some(
-            (candidate) =>
-              candidate.campaignId === latest.currentCampaignId &&
-              candidate.queueStatus === "unknown"
+          const currentQueue = latest.queue.filter(
+            (candidate) => candidate.campaignId === latest.currentCampaignId
           );
-          if (hasUnknown) {
+          const hasCurrentReady = currentQueue.some(
+            (candidate) => candidate.queueStatus === "ready"
+          );
+          const hasCurrentUnknown = currentQueue.some(
+            (candidate) => candidate.queueStatus === "unknown"
+          );
+          if (hasCurrentUnknown && !hasCurrentReady) {
             useAgentThreeStore.getState().pause(profileId);
             setStatus(profileId, "paused");
             break;
@@ -820,7 +938,7 @@ export function useAgentThreeRunner() {
           );
           continue;
         }
-        await ensureOperationSignaturesHydrated();
+        await ensureOperationSignaturesHydrated(profileId);
         const officialSignature = useOperationSignatureStore
           .getState()
           .getSignature(profileId);
@@ -1011,8 +1129,29 @@ export function useAgentThreeRunner() {
       }
       setStatus(profileId, "lead_ready");
       await reconcileProfile(profileId);
+      const campaignQueue = useAgentThreeStore
+        .getState()
+        .operations[profileId].queue.filter(
+          (item) =>
+            item.campaignId ===
+            useAgentThreeStore.getState().operations[profileId].currentCampaignId
+        );
+      if (
+        !fingerprintsMatch(
+          previewEligibleFingerprint(preparation.deduplicationPreview),
+          queueReadyFingerprint(campaignQueue)
+        )
+      ) {
+        return {
+          started: false,
+          message: PREVIEW_QUEUE_MISMATCH_MESSAGE,
+        };
+      }
       // Live SMTP auth/connection check before the first real send (no message).
-      const availability = await verifySend(profileId, { verify: true });
+      const availability = await verifySend(profileId, {
+        verify: true,
+        preview: preparation.deduplicationPreview,
+      });
       if (availability.status !== "connected") {
         return {
           started: false,

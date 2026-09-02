@@ -4,17 +4,17 @@ import { useEffect } from "react";
 import { AlertTriangle, Database, Loader2 } from "lucide-react";
 import {
   LOCAL_DATA_CHECKING_MESSAGE,
-  LOCAL_DATA_MIGRATION_MARKER,
   LOCAL_DATA_UNAVAILABLE_MESSAGE,
   fetchLocalHydration,
-  migrateLegacyBrowserData,
   persistCommercialStore,
   probeLocalDataHealth,
+  recoverBrowserCacheIntoSqlite,
   serializeStoreState,
   setLocalDataAvailability,
   useLocalDataAvailability,
 } from "@/lib/local-data-client";
 import type { CommercialStoreKey, LocalDataHydration } from "@/types/local-data";
+import { sqliteWinsArrayMerge } from "@/lib/store-rehydrate";
 import { useLeadStore } from "@/store/lead-store";
 import { useCampaignStore } from "@/store/campaign-store";
 import { useEmailTemplateStore } from "@/store/email-template-store";
@@ -26,20 +26,84 @@ import { useAgentThreeStore } from "@/store/agent-three-store";
 import { useBatchPipelineStore } from "@/store/batch-pipeline-store";
 import { useSettingsStore } from "@/store/settings-store";
 import { useUsageStore } from "@/store/usage-store";
+import { useOfficialHistoryStore } from "@/store/official-history-store";
+
+async function rehydratePersistCaches(): Promise<void> {
+  await Promise.all([
+    useLeadStore.persist.rehydrate(),
+    useCampaignStore.persist.rehydrate(),
+    useEmailBlocklistStore.persist.rehydrate(),
+    useLifetimeStatsStore.persist.rehydrate(),
+    useEmailTemplateStore.persist.rehydrate(),
+    useAgentThreeStore.persist.rehydrate(),
+    useBatchPipelineStore.persist.rehydrate(),
+  ]);
+}
 
 function hydrateStores(data: LocalDataHydration): void {
   const stores = data.stores;
   if (stores["pnp-lead-finder"]) {
-    useLeadStore.setState(stores["pnp-lead-finder"] as Partial<ReturnType<typeof useLeadStore.getState>>);
+    const incoming = stores["pnp-lead-finder"] as Partial<
+      ReturnType<typeof useLeadStore.getState>
+    >;
+    const current = useLeadStore.getState();
+    useLeadStore.setState({
+      ...incoming,
+      savedLeads: sqliteWinsArrayMerge(
+        incoming.savedLeads ?? [],
+        current.savedLeads,
+        (lead) => lead.id
+      ),
+      fullSearchHistory: sqliteWinsArrayMerge(
+        incoming.fullSearchHistory ?? [],
+        current.fullSearchHistory,
+        (record) => record.id
+      ),
+      importedLeads: sqliteWinsArrayMerge(
+        incoming.importedLeads ?? [],
+        current.importedLeads,
+        (lead) => lead.id
+      ),
+    });
   }
   if (stores["pnp-campaigns"]) {
-    useCampaignStore.setState(stores["pnp-campaigns"] as Partial<ReturnType<typeof useCampaignStore.getState>>);
+    const incoming = stores["pnp-campaigns"] as Partial<
+      ReturnType<typeof useCampaignStore.getState>
+    >;
+    useCampaignStore.setState({
+      ...incoming,
+      campaigns: sqliteWinsArrayMerge(
+        incoming.campaigns ?? [],
+        useCampaignStore.getState().campaigns,
+        (campaign) => campaign.id
+      ),
+    });
   }
   if (stores["pnp-email-templates"]) {
-    useEmailTemplateStore.setState(stores["pnp-email-templates"] as Partial<ReturnType<typeof useEmailTemplateStore.getState>>);
+    const incoming = stores["pnp-email-templates"] as Partial<
+      ReturnType<typeof useEmailTemplateStore.getState>
+    >;
+    useEmailTemplateStore.setState({
+      ...incoming,
+      templates: sqliteWinsArrayMerge(
+        incoming.templates ?? [],
+        useEmailTemplateStore.getState().templates,
+        (template) => template.id
+      ),
+    });
   }
   if (stores["pnp-email-blocklist"]) {
-    useEmailBlocklistStore.setState(stores["pnp-email-blocklist"] as Partial<ReturnType<typeof useEmailBlocklistStore.getState>>);
+    const incoming = stores["pnp-email-blocklist"] as Partial<
+      ReturnType<typeof useEmailBlocklistStore.getState>
+    >;
+    useEmailBlocklistStore.setState({
+      ...incoming,
+      entries: sqliteWinsArrayMerge(
+        incoming.entries ?? [],
+        useEmailBlocklistStore.getState().entries,
+        (entry) => entry.normalizedEmail || entry.id
+      ),
+    });
   }
   if (stores["pnp-lifetime-stats"]) {
     useLifetimeStatsStore.setState(stores["pnp-lifetime-stats"] as Partial<ReturnType<typeof useLifetimeStatsStore.getState>>);
@@ -62,6 +126,10 @@ function hydrateStores(data: LocalDataHydration): void {
   if (stores["pnp-usage"]) {
     useUsageStore.setState(stores["pnp-usage"] as Partial<ReturnType<typeof useUsageStore.getState>>);
   }
+  useOfficialHistoryStore.getState().hydrateOfficialHistory({
+    sendHistory: data.sendHistory,
+    recoveredCampaigns: data.recoveredCampaigns,
+  });
 }
 
 function selectSettings() {
@@ -165,16 +233,14 @@ export function LocalDataBootstrap() {
       if (status !== "available") return;
 
       try {
-        let hydration = await fetchLocalHydration();
-        if (
-          !window.localStorage.getItem(LOCAL_DATA_MIGRATION_MARKER) ||
-          hydration.migrationVersion < 1
-        ) {
-          await migrateLegacyBrowserData();
-          hydration = await fetchLocalHydration();
-        }
+        // Recover cache-only records first; server-side recovery never replaces
+        // existing SQLite entities. Hydration then makes SQLite win in memory.
+        await recoverBrowserCacheIntoSqlite();
+        const hydration = await fetchLocalHydration();
         if (disposed) return;
         hydrateStores(hydration);
+        await rehydratePersistCaches();
+        if (disposed) return;
         uninstall = installStoreMirrors((message) => {
           void confirmUnavailable(message);
         });
@@ -183,6 +249,8 @@ export function LocalDataBootstrap() {
       } catch {
         if (disposed) return;
         const confirmed = await probeLocalDataHealth();
+        if (disposed) return;
+        await rehydratePersistCaches();
         if (disposed || confirmed === "available") {
           uninstall = installStoreMirrors((message) => {
             void confirmUnavailable(message);

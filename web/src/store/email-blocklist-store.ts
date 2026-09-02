@@ -12,9 +12,16 @@ import {
   type EmailBlockReason,
 } from "@/lib/email-blocklist";
 import { normalizeEmail } from "@/lib/email-validation";
-import { normalizeBlocklistPersistSlice } from "@/lib/store-rehydrate";
+import {
+  normalizeBlocklistPersistSlice,
+  sqliteWinsArrayMerge,
+} from "@/lib/store-rehydrate";
 import { asArray } from "@/lib/safe-object";
 import { assertLocalDataWritable } from "@/lib/local-data-client";
+import {
+  deleteBlocklistEntry,
+  persistBlocklistEntries,
+} from "@/lib/email-blocklist-repository";
 
 interface EmailBlocklistStore {
   entries: EmailBlocklistEntry[];
@@ -23,15 +30,15 @@ interface EmailBlocklistStore {
     reason: EmailBlockReason;
     operation?: EmailBlockOperationScope;
     note?: string;
-  }) => EmailBlocklistEntry | null;
+  }) => Promise<EmailBlocklistEntry | null>;
   addEmails: (input: {
     raw: string;
     reason: EmailBlockReason;
     operation?: EmailBlockOperationScope;
     note?: string;
-  }) => { added: number; skipped: number; invalid: number };
-  removeEmail: (normalizedEmail: string) => boolean;
-  removeById: (id: string) => boolean;
+  }) => Promise<{ added: number; skipped: number; invalid: number }>;
+  removeEmail: (normalizedEmail: string) => Promise<boolean>;
+  removeById: (id: string) => Promise<boolean>;
   isBlocked: (
     email: string | null | undefined,
     operation?: EmailBlockOperationScope | CampaignProfileOnly
@@ -50,10 +57,11 @@ export const useEmailBlocklistStore = create<EmailBlocklistStore>()(
     (set, get) => ({
       entries: [],
 
-      addEmail: (input) => {
+      addEmail: async (input) => {
         assertLocalDataWritable();
         const entry = createEmailBlocklistEntry(input);
         if (!entry) return null;
+        await persistBlocklistEntries([entry]);
         set((state) => {
           const without = state.entries.filter(
             (item) => item.normalizedEmail !== entry.normalizedEmail
@@ -63,7 +71,7 @@ export const useEmailBlocklistStore = create<EmailBlocklistStore>()(
         return entry;
       },
 
-      addEmails: (input) => {
+      addEmails: async (input) => {
         assertLocalDataWritable();
         const emails = parseEmailListInput(input.raw);
         let added = 0;
@@ -76,32 +84,40 @@ export const useEmailBlocklistStore = create<EmailBlocklistStore>()(
         for (const token of invalidTokens) {
           if (!normalizeEmail(token)) invalid += 1;
         }
-        set((state) => {
-          let next = [...state.entries];
-          for (const email of emails) {
-            if (next.some((item) => item.normalizedEmail === email)) {
-              skipped += 1;
-              continue;
-            }
-            const entry = createEmailBlocklistEntry({
-              email,
-              reason: input.reason,
-              operation: input.operation,
-              note: input.note,
-            });
-            if (!entry) continue;
-            next = [entry, ...next];
-            added += 1;
+        const current = get().entries;
+        const additions: EmailBlocklistEntry[] = [];
+        for (const email of emails) {
+          if (
+            current.some((item) => item.normalizedEmail === email) ||
+            additions.some((item) => item.normalizedEmail === email)
+          ) {
+            skipped += 1;
+            continue;
           }
-          return { entries: next };
-        });
+          const entry = createEmailBlocklistEntry({
+            email,
+            reason: input.reason,
+            operation: input.operation,
+            note: input.note,
+          });
+          if (!entry) continue;
+          additions.push(entry);
+          added += 1;
+        }
+        await persistBlocklistEntries(additions);
+        set((state) => ({ entries: [...additions].reverse().concat(state.entries) }));
         return { added, skipped, invalid };
       },
 
-      removeEmail: (normalizedEmail) => {
+      removeEmail: async (normalizedEmail) => {
         assertLocalDataWritable();
         const email = normalizeEmail(normalizedEmail);
         if (!email) return false;
+        const matches = get().entries.filter(
+          (item) => item.normalizedEmail === email
+        );
+        if (matches.length === 0) return false;
+        await Promise.all(matches.map((item) => deleteBlocklistEntry(item.id)));
         const before = get().entries.length;
         set((state) => ({
           entries: state.entries.filter(
@@ -111,9 +127,11 @@ export const useEmailBlocklistStore = create<EmailBlocklistStore>()(
         return get().entries.length < before;
       },
 
-      removeById: (id) => {
+      removeById: async (id) => {
         assertLocalDataWritable();
         const before = get().entries.length;
+        if (!get().entries.some((item) => item.id === id)) return false;
+        await deleteBlocklistEntry(id);
         set((state) => ({
           entries: state.entries.filter((item) => item.id !== id),
         }));
@@ -135,6 +153,7 @@ export const useEmailBlocklistStore = create<EmailBlocklistStore>()(
     }),
     {
       name: "pnp-email-blocklist",
+      skipHydration: true,
       version: 2,
       migrate: (persisted) => {
         const state = persisted as { entries?: unknown } | null;
@@ -221,14 +240,13 @@ export const useEmailBlocklistStore = create<EmailBlocklistStore>()(
             source: item.source === "system" ? "system" : "manual",
           });
         }
-        // Empty persisted array is valid; only fall back when entries field absent.
-        const hadEntriesField =
-          persisted &&
-          typeof persisted === "object" &&
-          "entries" in (persisted as object);
         return {
           ...current,
-          entries: hadEntriesField ? entries : current.entries,
+          entries: sqliteWinsArrayMerge(
+            current.entries,
+            entries,
+            (entry) => entry.normalizedEmail || entry.id
+          ),
         };
       },
     }

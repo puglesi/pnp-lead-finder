@@ -30,7 +30,10 @@ import { useLeadStore } from "@/store/lead-store";
 import { useSettingsStore } from "@/store/settings-store";
 import { useBatchPipelineStore } from "@/store/batch-pipeline-store";
 import { applyCampaignDeliveryReconciliation } from "@/lib/campaign-metrics";
-import { normalizeCampaignPersistSlice } from "@/lib/store-rehydrate";
+import {
+  normalizeCampaignPersistSlice,
+  sqliteWinsArrayMerge,
+} from "@/lib/store-rehydrate";
 import { asArray } from "@/lib/safe-object";
 import {
   EMPTY_OPERATION_SIGNATURE,
@@ -45,7 +48,12 @@ import { getOperationSendAccount } from "@/lib/operation-identity";
 import {
   assertLocalDataWritable,
   ensureLocalDataWritable,
+  setLocalDataAvailability,
 } from "@/lib/local-data-client";
+import {
+  deleteCampaignRecord,
+  persistCampaignRecord,
+} from "@/lib/campaign-repository";
 
 interface CampaignStore {
   campaigns: Campaign[];
@@ -71,10 +79,11 @@ interface CampaignStore {
     signature?: Partial<CampaignSignature>;
     batchSend?: Partial<Campaign["batchSend"]>;
     emailProvider?: EmailProviderId;
-  }) => Campaign;
+  }) => Promise<Campaign>;
   updateCampaign: (id: string, data: Partial<Campaign>) => void;
-  duplicateCampaign: (id: string) => Campaign | null;
-  deleteCampaign: (id: string) => void;
+  saveCampaign: (id: string, data: Partial<Campaign>) => Promise<Campaign>;
+  duplicateCampaign: (id: string) => Promise<Campaign | null>;
+  deleteCampaign: (id: string) => Promise<void>;
   setCampaignStatus: (id: string, status: CampaignStatus) => void;
   startBatchSend: (id: string, leadContexts: BatchSendLeadContext[]) => Promise<void>;
   pauseBatchSend: () => void;
@@ -97,6 +106,15 @@ function delay(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function persistCampaignInBackground(campaign: Campaign): void {
+  void persistCampaignRecord(campaign).catch((error) => {
+    setLocalDataAvailability(
+      "unavailable",
+      error instanceof Error ? error.message : "Falha ao persistir campanha."
+    );
+  });
+}
+
 export const useCampaignStore = create<CampaignStore>()(
   persist(
     (set, get) => ({
@@ -105,7 +123,7 @@ export const useCampaignStore = create<CampaignStore>()(
       sendingProgress: null,
       sendPaused: false,
 
-      createCampaign: (data) => {
+      createCampaign: async (data) => {
         assertLocalDataWritable();
         const settings = useSettingsStore.getState();
         const campaignProfileId =
@@ -152,20 +170,54 @@ export const useCampaignStore = create<CampaignStore>()(
           sendErrors: [],
           emailProvider: data.emailProvider ?? settings.emailProvider ?? "simulate",
         };
-        set((state) => ({ campaigns: [campaign, ...state.campaigns] }));
+        await persistCampaignRecord(campaign);
+        set((state) => ({
+          campaigns: [
+            campaign,
+            ...state.campaigns.filter((item) => item.id !== campaign.id),
+          ],
+        }));
         return campaign;
       },
 
-      updateCampaign: (id, data) =>
-        (assertLocalDataWritable(), set((state) => ({
-          campaigns: state.campaigns.map((c) =>
-            c.id === id
-              ? { ...c, ...data, updatedAt: new Date().toISOString() }
-              : c
-          ),
-        }))),
+      updateCampaign: (id, data) => {
+        assertLocalDataWritable();
+        let updated: Campaign | null = null;
+        set((state) => ({
+          campaigns: state.campaigns.map((campaign) => {
+            if (campaign.id !== id) return campaign;
+            updated = {
+              ...campaign,
+              ...data,
+              updatedAt: new Date().toISOString(),
+            };
+            return updated;
+          }),
+        }));
+        if (updated) persistCampaignInBackground(updated);
+      },
 
-      duplicateCampaign: (id) => {
+      saveCampaign: async (id, data) => {
+        assertLocalDataWritable();
+        const current = get().getCampaign(id);
+        if (!current) throw new Error("Campanha não encontrada.");
+        const updated: Campaign = {
+          ...current,
+          ...data,
+          updatedAt: new Date().toISOString(),
+        };
+        // Explicit Save is SQLite-first: the UI only reports success after the
+        // authoritative row is durable.
+        await persistCampaignRecord(updated);
+        set((state) => ({
+          campaigns: state.campaigns.map((campaign) =>
+            campaign.id === id ? updated : campaign
+          ),
+        }));
+        return updated;
+      },
+
+      duplicateCampaign: async (id) => {
         assertLocalDataWritable();
         const source = get().getCampaign(id);
         if (!source) return null;
@@ -211,12 +263,15 @@ export const useCampaignStore = create<CampaignStore>()(
           sendErrors: [],
         };
 
+        await persistCampaignRecord(copy);
         set((state) => ({ campaigns: [copy, ...state.campaigns] }));
         return copy;
       },
 
-      deleteCampaign: (id) =>
-        (assertLocalDataWritable(), set((state) => ({
+      deleteCampaign: async (id) => {
+        assertLocalDataWritable();
+        await deleteCampaignRecord(id);
+        set((state) => ({
           campaigns: state.campaigns.filter((c) => c.id !== id),
           sendingCampaignId:
             state.sendingCampaignId === id ? null : state.sendingCampaignId,
@@ -224,16 +279,25 @@ export const useCampaignStore = create<CampaignStore>()(
             state.sendingProgress?.campaignId === id
               ? null
               : state.sendingProgress,
-        }))),
+        }));
+      },
 
-      setCampaignStatus: (id, status) =>
-        (assertLocalDataWritable(), set((state) => ({
-          campaigns: state.campaigns.map((c) =>
-            c.id === id
-              ? { ...c, status, updatedAt: new Date().toISOString() }
-              : c
-          ),
-        }))),
+      setCampaignStatus: (id, status) => {
+        assertLocalDataWritable();
+        let updated: Campaign | null = null;
+        set((state) => ({
+          campaigns: state.campaigns.map((campaign) => {
+            if (campaign.id !== id) return campaign;
+            updated = {
+              ...campaign,
+              status,
+              updatedAt: new Date().toISOString(),
+            };
+            return updated;
+          }),
+        }));
+        if (updated) persistCampaignInBackground(updated);
+      },
 
       pauseBatchSend: () => {
         const { sendingCampaignId, sendingProgress } = get();
@@ -531,6 +595,8 @@ export const useCampaignStore = create<CampaignStore>()(
     }),
     {
       name: "pnp-campaigns",
+      // SQLite hydrates first. localStorage is a cache merged afterwards.
+      skipHydration: true,
       // v14: safe arrays + new statuses (saved/archived) without wiping data.
       version: 14,
       migrate: (persisted, fromVersion) => {
@@ -633,7 +699,7 @@ export const useCampaignStore = create<CampaignStore>()(
         // Exact field repair first: campaigns / leadIds / leadStatuses / sendErrors
         // must never reach UI as null (legacy Object.values / .map crashes).
         const normalized = normalizeCampaignPersistSlice(persisted);
-        const campaigns = asArray<Campaign>(normalized.campaigns)
+        const persistedCampaigns = asArray<Campaign>(normalized.campaigns)
           .map((campaign) => {
             if (!campaign || typeof campaign !== "object") return null;
             try {
@@ -659,11 +725,11 @@ export const useCampaignStore = create<CampaignStore>()(
           .filter((c): c is Campaign => Boolean(c));
         return {
           ...current,
-          campaigns: campaigns.length > 0 || Array.isArray(
-            (persisted as { campaigns?: unknown } | null)?.campaigns
-          )
-            ? campaigns
-            : current.campaigns,
+          campaigns: sqliteWinsArrayMerge(
+            asArray<Campaign>(current.campaigns),
+            persistedCampaigns,
+            (campaign) => campaign.id
+          ),
           sendingProgress: null,
           sendingCampaignId: null,
           sendPaused: false,

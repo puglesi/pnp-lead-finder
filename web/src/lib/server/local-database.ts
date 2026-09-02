@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import type { AgentThreeSendRequest, AgentThreeSmtpResult } from "../agent-three-smtp-contract.ts";
+import { isRealDeliveryMessageId } from "../campaign-delivery-metrics.ts";
 import {
   COMMERCIAL_STORE_KEYS,
   LOCAL_DATA_MIGRATION_VERSION,
@@ -20,6 +21,8 @@ import {
   type LocalDataBridgeSnapshot,
   type LocalDataHealth,
   type LocalDataHydration,
+  type OfficialSendHistoryRecord,
+  type RecoveredCampaignSummary,
 } from "../../types/local-data.ts";
 import type { Campaign } from "../../types/campaign.ts";
 import type { Lead, SearchRecord } from "../../types/lead.ts";
@@ -28,6 +31,7 @@ import type { EmailTemplate } from "../email-template-library.ts";
 import type { EmailBlocklistEntry } from "../email-blocklist.ts";
 import type { PersistedSearchBatch } from "../../types/search.ts";
 import type { CampaignTrackingEvent } from "../../types/campaign-tracking.ts";
+import { sqliteWinsArrayMerge } from "../store-rehydrate.ts";
 
 const DATABASE_NAME = "pnp-lead-finder.sqlite";
 const SECRET_KEY = /(password|secret|token|credentials|api.?key|smtpPassword|smtpEmail|accessKey)/i;
@@ -36,6 +40,7 @@ const EMPTY_COUNTS = {
   campaigns: 0,
   searchHistory: 0,
   confirmedSends: 0,
+  failedSends: 0,
   blocklist: 0,
   templates: 0,
 };
@@ -52,21 +57,6 @@ export interface SendIntent {
   id: string;
   intentKey: string;
   existingMessageId?: string;
-}
-
-export interface LocalSendHistoryRecord {
-  id: string;
-  intentKey: string;
-  campaignId: string | null;
-  leadId: string | null;
-  email: string;
-  operation: string;
-  queueItemId: string | null;
-  providerMessageId: string | null;
-  confirmedAt: string | null;
-  attemptedAt: string | null;
-  status: string;
-  error: string | null;
 }
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -189,6 +179,43 @@ function safeMerge(existing: unknown, incoming: unknown): unknown {
     return next;
   }
   return incoming;
+}
+
+/**
+ * Browser storage is recovery-only: it may contribute missing records, but it
+ * never overwrites an entity or scalar already present in SQLite.
+ */
+function recoveryMerge(existing: unknown, incoming: unknown): unknown {
+  if (!hasValue(existing)) return incoming;
+  if (!hasValue(incoming)) return existing;
+  if (Array.isArray(existing) && Array.isArray(incoming)) {
+    const existingKeys = new Set(
+      existing.flatMap((item) => {
+        if (!isRecord(item)) return [json(item)];
+        const key = item.id ?? item.batchId ?? item.operationId ??
+          item.normalizedEmail ?? item.email ?? item.leadId;
+        return typeof key === "string" && key ? [key] : [json(item)];
+      })
+    );
+    const recovered = incoming.filter((item) => {
+      if (!isRecord(item)) return !existingKeys.has(json(item));
+      const key = item.id ?? item.batchId ?? item.operationId ??
+        item.normalizedEmail ?? item.email ?? item.leadId;
+      const normalized = typeof key === "string" && key ? key : json(item);
+      return !existingKeys.has(normalized);
+    });
+    return [...existing, ...recovered];
+  }
+  if (isRecord(existing) && isRecord(incoming)) {
+    const next: JsonRecord = { ...existing };
+    for (const [key, value] of Object.entries(incoming)) {
+      next[key] = key in existing
+        ? recoveryMerge(existing[key], value)
+        : value;
+    }
+    return next;
+  }
+  return existing;
 }
 
 function stateFromPersisted(value: unknown): JsonRecord {
@@ -333,71 +360,86 @@ export class LocalDatabaseAdapter {
     return parseJson<JsonRecord>(row?.data_json, {});
   }
 
-  private saveStore(key: CommercialStoreKey, raw: unknown, mode: "merge" | "replace"): void {
+  private saveStore(
+    key: CommercialStoreKey,
+    raw: unknown,
+    mode: "merge" | "recovery"
+  ): void {
     const incoming = sanitizeSecrets(stateFromPersisted(raw)) as JsonRecord;
     const existing = this.readStore(key);
-    const state = mode === "merge" ? safeMerge(existing, incoming) as JsonRecord : incoming;
+    const state = (mode === "merge"
+      ? safeMerge(existing, incoming)
+      : recoveryMerge(existing, incoming)) as JsonRecord;
     const now = this.now().toISOString();
     this.database.prepare("INSERT INTO commercial_state(store_key,data_json,updated_at) VALUES(?,?,?) ON CONFLICT(store_key) DO UPDATE SET data_json=excluded.data_json, updated_at=excluded.updated_at").run(key, json(state), now);
     this.indexStore(key, state, now);
-    if (mode === "replace") this.synchronizeDeletedEntities(key, state);
-  }
-
-  private synchronizeDeletedEntities(
-    key: CommercialStoreKey,
-    state: JsonRecord
-  ): void {
-    const deleteMissing = (
-      table: string,
-      column: string,
-      ids: string[]
-    ) => {
-      if (ids.length === 0) {
-        this.database.prepare("DELETE FROM " + table).run();
-        return;
-      }
-      const placeholders = ids.map(() => "?").join(",");
-      this.database.prepare(
-        "DELETE FROM " + table + " WHERE " + column +
-          " NOT IN (" + placeholders + ")"
-      ).run(...ids);
-    };
-    if (key === "pnp-campaigns") {
-      const campaigns = asArray<Campaign>(state.campaigns);
-      const ids = campaigns.map((item) => item.id).filter(Boolean);
-      const removedAttachments = ids.length
-        ? this.database.prepare(
-            "SELECT file_path FROM attachments WHERE campaign_id NOT IN (" +
-              ids.map(() => "?").join(",") + ")"
-          ).all(...ids)
-        : this.database.prepare("SELECT file_path FROM attachments").all();
-      deleteMissing("campaigns", "campaign_id", ids);
-      const attachmentRoot = resolve(dirname(this.databasePath), "attachments");
-      for (const row of removedAttachments as Array<{ file_path?: unknown }>) {
-        if (typeof row.file_path !== "string") continue;
-        const target = resolve(row.file_path);
-        if (dirname(target) === attachmentRoot && existsSync(target)) rmSync(target);
-      }
-    } else if (key === "pnp-email-templates") {
-      deleteMissing(
-        "templates",
-        "template_id",
-        asArray<EmailTemplate>(state.templates).map((item) => item.id).filter(Boolean)
-      );
-    } else if (key === "pnp-email-blocklist") {
-      deleteMissing(
-        "blocklist",
-        "entry_id",
-        asArray<EmailBlocklistEntry>(state.entries).map((item) => item.id).filter(Boolean)
-      );
-    }
   }
 
   saveCommercialStore(key: CommercialStoreKey, raw: unknown): void {
     if (!COMMERCIAL_STORE_KEYS.includes(key)) throw new Error("Store comercial inválido.");
     this.transaction(() => {
-      this.saveStore(key, raw, "replace");
+      // Store mirrors are caches. Empty/stale snapshots may merge useful
+      // updates, but can never delete normalized SQLite rows.
+      this.saveStore(key, raw, "merge");
       this.setMetadata("lastWriteAt", this.now().toISOString());
+    });
+  }
+
+  putCampaign(campaign: Campaign): void {
+    this.transaction(() => {
+      const now = this.now().toISOString();
+      this.upsertCampaign(campaign, now);
+      const existing = this.readStore("pnp-campaigns");
+      const campaigns = mergeArrays(
+        asArray<Campaign>(existing.campaigns),
+        [campaign]
+      );
+      this.saveStore("pnp-campaigns", { campaigns }, "merge");
+      this.setMetadata("lastWriteAt", now);
+    });
+  }
+
+  deleteCampaign(campaignId: string): void {
+    this.transaction(() => {
+      this.database.prepare("DELETE FROM campaigns WHERE campaign_id=?").run(campaignId);
+      const state = this.readStore("pnp-campaigns");
+      const campaigns = asArray<Campaign>(state.campaigns).filter(
+        (campaign) => campaign.id !== campaignId
+      );
+      const now = this.now().toISOString();
+      this.database.prepare(
+        "INSERT INTO commercial_state(store_key,data_json,updated_at) VALUES('pnp-campaigns',?,?) ON CONFLICT(store_key) DO UPDATE SET data_json=excluded.data_json,updated_at=excluded.updated_at"
+      ).run(json({ ...state, campaigns }), now);
+      this.setMetadata("lastWriteAt", now);
+    });
+  }
+
+  putBlocklistEntries(entries: readonly EmailBlocklistEntry[]): void {
+    this.transaction(() => {
+      const now = this.now().toISOString();
+      for (const entry of entries) this.upsertBlock(entry);
+      const state = this.readStore("pnp-email-blocklist");
+      const merged = mergeArrays(
+        asArray<EmailBlocklistEntry>(state.entries),
+        [...entries]
+      );
+      this.saveStore("pnp-email-blocklist", { entries: merged }, "merge");
+      this.setMetadata("lastWriteAt", now);
+    });
+  }
+
+  deleteBlocklistEntry(entryId: string): void {
+    this.transaction(() => {
+      this.database.prepare("DELETE FROM blocklist WHERE entry_id=?").run(entryId);
+      const state = this.readStore("pnp-email-blocklist");
+      const entries = asArray<EmailBlocklistEntry>(state.entries).filter(
+        (entry) => entry.id !== entryId
+      );
+      const now = this.now().toISOString();
+      this.database.prepare(
+        "INSERT INTO commercial_state(store_key,data_json,updated_at) VALUES('pnp-email-blocklist',?,?) ON CONFLICT(store_key) DO UPDATE SET data_json=excluded.data_json,updated_at=excluded.updated_at"
+      ).run(json({ ...state, entries }), now);
+      this.setMetadata("lastWriteAt", now);
     });
   }
 
@@ -470,7 +512,7 @@ export class LocalDatabaseAdapter {
   private upsertCampaign(campaign: Campaign, now: string): void {
     if (!campaign?.id) return;
     const stored = this.persistAttachment(campaign, now);
-    this.database.prepare("INSERT INTO campaigns(campaign_id,operation,name,status,subject,body,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(campaign_id) DO UPDATE SET operation=excluded.operation,name=CASE WHEN excluded.name<>'' THEN excluded.name ELSE campaigns.name END,status=CASE WHEN campaigns.status IN ('completed','active') AND excluded.status='draft' THEN campaigns.status ELSE excluded.status END,subject=CASE WHEN excluded.subject<>'' THEN excluded.subject ELSE campaigns.subject END,body=CASE WHEN excluded.body<>'' THEN excluded.body ELSE campaigns.body END,payload_json=excluded.payload_json,updated_at=MAX(campaigns.updated_at,excluded.updated_at)").run(campaign.id, campaign.campaignProfileId ?? "panek-puglesi", campaign.name ?? "", campaign.status ?? "draft", campaign.subject ?? "", campaign.body ?? "", json(stored), iso(campaign.createdAt, now), iso(campaign.updatedAt, now));
+    this.database.prepare("INSERT INTO campaigns(campaign_id,operation,name,status,subject,body,payload_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(campaign_id) DO UPDATE SET operation=CASE WHEN excluded.updated_at>=campaigns.updated_at THEN excluded.operation ELSE campaigns.operation END,name=CASE WHEN excluded.updated_at>=campaigns.updated_at AND excluded.name<>'' THEN excluded.name ELSE campaigns.name END,status=CASE WHEN campaigns.status IN ('completed','active') AND excluded.status='draft' THEN campaigns.status WHEN excluded.updated_at>=campaigns.updated_at THEN excluded.status ELSE campaigns.status END,subject=CASE WHEN excluded.updated_at>=campaigns.updated_at AND excluded.subject<>'' THEN excluded.subject ELSE campaigns.subject END,body=CASE WHEN excluded.updated_at>=campaigns.updated_at AND excluded.body<>'' THEN excluded.body ELSE campaigns.body END,payload_json=CASE WHEN excluded.updated_at>=campaigns.updated_at THEN excluded.payload_json ELSE campaigns.payload_json END,updated_at=MAX(campaigns.updated_at,excluded.updated_at)").run(campaign.id, campaign.campaignProfileId ?? "panek-puglesi", campaign.name ?? "", campaign.status ?? "draft", campaign.subject ?? "", campaign.body ?? "", json(stored), iso(campaign.createdAt, now), iso(campaign.updatedAt, now));
     for (const delivery of asArray<Campaign["leadStatuses"][number]>(campaign.leadStatuses)) {
       if (delivery.status !== "sent" || !delivery.providerMessageId) continue;
       const leadRow = this.database.prepare("SELECT email FROM leads WHERE id=?").get(delivery.leadId) as { email?: unknown } | undefined;
@@ -531,7 +573,15 @@ export class LocalDatabaseAdapter {
   }): void {
     const intentKey = [input.operation, input.campaignId ?? "", input.leadId ?? "", input.contactKind, input.providerMessageId].join("|");
     const id = "send-" + Buffer.from(intentKey).toString("base64url").slice(0, 80);
-    this.database.prepare("INSERT INTO send_history(id,intent_key,campaign_id,lead_id,email,operation,contact_kind,attempted_at,confirmed_at,provider_message_id,status,error,payload_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,'', '{}') ON CONFLICT(intent_key) DO UPDATE SET confirmed_at=COALESCE(send_history.confirmed_at,excluded.confirmed_at),provider_message_id=COALESCE(send_history.provider_message_id,excluded.provider_message_id),status='confirmed'").run(id, intentKey, input.campaignId, input.leadId, input.email.toLowerCase(), input.operation, input.contactKind, input.attemptedAt, input.confirmedAt, input.providerMessageId, "confirmed");
+    const providerOwner = this.database.prepare(
+      "SELECT intent_key FROM send_history WHERE provider_message_id=?"
+    ).get(input.providerMessageId) as { intent_key?: unknown } | undefined;
+    // A provider ID is immutable delivery proof. Legacy campaign/queue caches
+    // may describe that same send with a different derived intent key; the
+    // official history row wins instead of aborting the whole hydration.
+    if (!providerOwner || providerOwner.intent_key === intentKey) {
+      this.database.prepare("INSERT INTO send_history(id,intent_key,campaign_id,lead_id,email,operation,contact_kind,attempted_at,confirmed_at,provider_message_id,status,error,payload_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,'', '{}') ON CONFLICT(intent_key) DO UPDATE SET confirmed_at=COALESCE(send_history.confirmed_at,excluded.confirmed_at),provider_message_id=COALESCE(send_history.provider_message_id,excluded.provider_message_id),status='confirmed'").run(id, intentKey, input.campaignId, input.leadId, input.email.toLowerCase(), input.operation, input.contactKind, input.attemptedAt, input.confirmedAt, input.providerMessageId, "confirmed");
+    }
     const dedupeKey = [input.operation, input.email.toLowerCase(), input.contactKind].join("|");
     this.database.prepare("INSERT INTO dedupe_history(dedupe_key,email,operation,campaign_id,provider_message_id,confirmed_at) VALUES(?,?,?,?,?,?) ON CONFLICT(dedupe_key) DO UPDATE SET campaign_id=excluded.campaign_id,provider_message_id=COALESCE(excluded.provider_message_id,dedupe_history.provider_message_id),confirmed_at=MAX(dedupe_history.confirmed_at,excluded.confirmed_at)").run(dedupeKey, input.email.toLowerCase(), input.operation, input.campaignId, input.providerMessageId, input.confirmedAt);
   }
@@ -590,12 +640,24 @@ export class LocalDatabaseAdapter {
     return rows.map((row) => this.getSearchBatch(String(row.batch_id))).filter((value): value is LegacySearchBatchSnapshot => Boolean(value));
   }
 
-  mergeLegacySnapshot(snapshot: LocalDataBridgeSnapshot): { migrated: Record<string, number> } {
+  mergeLegacySnapshot(snapshot: LocalDataBridgeSnapshot): {
+    migrated: Record<string, number>;
+    recoveryErrors: Record<string, string>;
+  } {
     const before = this.counts();
-    return this.transaction(() => {
-      for (const key of COMMERCIAL_STORE_KEYS) {
-        if (key in snapshot.stores) this.saveStore(key, snapshot.stores[key], "merge");
+    const recoveryErrors: Record<string, string> = {};
+    for (const key of COMMERCIAL_STORE_KEYS) {
+      if (!(key in snapshot.stores)) continue;
+      try {
+        this.transaction(() => {
+          this.saveStore(key, snapshot.stores[key], "recovery");
+        });
+      } catch (error) {
+        recoveryErrors[key] = error instanceof Error ? error.message : String(error);
       }
+    }
+    try {
+      this.transaction(() => {
       for (const record of snapshot.indexedDb.signatures) {
         if (!validSignature(record)) continue;
         const existing = this.getSignature(record.operationId);
@@ -603,20 +665,33 @@ export class LocalDatabaseAdapter {
           this.database.prepare("INSERT INTO signatures(operation_id,enabled,html,plain_text,version,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(operation_id) DO UPDATE SET enabled=excluded.enabled,html=excluded.html,plain_text=excluded.plain_text,version=MAX(signatures.version,excluded.version),updated_at=MAX(signatures.updated_at,excluded.updated_at)").run(record.operationId, record.enabled ? 1 : 0, record.html, record.plainText ?? "", record.version, record.updatedAt);
         }
       }
-      for (const item of snapshot.indexedDb.searchBatches) {
-        if (!item?.batch?.batchId) continue;
+      });
+    } catch (error) {
+      recoveryErrors.signatures = error instanceof Error ? error.message : String(error);
+    }
+    for (const item of snapshot.indexedDb.searchBatches) {
+      if (!item?.batch?.batchId) continue;
+      try {
+        this.transaction(() => {
         const existing = this.getSearchBatch(item.batch.batchId);
         const batch = existing ? safeMerge(existing.batch, item.batch) as PersistedSearchBatch : item.batch;
         const leads = existing ? mergeArrays(existing.leads, item.leads) as Lead[] : item.leads;
         this.putSearchBatchWithinTransaction(batch, leads);
+        });
+      } catch (error) {
+        recoveryErrors[`searchBatch:${item.batch.batchId}`] =
+          error instanceof Error ? error.message : String(error);
       }
+    }
+    this.transaction(() => {
       this.setMetadata("migrationVersion", String(Math.max(LOCAL_DATA_MIGRATION_VERSION, snapshot.migrationVersion || 0)));
       this.setMetadata("lastMigrationAt", this.now().toISOString());
-      const after = this.counts();
-      return {
-        migrated: Object.fromEntries(Object.keys(after).map((key) => [key, Math.max(0, after[key as keyof typeof after] - before[key as keyof typeof before])])),
-      };
     });
+    const after = this.counts();
+    return {
+      migrated: Object.fromEntries(Object.keys(after).map((key) => [key, Math.max(0, after[key as keyof typeof after] - before[key as keyof typeof before])])),
+      recoveryErrors,
+    };
   }
 
   private putSearchBatchWithinTransaction(batch: PersistedSearchBatch, leads: Lead[]): void {
@@ -636,29 +711,62 @@ export class LocalDatabaseAdapter {
       if (Object.keys(state).length) stores[key] = state;
     }
     const campaignRows = this.database.prepare("SELECT payload_json,campaign_id FROM campaigns ORDER BY updated_at DESC").all() as Array<{ payload_json: unknown; campaign_id: unknown }>;
-    if (campaignRows.length) {
-      const campaigns = campaignRows.map((row) => this.hydrateCampaign(parseJson<Campaign>(row.payload_json, null as unknown as Campaign), String(row.campaign_id))).filter(Boolean);
-      stores["pnp-campaigns"] = { ...stateFromPersisted(stores["pnp-campaigns"]), campaigns };
-    }
+    const tableCampaigns = campaignRows.map((row) => this.hydrateCampaign(parseJson<Campaign>(row.payload_json, null as unknown as Campaign), String(row.campaign_id))).filter((item): item is Campaign => Boolean(item));
+    const storeCampaigns = asArray<Campaign>(stateFromPersisted(stores["pnp-campaigns"]).campaigns);
+    stores["pnp-campaigns"] = {
+      ...stateFromPersisted(stores["pnp-campaigns"]),
+      campaigns: sqliteWinsArrayMerge(tableCampaigns, storeCampaigns, (campaign) => campaign.id),
+    };
     const leadRows = this.database.prepare("SELECT payload_json FROM leads ORDER BY updated_at DESC").all() as Array<{ payload_json: unknown }>;
     const historyRows = this.database.prepare("SELECT payload_json FROM search_history ORDER BY updated_at DESC").all() as Array<{ payload_json: unknown }>;
-    if (leadRows.length || historyRows.length) {
-      const existing = stateFromPersisted(stores["pnp-lead-finder"]);
-      stores["pnp-lead-finder"] = {
-        ...existing,
-        savedLeads: leadRows.map((row) => parseJson<Lead>(row.payload_json, null as unknown as Lead)).filter(Boolean),
-        fullSearchHistory: historyRows.map((row) => parseJson<SearchRecord>(row.payload_json, null as unknown as SearchRecord)).filter(Boolean),
-      };
-    }
+    const existingLeads = stateFromPersisted(stores["pnp-lead-finder"]);
+    stores["pnp-lead-finder"] = {
+      ...existingLeads,
+      savedLeads: sqliteWinsArrayMerge(
+        leadRows.map((row) => parseJson<Lead>(row.payload_json, null as unknown as Lead)).filter(Boolean),
+        asArray<Lead>(existingLeads.savedLeads),
+        (lead) => lead.id
+      ),
+      fullSearchHistory: sqliteWinsArrayMerge(
+        historyRows.map((row) => parseJson<SearchRecord>(row.payload_json, null as unknown as SearchRecord)).filter(Boolean),
+        asArray<SearchRecord>(existingLeads.fullSearchHistory),
+        (record) => record.id
+      ),
+    };
     const templates = this.database.prepare("SELECT payload_json FROM templates ORDER BY updated_at DESC").all() as Array<{ payload_json: unknown }>;
-    if (templates.length) stores["pnp-email-templates"] = { templates: templates.map((row) => parseJson<EmailTemplate>(row.payload_json, null as unknown as EmailTemplate)).filter(Boolean) };
+    const tableTemplates = templates.map((row) => parseJson<EmailTemplate>(row.payload_json, null as unknown as EmailTemplate)).filter(Boolean);
+    const storeTemplates = asArray<EmailTemplate>(stateFromPersisted(stores["pnp-email-templates"]).templates);
+    stores["pnp-email-templates"] = {
+      templates: sqliteWinsArrayMerge(tableTemplates, storeTemplates, (template) => template.id),
+    };
     const blocks = this.database.prepare("SELECT payload_json FROM blocklist ORDER BY blocked_at DESC").all() as Array<{ payload_json: unknown }>;
-    if (blocks.length) stores["pnp-email-blocklist"] = { entries: blocks.map((row) => parseJson<EmailBlocklistEntry>(row.payload_json, null as unknown as EmailBlocklistEntry)).filter(Boolean) };
+    const tableBlocks = blocks.map((row) => parseJson<EmailBlocklistEntry>(row.payload_json, null as unknown as EmailBlocklistEntry)).filter(Boolean);
+    const storeBlocks = asArray<EmailBlocklistEntry>(stateFromPersisted(stores["pnp-email-blocklist"]).entries);
+    stores["pnp-email-blocklist"] = {
+      entries: sqliteWinsArrayMerge(
+        tableBlocks,
+        storeBlocks,
+        (entry) => entry.id || entry.normalizedEmail
+      ),
+    };
+    const lifetime = stateFromPersisted(stores["pnp-lifetime-stats"]);
+    const sentCampaigns = this.database.prepare(
+      "SELECT COUNT(DISTINCT campaign_id) AS total FROM send_history WHERE status='confirmed' AND campaign_id IS NOT NULL"
+    ).get() as { total?: number | bigint } | undefined;
+    stores["pnp-lifetime-stats"] = {
+      ...lifetime,
+      campaignsSent: Math.max(
+        Number(lifetime.campaignsSent ?? 0),
+        Number(sentCampaigns?.total ?? 0)
+      ),
+    };
     return {
       migrationVersion: Number(this.getMetadata("migrationVersion") ?? "0"),
       stores,
       signatures: this.getSignatures(),
       searchBatches: this.getAllSearchBatches(),
+      sendHistory: this.listSendHistory(),
+      recoveredCampaigns: this.listRecoveredCampaigns(),
     };
   }
 
@@ -677,9 +785,27 @@ export class LocalDatabaseAdapter {
 
   createSendIntent(input: AgentThreeSendRequest): SendIntent {
     this.assertWritable();
-    const intentKey = [input.operation, input.campaignId ?? "", input.leadId ?? "", input.queueItemId ?? "", input.recipient.toLowerCase()].join("|");
+    const recipient = input.recipient.trim().toLowerCase();
+    const intentKey = [input.operation, input.campaignId ?? "", input.leadId ?? "", input.queueItemId ?? "", recipient].join("|");
+    const confirmed = this.database.prepare(
+      "SELECT id,provider_message_id FROM send_history WHERE operation=? AND lower(trim(email))=? AND status='confirmed' AND provider_message_id IS NOT NULL AND trim(provider_message_id)<>'' ORDER BY confirmed_at DESC LIMIT 1"
+    ).get(input.operation, recipient) as Record<string, unknown> | undefined;
+    if (
+      typeof confirmed?.provider_message_id === "string" &&
+      isRealDeliveryMessageId(confirmed.provider_message_id)
+    ) {
+      return {
+        id: String(confirmed.id),
+        intentKey,
+        existingMessageId: confirmed.provider_message_id,
+      };
+    }
     const existing = this.database.prepare("SELECT id,status,provider_message_id FROM send_history WHERE intent_key=?").get(intentKey) as Record<string, unknown> | undefined;
-    if (existing?.status === "confirmed" && typeof existing.provider_message_id === "string") {
+    if (
+      existing?.status === "confirmed" &&
+      typeof existing.provider_message_id === "string" &&
+      isRealDeliveryMessageId(existing.provider_message_id)
+    ) {
       return { id: String(existing.id), intentKey, existingMessageId: existing.provider_message_id };
     }
     const now = this.now().toISOString();
@@ -694,22 +820,26 @@ export class LocalDatabaseAdapter {
   listSendHistory(filters: {
     operation?: string;
     campaignId?: string;
-  } = {}): LocalSendHistoryRecord[] {
+  } = {}): OfficialSendHistoryRecord[] {
     const rows = this.database.prepare(
-      "SELECT id,intent_key,campaign_id,lead_id,email,operation,contact_kind,attempted_at,confirmed_at,provider_message_id,status,error,payload_json FROM send_history ORDER BY attempted_at"
+      "SELECT h.id,h.intent_key,h.campaign_id,c.name AS campaign_name,h.lead_id,l.company,h.email,h.operation,h.contact_kind,h.attempted_at,h.confirmed_at,h.provider_message_id,h.status,h.error,h.payload_json FROM send_history h LEFT JOIN campaigns c ON c.campaign_id=h.campaign_id LEFT JOIN leads l ON l.id=h.lead_id ORDER BY h.attempted_at DESC"
     ).all() as Array<Record<string, unknown>>;
     return rows
       .map((row) => {
         const payload = parseJson<JsonRecord>(row.payload_json, {});
         const queueItemId =
           typeof payload.queueItemId === "string" ? payload.queueItemId : null;
-        const record: LocalSendHistoryRecord = {
+        const record: OfficialSendHistoryRecord = {
           id: String(row.id),
           intentKey: String(row.intent_key ?? ""),
           campaignId: typeof row.campaign_id === "string" ? row.campaign_id : null,
+          campaignName:
+            typeof row.campaign_name === "string" ? row.campaign_name : null,
           leadId: typeof row.lead_id === "string" ? row.lead_id : null,
+          company: typeof row.company === "string" ? row.company : null,
           email: String(row.email ?? ""),
           operation: String(row.operation ?? ""),
+          contactKind: String(row.contact_kind ?? "first_contact"),
           queueItemId,
           providerMessageId:
             typeof row.provider_message_id === "string"
@@ -730,7 +860,24 @@ export class LocalDatabaseAdapter {
         }
         return record;
       })
-      .filter((record): record is LocalSendHistoryRecord => Boolean(record));
+      .filter((record): record is OfficialSendHistoryRecord => Boolean(record));
+  }
+
+  listRecoveredCampaigns(): RecoveredCampaignSummary[] {
+    const rows = this.database.prepare(
+      "SELECT h.campaign_id,h.operation,SUM(CASE WHEN h.status='confirmed' THEN 1 ELSE 0 END) AS confirmed,SUM(CASE WHEN h.status='failed' THEN 1 ELSE 0 END) AS failed,MIN(h.attempted_at) AS first_activity_at,MAX(COALESCE(h.confirmed_at,h.attempted_at)) AS last_activity_at,COUNT(DISTINCT lower(trim(h.email))) AS unique_emails,COUNT(DISTINCT h.provider_message_id) AS unique_provider_message_ids FROM send_history h LEFT JOIN campaigns c ON c.campaign_id=h.campaign_id WHERE h.campaign_id IS NOT NULL AND c.campaign_id IS NULL GROUP BY h.campaign_id,h.operation ORDER BY first_activity_at DESC"
+    ).all() as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      campaignId: String(row.campaign_id),
+      operation: String(row.operation),
+      label: "Campanha histórica recuperada" as const,
+      confirmed: Number(row.confirmed ?? 0),
+      failed: Number(row.failed ?? 0),
+      firstActivityAt: String(row.first_activity_at ?? ""),
+      lastActivityAt: String(row.last_activity_at ?? ""),
+      uniqueEmails: Number(row.unique_emails ?? 0),
+      uniqueProviderMessageIds: Number(row.unique_provider_message_ids ?? 0),
+    }));
   }
 
   isSuppressed(operation: string, email: string): boolean {
@@ -744,8 +891,9 @@ export class LocalDatabaseAdapter {
   finishSendIntent(intent: SendIntent, result: AgentThreeSmtpResult): void {
     const now = this.now().toISOString();
     this.transaction(() => {
-      if (result.status === "sent" && result.messageId) {
-        this.database.prepare("UPDATE send_history SET status='confirmed',confirmed_at=?,provider_message_id=?,error=NULL WHERE id=?").run(now, result.messageId, intent.id);
+      const messageId = result.messageId;
+      if (result.status === "sent" && isRealDeliveryMessageId(messageId)) {
+        this.database.prepare("UPDATE send_history SET status='confirmed',confirmed_at=?,provider_message_id=?,error=NULL WHERE id=?").run(now, messageId, intent.id);
         const row = this.database.prepare("SELECT email,operation,campaign_id,lead_id,contact_kind,attempted_at FROM send_history WHERE id=?").get(intent.id) as Record<string, unknown>;
         const dedupeKey = [
           String(row.operation),
@@ -759,11 +907,30 @@ export class LocalDatabaseAdapter {
           String(row.email ?? "").toLowerCase(),
           String(row.operation),
           typeof row.campaign_id === "string" ? row.campaign_id : null,
-          result.messageId,
+          messageId,
           now
         );
       } else {
-        this.database.prepare("UPDATE send_history SET status='failed',error=? WHERE id=?").run(result.message, intent.id);
+        const current = this.database.prepare("SELECT payload_json FROM send_history WHERE id=?").get(intent.id) as { payload_json?: unknown } | undefined;
+        const payload = parseJson<JsonRecord>(current?.payload_json, {});
+        const smtp = result.smtp
+          ? {
+              code: result.smtp.code ?? null,
+              responseCode: result.smtp.responseCode ?? null,
+              response: result.smtp.response ?? null,
+              command: result.smtp.command ?? null,
+              classification: result.smtp.classification ?? result.status,
+            }
+          : { classification: result.status };
+        const keepUnknown = result.status === "reconciliation_required";
+        this.database.prepare(
+          "UPDATE send_history SET status=?,error=?,payload_json=? WHERE id=?"
+        ).run(
+          keepUnknown ? "intent" : "failed",
+          result.message,
+          json({ ...payload, smtp }),
+          intent.id
+        );
       }
       this.setMetadata("lastWriteAt", now);
     });
@@ -779,6 +946,7 @@ export class LocalDatabaseAdapter {
       campaigns: count("campaigns"),
       searchHistory: count("search_history"),
       confirmedSends: count("send_history", " WHERE status='confirmed'"),
+      failedSends: count("send_history", " WHERE status='failed'"),
       blocklist: count("blocklist"),
       templates: count("templates"),
     };

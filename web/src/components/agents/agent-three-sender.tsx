@@ -63,6 +63,12 @@ import {
 } from "@/types/campaign-profile";
 import { describeAgentThreeStartBlock } from "@/lib/agent-three-smtp-contract";
 import {
+  fingerprintsMatch,
+  PREVIEW_QUEUE_MISMATCH_MESSAGE,
+  previewEligibleFingerprint,
+  queueReadyFingerprint,
+} from "@/lib/eligibility-fingerprint";
+import {
   getDefaultEmailTemplate,
   getEmailTemplatesForOperation,
 } from "@/lib/email-template-library";
@@ -235,7 +241,7 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
 
   useEffect(() => {
     if (!hydrated) return;
-    void ensureOperationSignaturesHydrated().catch(() => undefined);
+    void ensureOperationSignaturesHydrated(profileId).catch(() => undefined);
     void runner.loadCampaign(profileId, operation.currentCampaignId);
     // Auto-load when profile/campaign selection changes after hydration.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runner methods are stable for this UI flow
@@ -294,13 +300,25 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
         item.queueStatus === "sent" || item.queueStatus === "failed"
     );
   const displayItem = currentItem ?? nextItem ?? lastProcessedItem;
-  const readyCount = campaignItems.filter(
+  const queueReadyCount = campaignItems.filter(
     (item) => item.queueStatus === "ready"
   ).length;
+  const readyCount = deduplicationPreview?.finalSendCount ?? queueReadyCount;
   const excludedItems = campaignItems.filter(
     (item) =>
       item.queueStatus === "blocked" || item.queueStatus === "skipped"
   );
+  const excludedCount = deduplicationPreview
+    ? deduplicationPreview.decisions.filter((decision) => !decision.included)
+        .length
+    : excludedItems.length;
+  const eligibilityMismatch =
+    !isPreparing &&
+    Boolean(deduplicationPreview) &&
+    !fingerprintsMatch(
+      previewEligibleFingerprint(deduplicationPreview),
+      queueReadyFingerprint(campaignItems)
+    );
   const campaignDelivery = currentCampaign
     ? getCampaignDeliverySnapshot(currentCampaign)
     : null;
@@ -344,7 +362,7 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
   const isLiveExecution =
     operation.status === "running" || operation.status === "paused";
   const displayProcessedCount = isLiveExecution ? metrics.processedCount : 0;
-  const possibleTotal = displayProcessedCount + readyCount;
+  const possibleTotal = displayProcessedCount + queueReadyCount;
   const executionTotal = operation.untilQueueEnds
     ? possibleTotal
     : Math.min(operation.numericLimit, possibleTotal);
@@ -373,7 +391,7 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
   const emptyQueueReason =
     !isPreparing &&
     operation.currentCampaignId &&
-    readyCount === 0 &&
+    queueReadyCount === 0 &&
     operation.status !== "running"
       ? campaignFullyDelivered
         ? "Campanha concluÃ­da: todos os destinatÃ¡rios jÃ¡ foram enviados."
@@ -595,7 +613,10 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
     if (!previewConfirmed) {
       return describeAgentThreeStartBlock({ previewRequired: true });
     }
-    if (readyCount === 0 && !isPreparing) {
+    if (eligibilityMismatch) {
+      return PREVIEW_QUEUE_MISMATCH_MESSAGE;
+    }
+    if (queueReadyCount === 0 && !isPreparing) {
       return describeAgentThreeStartBlock({ noEligible: true });
     }
     if (connectionStatus === "real_send_disabled") {
@@ -1113,7 +1134,7 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
                 disabled={
                   controlsLocked ||
                   Boolean(startDisabledReason) ||
-                  (readyCount === 0 && !isPreparing)
+                  (queueReadyCount === 0 && !isPreparing)
                 }
                 title={startDisabledReason ?? undefined}
               >
@@ -1160,7 +1181,9 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
             <p className="text-sm font-medium">8. Resultado / relatório</p>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <SummaryCard label="Planejados (fila)" value={campaignItems.length} />
-              <SummaryCard label="Elegíveis (prontos)" value={readyCount} />
+              <SummaryCard label="Elegíveis" value={readyCount} />
+              <SummaryCard label="Excluídos" value={excludedCount} />
+              <SummaryCard label="Fila pronta" value={queueReadyCount} />
               <SummaryCard
                 label="Limite configurado"
                 value={
@@ -1176,7 +1199,7 @@ function AgentThreeSenderContent({ hydrated }: { hydrated: boolean }) {
                 label="Restantes no limite"
                 value={
                   operation.untilQueueEnds
-                    ? readyCount
+                    ? queueReadyCount
                     : Math.max(
                         0,
                         operation.numericLimit - operation.processedCount

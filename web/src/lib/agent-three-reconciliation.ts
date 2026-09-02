@@ -5,6 +5,7 @@ import { normalizeEmail } from "./email-validation.ts";
 import { AGENT_THREE_UNKNOWN_RECONCILIATION_MESSAGE } from "./agent-three-timeouts.ts";
 import {
   confirmAgentThreeItem,
+  markAgentThreeItemFailedAuth,
   markAgentThreeItemUnknown,
   pauseAgentThree,
   touchAgentThreeHeartbeat,
@@ -43,6 +44,42 @@ function emailsMatch(
   const a = normalizeEmail(left);
   const b = normalizeEmail(right);
   return Boolean(a && b && a === b);
+}
+
+function isAuthenticationFailureRecord(
+  record: AgentThreePersistedSendRecord | null | undefined
+): boolean {
+  if (!record || record.status !== "failed" || record.providerMessageId) {
+    return false;
+  }
+  return /authentication|autentic|eauth|app password|senha de app|\b53[45]\b/i.test(
+    record.error ?? ""
+  );
+}
+
+/**
+ * Historical unknown/sending items from another campaign must not pause a
+ * new run that still has READY recipients. Pause only when the current
+ * campaign is running, has unresolved items, and has nothing ready to send.
+ */
+export function shouldPauseRunningQueueForUnresolvedItems(
+  operation: {
+    status: string;
+    currentCampaignId: string | null;
+    queue: readonly AgentThreeQueueItem[];
+  }
+): boolean {
+  if (operation.status !== "running") return false;
+  const currentId = operation.currentCampaignId;
+  const currentQueue = operation.queue.filter(
+    (item) => item.campaignId === currentId
+  );
+  const hasReady = currentQueue.some((item) => item.queueStatus === "ready");
+  if (hasReady) return false;
+  return currentQueue.some(
+    (item) =>
+      item.queueStatus === "sending" || item.queueStatus === "unknown"
+  );
 }
 
 export function isConfirmedSendRecord(
@@ -115,6 +152,17 @@ export function reconcileAgentThreeOperation(
       confirmedCount += 1;
       continue;
     }
+    if (isAuthenticationFailureRecord(match)) {
+      next = markAgentThreeItemFailedAuth(
+        next,
+        profileId,
+        item.id,
+        match!.error ?? "Falha de autenticação SMTP.",
+        match!.attemptedAt ?? occurredAt
+      );
+      failedCount += 1;
+      continue;
+    }
     if (item.queueStatus === "sending") {
       if (match?.status === "failed") {
         failedCount += 1;
@@ -144,12 +192,7 @@ export function reconcileAgentThreeOperation(
     };
   }
 
-  if (
-    next.operations[profileId].status === "running" &&
-    next.operations[profileId].queue.some(
-      (item) => item.queueStatus === "sending" || item.queueStatus === "unknown"
-    )
-  ) {
+  if (shouldPauseRunningQueueForUnresolvedItems(next.operations[profileId])) {
     next = pauseAgentThree(next, profileId, occurredAt);
   }
 
@@ -187,15 +230,30 @@ export function reconcileCampaignFromSendHistory(
       return current;
     }
     const confirmed = relevant.find((record) => record.leadId === leadId);
-    if (!isConfirmedSendRecord(confirmed)) return current;
+    if (isConfirmedSendRecord(confirmed)) {
+      return {
+        ...current,
+        leadId,
+        status: "sent",
+        sentAt: confirmed!.confirmedAt ?? current.sentAt,
+        providerMessageId: confirmed!.providerMessageId!,
+        errorMessage: undefined,
+        errorCode: undefined,
+      };
+    }
+    const failedAuth = relevant.find(
+      (record) =>
+        record.leadId === leadId && isAuthenticationFailureRecord(record)
+    );
+    if (!failedAuth || current.status === "sent") return current;
     return {
       ...current,
       leadId,
-      status: "sent",
-      sentAt: confirmed!.confirmedAt ?? current.sentAt,
-      providerMessageId: confirmed!.providerMessageId!,
-      errorMessage: undefined,
-      errorCode: undefined,
+      status: "failed",
+      sentAt: undefined,
+      providerMessageId: undefined,
+      errorMessage: failedAuth.error ?? "Falha de autenticação SMTP.",
+      errorCode: "AGENT3_SMTP_AUTH",
     };
   });
   return {

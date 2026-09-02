@@ -31,6 +31,8 @@ import {
   prepareLocalDataWrite,
   useLocalDataAvailability,
 } from "@/lib/local-data-client";
+import { RecoveredCampaignsPanel } from "@/components/dashboard/official-send-history";
+import { useOfficialHistoryStore } from "@/store/official-history-store";
 
 export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
   const router = useRouter();
@@ -40,6 +42,9 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
   const deleteCampaign = useCampaignStore((s) => s.deleteCampaign);
   const setCampaignStatus = useCampaignStore((s) => s.setCampaignStatus);
   const updateCampaign = useCampaignStore((s) => s.updateCampaign);
+  const recoveredCount = useOfficialHistoryStore(
+    (state) => state.recoveredCampaigns.length
+  );
 
   const handleReuse = (campaign: Campaign) => {
     router.push(buildReuseCampaignUrl(campaign.id));
@@ -80,7 +85,7 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
         toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
         return;
       }
-      const copy = duplicateCampaign(campaign.id);
+      const copy = await duplicateCampaign(campaign.id);
       if (!copy) {
         toast.error("Não foi possível duplicar.");
         return;
@@ -127,7 +132,7 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
         toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
         return;
       }
-      deleteCampaign(campaign.id);
+      await deleteCampaign(campaign.id);
       toast.success("Campanha apagada.");
     } catch (error) {
       if (isLocalDataUnavailableError(error)) {
@@ -139,6 +144,20 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
   };
 
   if (campaigns.length === 0) {
+    if (localDataAvailability === "checking") {
+      return (
+        <div className="rounded-xl border border-dashed border-border/60 px-6 py-12 text-center text-sm text-muted-foreground">
+          Carregando campanhas do SQLite…
+        </div>
+      );
+    }
+    if (recoveredCount > 0) {
+      return (
+        <div className="space-y-4 p-4">
+          <RecoveredCampaignsPanel />
+        </div>
+      );
+    }
     return (
       <div className="rounded-xl border border-dashed border-border/60 px-6 py-12 text-center text-sm text-muted-foreground">
         Nenhuma campanha salva ainda. Crie uma nova — ela permanecerá após reload
@@ -148,6 +167,12 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
   }
 
   return (
+    <div className="space-y-4">
+    {recoveredCount > 0 ? (
+      <div className="px-1 pt-1">
+        <RecoveredCampaignsPanel />
+      </div>
+    ) : null}
     <div className="overflow-hidden rounded-xl border border-border/60 bg-card/50">
       <div className="overflow-x-auto">
         <table className="w-full min-w-[960px] text-sm">
@@ -323,6 +348,7 @@ export function CampaignListTable({ campaigns }: { campaigns: Campaign[] }) {
           </tbody>
         </table>
       </div>
+    </div>
     </div>
   );
 }

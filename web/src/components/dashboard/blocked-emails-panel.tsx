@@ -29,6 +29,7 @@ import {
   type EmailBlockReason,
 } from "@/lib/email-blocklist";
 import { useEmailBlocklistStore } from "@/store/email-blocklist-store";
+import { useLocalDataAvailability } from "@/lib/local-data-client";
 import { cn } from "@/lib/utils";
 
 function formatDate(value: string) {
@@ -41,6 +42,7 @@ function formatDate(value: string) {
 
 export function BlockedEmailsPanel() {
   const entries = useEmailBlocklistStore((s) => s.entries ?? []);
+  const localDataAvailability = useLocalDataAvailability();
   const addEmail = useEmailBlocklistStore((s) => s.addEmail);
   const addEmails = useEmailBlocklistStore((s) => s.addEmails);
   const removeById = useEmailBlocklistStore((s) => s.removeById);
@@ -73,8 +75,8 @@ export function BlockedEmailsPanel() {
     });
   }, [entries, filter]);
 
-  function handleAddSingle() {
-    const entry = addEmail({
+  async function handleAddSingle() {
+    const entry = await addEmail({
       email: singleEmail,
       reason,
       operation,
@@ -89,12 +91,12 @@ export function BlockedEmailsPanel() {
     toast.success(`${entry.normalizedEmail} bloqueado.`);
   }
 
-  function handleAddBulk() {
+  async function handleAddBulk() {
     if (!bulkEmails.trim()) {
       toast.error("Cole uma lista de e-mails.");
       return;
     }
-    const result = addEmails({
+    const result = await addEmails({
       raw: bulkEmails,
       reason,
       operation,
@@ -113,8 +115,8 @@ export function BlockedEmailsPanel() {
     );
   }
 
-  function handleRemove(id: string, email: string) {
-    removeById(id);
+  async function handleRemove(id: string, email: string) {
+    await removeById(id);
     toast.success(`${email} desbloqueado.`);
   }
 
@@ -202,7 +204,7 @@ export function BlockedEmailsPanel() {
                 placeholder="Contexto do bloqueio"
               />
             </div>
-            <Button type="button" onClick={handleAddSingle} className="w-full">
+            <Button type="button" onClick={() => void handleAddSingle()} className="w-full">
               <Plus className="size-4" />
               Bloquear e-mail
             </Button>
@@ -223,7 +225,7 @@ export function BlockedEmailsPanel() {
             <Button
               type="button"
               variant="outline"
-              onClick={handleAddBulk}
+              onClick={() => void handleAddBulk()}
               className="w-full"
             >
               <Ban className="size-4" />
@@ -245,9 +247,11 @@ export function BlockedEmailsPanel() {
 
           {filtered.length === 0 ? (
             <p className="rounded-lg border border-dashed border-border/60 px-4 py-8 text-center text-sm text-muted-foreground">
-              {entries.length === 0
-                ? "Nenhum e-mail bloqueado ainda."
-                : "Nenhum resultado para o filtro."}
+              {localDataAvailability === "checking"
+                ? "Carregando blocklist do SQLite…"
+                : entries.length === 0
+                  ? "Nenhum e-mail bloqueado ainda."
+                  : "Nenhum resultado para o filtro."}
             </p>
           ) : (
             <ul className="divide-y divide-border/50 rounded-xl border border-border/60">
@@ -286,7 +290,7 @@ export function BlockedEmailsPanel() {
                     variant="ghost"
                     className={cn("shrink-0 text-muted-foreground")}
                     onClick={() =>
-                      handleRemove(entry.id, entry.normalizedEmail)
+                      void handleRemove(entry.id, entry.normalizedEmail)
                     }
                     title="Desbloquear"
                   >

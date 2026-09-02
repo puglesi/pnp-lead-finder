@@ -8,7 +8,10 @@ import {
   type EmailTemplate,
   type EmailTemplateInput,
 } from "@/lib/email-template-library";
-import { normalizeTemplatesPersistSlice } from "@/lib/store-rehydrate";
+import {
+  normalizeTemplatesPersistSlice,
+  sqliteWinsArrayMerge,
+} from "@/lib/store-rehydrate";
 import { asArray } from "@/lib/safe-object";
 import { assertLocalDataWritable } from "@/lib/local-data-client";
 
@@ -178,6 +181,7 @@ export const useEmailTemplateStore = create<EmailTemplateStore>()(
     }),
     {
       name: "pnp-email-templates",
+      skipHydration: true,
       version: 5,
       partialize: (state) => ({ templates: state.templates }),
       migrate: (persisted, version) => {
@@ -198,18 +202,17 @@ export const useEmailTemplateStore = create<EmailTemplateStore>()(
       merge: (persisted, current) => {
         const normalized = normalizeTemplatesPersistSlice(persisted);
         const rawTemplates = asArray(normalized.templates);
-        const hadTemplatesField =
-          persisted &&
-          typeof persisted === "object" &&
-          "templates" in (persisted as object);
-        const templates = hadTemplatesField
-          ? configureExistingEmailTemplates(
-              rawTemplates as EmailTemplate[]
-            )
-          : current.templates;
+        const persistedTemplates =
+          rawTemplates.length > 0
+            ? configureExistingEmailTemplates(rawTemplates as EmailTemplate[])
+            : [];
         return {
           ...current,
-          templates,
+          templates: sqliteWinsArrayMerge(
+            current.templates,
+            persistedTemplates,
+            (template) => template.id
+          ),
         };
       },
       onRehydrateStorage: () => (state) => state?.markHydrated(),

@@ -1407,7 +1407,7 @@ test("SMTP 18. provider_account_blocked pausa", async () => {
   );
 });
 
-test("SMTP 19. transient_error registra falha corretamente", async () => {
+test("SMTP 19. timeout de conexão registra falha corretamente", async () => {
   const claimed = claimReady(readySnapshot());
   const mock = smtpMock({ error: { code: "ETIMEDOUT" } });
   const smtpResult = await sendAgentThreeSmtp(
@@ -1422,7 +1422,7 @@ test("SMTP 19. transient_error registra falha corretamente", async () => {
     finalTime
   );
   const item = applied.snapshot.operations["panek-puglesi"].queue[0];
-  assert.equal(smtpResult.status, "transient_error");
+  assert.equal(smtpResult.status, "connection_error");
   assert.equal(item.queueStatus, "failed");
   assert.equal(item.errorMessage, smtpResult.message);
   assert.equal(item.sentAt, undefined);

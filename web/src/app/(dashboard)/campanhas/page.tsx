@@ -19,6 +19,7 @@ import {
 import { CampaignListTable } from "@/components/campaigns/campaign-list-table";
 import { getCampaignListViewStats } from "@/lib/campaign-list-metrics";
 import { useCampaignStore } from "@/store/campaign-store";
+import { useLocalDataAvailability } from "@/lib/local-data-client";
 
 const subscribeToHydration = () => () => {};
 const getClientHydrationSnapshot = () => true;
@@ -31,6 +32,7 @@ export default function CampanhasPage() {
     getServerHydrationSnapshot
   );
   const campaigns = useCampaignStore((state) => state.campaigns);
+  const localDataAvailability = useLocalDataAvailability();
   const normalizeLegacyDeliveryMetrics = useCampaignStore(
     (state) => state.normalizeLegacyDeliveryMetrics
   );
@@ -135,26 +137,12 @@ export default function CampanhasPage() {
           <CardTitle>Lista de campanhas</CardTitle>
         </CollapsibleCardHeader>
         <CollapsibleCardContent className="p-0">
-          {!hydrated || visibleCampaigns.length === 0 ? (
+          {!hydrated || localDataAvailability === "checking" ? (
             <div className="flex flex-col items-center justify-center py-20 text-center">
               <Megaphone className="mb-4 size-16 text-muted-foreground/40" />
               <h3 className="text-lg font-semibold">
-                {hydrated ? "Nenhuma campanha ainda" : "Carregando campanhas…"}
+                Carregando campanhas do SQLite…
               </h3>
-              {hydrated && (
-                <>
-                  <p className="mt-2 max-w-md text-sm text-muted-foreground">
-                    Crie sua primeira campanha com templates personalizados,
-                    seleção de leads e preview em tempo real.
-                  </p>
-                  <Button asChild className="mt-6">
-                    <Link href="/campanhas/nova">
-                      <Plus className="size-4" />
-                      Criar Primeira Campanha
-                    </Link>
-                  </Button>
-                </>
-              )}
             </div>
           ) : (
             <CampaignListTable campaigns={visibleCampaigns} />

@@ -3,9 +3,11 @@ import { isCampaignProfileId } from "../../types/campaign-profile.ts";
 import {
   AGENT_THREE_SMTP_MESSAGES,
   type AgentThreeSendRequest,
+  type AgentThreeSmtpErrorDetails,
   type AgentThreeSmtpResult,
   type AgentThreeSmtpStatus,
 } from "../agent-three-smtp-contract.ts";
+import { isRealDeliveryMessageId } from "../campaign-delivery-metrics.ts";
 import {
   AgentThreeTimeoutError,
   resolveAgentThreeSmtpTimeouts,
@@ -87,6 +89,8 @@ interface AgentThreeResolvedSmtpConfig {
 interface SmtpErrorShape {
   code?: unknown;
   responseCode?: unknown;
+  response?: unknown;
+  command?: unknown;
   message?: unknown;
 }
 
@@ -96,6 +100,7 @@ function result(
     messageId?: string;
     message?: string;
     diagnostics?: AgentThreeSmtpResult["diagnostics"];
+    smtp?: AgentThreeSmtpErrorDetails;
   }
 ): AgentThreeSmtpResult {
   return {
@@ -103,6 +108,34 @@ function result(
     message: options?.message ?? AGENT_THREE_SMTP_MESSAGES[status],
     ...(options?.messageId ? { messageId: options.messageId } : {}),
     ...(options?.diagnostics ? { diagnostics: options.diagnostics } : {}),
+    ...(options?.smtp ? { smtp: options.smtp } : {}),
+  };
+}
+
+export function sanitizeAgentThreeSmtpText(value: string): string {
+  return value
+    .replace(/pass(word)?\s*[:=].*/gi, "[redacted]")
+    .replace(/\b[A-Za-z0-9+/]{24,}={0,2}\b/g, "[token]")
+    .trim()
+    .slice(0, 500);
+}
+
+export function smtpErrorDetails(
+  error: unknown,
+  classification: AgentThreeSmtpStatus
+): AgentThreeSmtpErrorDetails {
+  const shape = errorShape(error);
+  const response =
+    typeof shape.response === "string"
+      ? sanitizeAgentThreeSmtpText(shape.response)
+      : null;
+  return {
+    code: typeof shape.code === "string" ? shape.code : null,
+    responseCode:
+      typeof shape.responseCode === "number" ? shape.responseCode : null,
+    response,
+    command: typeof shape.command === "string" ? shape.command : null,
+    classification,
   };
 }
 
@@ -294,6 +327,24 @@ function errorShape(error: unknown): SmtpErrorShape {
     : {};
 }
 
+const CONNECTION_CODES = new Set([
+  "ECONNECTION",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "ECONNRESET",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EDNS",
+  "ESOCKET",
+]);
+
+function smtpText(shape: SmtpErrorShape): string {
+  return [shape.response, shape.message, shape.command]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ")
+    .toLowerCase();
+}
+
 export function classifyAgentThreeSmtpError(
   error: unknown
 ): Exclude<
@@ -309,45 +360,52 @@ export function classifyAgentThreeSmtpError(
   const code = typeof shape.code === "string" ? shape.code.toUpperCase() : "";
   const responseCode =
     typeof shape.responseCode === "number" ? shape.responseCode : 0;
-  const message =
-    typeof shape.message === "string" ? shape.message.toLowerCase() : "";
+  const text = smtpText(shape);
+  const command =
+    typeof shape.command === "string" ? shape.command.toUpperCase() : "";
+  const authCommand = command.startsWith("AUTH") || code === "EAUTH";
 
   if (
     error instanceof AgentThreeTimeoutError ||
-    (error instanceof Error && error.name === "AgentThreeTimeoutError")
+    (error instanceof Error && error.name === "AgentThreeTimeoutError") ||
+    CONNECTION_CODES.has(code)
   ) {
-    return "reconciliation_required";
+    return "connection_error";
   }
-  if (code === "EAUTH" || responseCode === 534 || responseCode === 535) {
+
+  const permanentAuth =
+    responseCode === 535 ||
+    responseCode === 534 ||
+    (/\b5\.7\.\d/.test(text) && !/\b4\.7\.\d/.test(text));
+  if (permanentAuth) {
     return "authentication_error";
   }
+
+  const transientAuth =
+    responseCode === 454 ||
+    (responseCode >= 400 && responseCode < 500 && authCommand) ||
+    /\b4\.7\.\d/.test(text) ||
+    (code === "EAUTH" && !permanentAuth);
+  if (transientAuth) {
+    return "auth_transient";
+  }
+
   if (
     responseCode === 421 ||
-    responseCode === 454 ||
-    /\b(rate|quota|too many|limit exceeded)\b/i.test(message)
+    /\b(rate|quota|too many|limit exceeded)\b/i.test(text)
   ) {
     return "provider_rate_limit";
   }
   if (
     (responseCode === 550 || responseCode === 554) &&
-    /\b(account|user).*(blocked|disabled|suspended)\b/i.test(message)
+    /\b(account|user).*(blocked|disabled|suspended)\b/i.test(text)
   ) {
     return "provider_account_blocked";
   }
-  if (
-    (responseCode >= 400 && responseCode < 500) ||
-    new Set([
-      "ECONNECTION",
-      "ECONNREFUSED",
-      "ETIMEDOUT",
-      "ECONNRESET",
-      "EHOSTUNREACH",
-      "ENETUNREACH",
-      "EDNS",
-      "ESOCKET",
-      "EENVELOPE",
-    ]).has(code)
-  ) {
+  if (responseCode >= 400 && responseCode < 500) {
+    return "transient_error";
+  }
+  if (code === "EENVELOPE") {
     return "transient_error";
   }
   return "permanent_error";
@@ -521,8 +579,29 @@ export async function sendAgentThreeSmtp(
       timeouts.overallTimeout,
       "sendMail"
     );
+    if (!isRealDeliveryMessageId(info.messageId)) {
+      return result("reconciliation_required", {
+        message:
+          "O SMTP aceitou o envio, mas não devolveu um providerMessageId válido. Sem confirmação e sem retry automático.",
+      });
+    }
     return result("sent", { messageId: info.messageId });
   } catch (error) {
-    return result(classifyAgentThreeSmtpError(error));
+    const status = classifyAgentThreeSmtpError(error);
+    const smtp = smtpErrorDetails(error, status);
+    const smtpBits = [
+      smtp.code,
+      smtp.responseCode != null ? String(smtp.responseCode) : null,
+      smtp.command,
+    ].filter(Boolean);
+    const detail = [smtpBits.join(" "), smtp.response]
+      .filter(Boolean)
+      .join(" — ");
+    return result(status, {
+      message: detail
+        ? `${AGENT_THREE_SMTP_MESSAGES[status]} (${detail})`
+        : AGENT_THREE_SMTP_MESSAGES[status],
+      smtp,
+    });
   }
 }

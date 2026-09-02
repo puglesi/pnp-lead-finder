@@ -26,6 +26,8 @@ import { useCampaignStore } from "@/store/campaign-store";
 import { useEmailBlocklistStore } from "@/store/email-blocklist-store";
 import { DashboardSectionBoundary } from "@/components/dashboard/dashboard-section-boundary";
 import { cn } from "@/lib/utils";
+import { OfficialSendHistory } from "@/components/dashboard/official-send-history";
+import { useOfficialHistoryStore } from "@/store/official-history-store";
 
 type DashboardTab =
   | "overview"
@@ -42,7 +44,7 @@ const TABS: {
   { id: "overview", label: "Visão Geral", icon: LayoutDashboard },
   { id: "campaigns", label: "Campanhas", icon: Megaphone },
   { id: "leads", label: "Leads", icon: Users },
-  { id: "history", label: "Histórico de Buscas", icon: History },
+  { id: "history", label: "Histórico de Buscas e Envios", icon: History },
   { id: "blocked", label: "E-mails Bloqueados", icon: Ban },
 ];
 
@@ -68,8 +70,22 @@ export function DashboardTabs() {
   const setTab = (next: DashboardTab) => setManualTab(next);
   const savedLeadsCount = useLeadStore((s) => s.savedLeads?.length ?? 0);
   const campaigns = useCampaignStore((s) => s.campaigns ?? []);
-  const campaignCount = campaigns.length;
+  const recoveredCount = useOfficialHistoryStore(
+    (s) => s.recoveredCampaigns.length
+  );
+  const sendHistoryCount = useOfficialHistoryStore(
+    (s) => s.sendHistory.length
+  );
+  const campaignCount = campaigns.length + recoveredCount;
   const blockedCount = useEmailBlocklistStore((s) => s.entries?.length ?? 0);
+  const campaignStats = {
+    total: campaigns.length,
+    active: campaigns.filter(
+      (campaign) => campaign.status === "active" || campaign.status === "paused"
+    ).length,
+    completed: campaigns.filter((campaign) => campaign.status === "completed").length,
+    archived: campaigns.filter((campaign) => campaign.status === "archived").length,
+  };
 
   return (
     <div className="space-y-6">
@@ -82,9 +98,11 @@ export function DashboardTabs() {
               ? savedLeadsCount
               : item.id === "campaigns"
                 ? campaignCount
-                : item.id === "blocked"
-                  ? blockedCount
-                  : 0;
+                : item.id === "history"
+                  ? sendHistoryCount
+                  : item.id === "blocked"
+                    ? blockedCount
+                    : 0;
           return (
             <button
               key={item.id}
@@ -150,7 +168,10 @@ export function DashboardTabs() {
             <div>
               <h3 className="text-lg font-semibold">Campanhas</h3>
               <p className="text-sm text-muted-foreground">
-                Visão rápida. Gerenciamento completo permanece em Campanhas.
+                SQLite: {campaignStats.total} todas · {campaignStats.active} ativas · {campaignStats.completed} concluídas · {campaignStats.archived} arquivadas
+                {recoveredCount > 0
+                  ? ` · ${recoveredCount} históricas recuperadas`
+                  : ""}.
               </p>
             </div>
             <Button variant="outline" size="sm" asChild>
@@ -162,6 +183,9 @@ export function DashboardTabs() {
           </div>
           <DashboardSectionBoundary name="CampaignListTable">
             <CampaignListTable campaigns={campaigns} />
+          </DashboardSectionBoundary>
+          <DashboardSectionBoundary name="OfficialSendHistory">
+            <OfficialSendHistory />
           </DashboardSectionBoundary>
         </div>
       )}
@@ -183,7 +207,7 @@ export function DashboardTabs() {
       {tab === "history" && (
         <div className="space-y-8">
           <div>
-            <h3 className="text-lg font-semibold">Histórico de Buscas</h3>
+            <h3 className="text-lg font-semibold">Histórico persistido</h3>
             <p className="text-sm text-muted-foreground">
               Setores pesquisados e registro completo de buscas anteriores.
             </p>
@@ -193,6 +217,9 @@ export function DashboardTabs() {
           </DashboardSectionBoundary>
           <DashboardSectionBoundary name="FullSearchHistory">
             <FullSearchHistory />
+          </DashboardSectionBoundary>
+          <DashboardSectionBoundary name="OfficialSendHistory">
+            <OfficialSendHistory />
           </DashboardSectionBoundary>
         </div>
       )}

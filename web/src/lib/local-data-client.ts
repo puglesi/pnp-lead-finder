@@ -146,6 +146,14 @@ export async function migrateLegacyBrowserData(): Promise<Record<string, number>
   return body?.migrated ?? {};
 }
 
+/**
+ * Runs before SQLite hydration on every browser start. The server performs an
+ * insert-missing-only recovery merge, so an empty or stale cache cannot win.
+ */
+export async function recoverBrowserCacheIntoSqlite(): Promise<Record<string, number>> {
+  return migrateLegacyBrowserData();
+}
+
 export async function fetchLocalHydration(): Promise<LocalDataHydration> {
   const response = await fetch("/api/local-data", { cache: "no-store" });
   const body = await response.json().catch(() => null) as {

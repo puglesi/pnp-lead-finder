@@ -22,6 +22,12 @@ export function GlobalDeduplicationPreviewPanel({
   const crossOperation = preview.decisions.filter(
     (decision) => decision.otherOperationContact
   );
+  const exclusionBreakdown = Object.entries(
+    excluded.reduce<Record<string, number>>((counts, decision) => {
+      counts[decision.reason] = (counts[decision.reason] ?? 0) + 1;
+      return counts;
+    }, {})
+  );
 
   return (
     <div className="space-y-4 rounded-xl border border-violet-500/30 bg-violet-500/5 p-4">
@@ -46,6 +52,7 @@ export function GlobalDeduplicationPreviewPanel({
         <Metric label="Duplicados no lote" value={preview.duplicatesInBatch} />
         <Metric label="Já contatados nesta operação" value={preview.alreadyContactedSameOperation} />
         <Metric label="Contatos bloqueados" value={preview.blockedContacts} />
+        <Metric label="Excluídos por qualidade" value={preview.qualityExcluded} />
         <Metric label="Alertas da outra operação" value={preview.otherOperationWarnings} />
         <Metric label="Destinatários realmente novos" value={preview.newRecipients} />
         <Metric label="Follow-ups autorizados" value={preview.authorizedFollowUps} />
@@ -69,7 +76,11 @@ export function GlobalDeduplicationPreviewPanel({
       )}
 
       {excluded.length > 0 && (
-        <div className="max-h-56 overflow-y-auto rounded-lg border border-border/60">
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">
+            {exclusionBreakdown.map(([reason, count]) => `${reason}: ${count}`).join(" · ")}
+          </p>
+          <div className="max-h-56 overflow-y-auto rounded-lg border border-border/60">
           <div className="sticky top-0 grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] gap-3 bg-muted px-3 py-2 text-xs font-medium uppercase text-muted-foreground">
             <span>Contato</span><span>Motivo da exclusão</span>
           </div>
@@ -107,6 +118,7 @@ export function GlobalDeduplicationPreviewPanel({
               </div>
             );
           })}
+          </div>
         </div>
       )}
 

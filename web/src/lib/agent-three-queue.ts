@@ -11,17 +11,13 @@ import {
 } from "./email-validation.ts";
 import { isRealDeliveryMessageId } from "./campaign-delivery-metrics.ts";
 import { AGENT_THREE_UNKNOWN_RECONCILIATION_MESSAGE } from "./agent-three-timeouts.ts";
-import {
-  hasDiscoveredEmail,
-  stampLegacyLeadQuality,
-} from "./lead-provenance.ts";
+import { stampLegacyLeadQuality } from "./lead-provenance.ts";
 import { isSyntheticLead } from "./search/real-search-guard.ts";
 import {
   DEFAULT_LOCATION_FILTER,
-  isGeographicallyEligible,
-  shouldApplyGeoLocationFilter,
   type LocationFilterOptions,
 } from "./location-match.ts";
+import { evaluateLeadQualityEligibility } from "./lead-eligibility-quality.ts";
 
 export type AgentThreeQueueStatus =
   | "pending"
@@ -29,6 +25,7 @@ export type AgentThreeQueueStatus =
   | "sending"
   | "sent"
   | "failed"
+  | "failed_auth"
   | "blocked"
   | "skipped"
   | "unknown";
@@ -49,7 +46,8 @@ export type AgentThreeExclusionReason =
   | "synthetic"
   | "guess_not_verified"
   | "outside_target"
-  | "unknown_location";
+  | "unknown_location"
+  | "validation_pending";
 
 export type AgentThreeStatus =
   | "idle"
@@ -245,6 +243,7 @@ const QUEUE_STATUSES = new Set<AgentThreeQueueStatus>([
   "sending",
   "sent",
   "failed",
+  "failed_auth",
   "blocked",
   "skipped",
   "unknown",
@@ -269,6 +268,7 @@ const EXCLUSION_REASONS = new Set<
   "guess_not_verified",
   "outside_target",
   "unknown_location",
+  "validation_pending",
 ]);
 
 const VALIDATION_STATUSES = new Set<EmailValidationStatus>([
@@ -441,14 +441,18 @@ export function selectAgentThreeCampaign(
 ): AgentThreeSnapshot {
   const operation = snapshot.operations[profileId];
   if (operation.currentCampaignId === campaignId) return snapshot;
-  const isLive =
-    operation.status === "running" || operation.status === "paused";
+  // A running execution cannot be rebound. A paused execution belongs to its
+  // previous campaign; selecting another campaign starts a fresh idle run.
+  if (operation.status === "running") return snapshot;
   const next = withHistory(
     {
       ...operation,
       currentCampaignId: campaignId,
-      // New selection starts a fresh execution counter unless already live.
-      processedCount: isLive ? operation.processedCount : 0,
+      status: operation.status === "paused" ? "idle" : operation.status,
+      currentItemId: null,
+      processedCount: 0,
+      errorMessage: null,
+      stopReason: null,
     },
     "campaign_selected",
     occurredAt,
@@ -563,93 +567,27 @@ function classifyLead(
   queueStatus: AgentThreeQueueStatus;
   exclusionReason?: AgentThreeQueueItem["exclusionReason"];
 } {
-  const stamped = stampLegacyLeadQuality(lead);
-  const validationStatus = stamped.emailValidationStatus ?? "pending";
-  const validationReason =
-    stamped.emailValidationReason ??
-    (stamped.emailValidationStatus ? "reason_not_recorded" : "awaiting_validation");
-
-  if (
-    shouldApplyGeoLocationFilter(stamped.requestedLocation) &&
-    !isGeographicallyEligible(stamped.locationMatch, locationFilter)
-  ) {
-    const geoReason: AgentThreeQueueItem["exclusionReason"] =
-      stamped.locationMatch === "outside_target"
-        ? "outside_target"
-        : "unknown_location";
-    return {
-      validationStatus,
-      validationReason:
-        geoReason === "unknown_location"
-          ? "review_location"
-          : "outside_target",
-      queueStatus: "blocked",
-      exclusionReason: geoReason,
-    };
-  }
-
-  if (isSyntheticLead(stamped)) {
-    return {
-      validationStatus,
-      validationReason: "synthetic_source",
-      queueStatus: "blocked",
-      exclusionReason: "synthetic",
-    };
-  }
-  if (!hasDiscoveredEmail(stamped)) {
-    if (normalizeEmail(stamped.normalizedEmail) ?? normalizeEmail(stamped.email)) {
-      return {
-        validationStatus,
-        validationReason:
-          validationReason === "awaiting_validation"
-            ? "guess_not_verified"
-            : validationReason,
-        queueStatus: "pending",
-      };
-    }
-  }
-
-  if (!(normalizeEmail(lead.normalizedEmail) ?? normalizeEmail(lead.email))) {
-    return {
-      validationStatus: "no_email",
-      validationReason: "no_email",
-      queueStatus: "blocked",
-      exclusionReason: "no_email",
-    };
-  }
-  if (validationStatus === "duplicate") {
-    return {
-      validationStatus,
-      validationReason,
-      queueStatus: "blocked",
-      exclusionReason: "duplicate",
-    };
-  }
-  if (
-    validationReason === "invalid_syntax" ||
-    validationReason === "domain_not_found" ||
-    validationReason === "no_mx_records"
-  ) {
-    return {
-      validationStatus,
-      validationReason,
-      queueStatus: "blocked",
-      exclusionReason: validationReason,
-    };
-  }
-  if (validationStatus === "invalid" || validationStatus === "no_email") {
-    return {
-      validationStatus,
-      validationReason,
-      queueStatus: "blocked",
-      exclusionReason:
-        validationStatus === "no_email" ? "no_email" : "invalid_syntax",
-    };
-  }
-  if (validationStatus === "valid") {
-    return { validationStatus, validationReason, queueStatus: "ready" };
-  }
-  return { validationStatus, validationReason, queueStatus: "pending" };
+  const quality = evaluateLeadQualityEligibility(lead, locationFilter);
+  const awaitsPreparation =
+    quality.exclusionCode === "validation_pending" ||
+    quality.exclusionCode === "guess_not_verified";
+  const exclusionReason = awaitsPreparation
+    ? undefined
+    : quality.exclusionCode === "duplicate_validation"
+      ? "duplicate"
+      : quality.exclusionCode ?? undefined;
+  return {
+    validationStatus: quality.validationStatus,
+    validationReason: quality.validationReason,
+    // Loading is intentionally passive. Unknown/pending evidence is promoted
+    // only by prepareAgentThreeCampaign after validation has completed.
+    queueStatus: exclusionReason
+      ? "blocked"
+      : quality.validationStatus === "valid"
+        ? "ready"
+        : "pending",
+    exclusionReason,
+  };
 }
 
 function queueItemFromLead(
@@ -875,13 +813,17 @@ function getAgentThreeExclusionReason(
     item.exclusionReason === "unsubscribed" ||
     item.exclusionReason === "permanent_bounce" ||
     item.exclusionReason === "contact_blocked" ||
-    item.exclusionReason === "send_locked"
+    item.exclusionReason === "send_locked" ||
+    item.exclusionReason === "guess_not_verified" ||
+    item.exclusionReason === "validation_pending" ||
+    item.exclusionReason === "invalid_request"
   ) {
     return item.exclusionReason;
   }
   if (item.synthetic || item.exclusionReason === "synthetic") return "synthetic";
   if (item.exclusionReason === "outside_target") return "outside_target";
   if (item.exclusionReason === "unknown_location") return "unknown_location";
+  if (item.emailIsGuessed) return "guess_not_verified";
   if (!item.normalizedEmail) return "no_email";
   if (!isEmailSyntaxValid(item.normalizedEmail)) return "invalid_syntax";
   if (item.validationStatus === "no_email") return "no_email";
@@ -1130,12 +1072,20 @@ export function startAgentThree(
       message: NO_SENDING_PROVIDER_MESSAGE,
     };
   }
-  if (operation.status === "running" || operation.status === "paused") {
+  if (operation.status === "running") {
     return {
       snapshot: preparedSnapshot,
       started: false,
       message: null,
     };
+  }
+  if (operation.status === "paused" || operation.status === "stopped") {
+    return resumeAgentThree(
+      preparedSnapshot,
+      profileId,
+      providerConfigured,
+      occurredAt
+    );
   }
   if (!operation.currentCampaignId) {
     return {
@@ -1214,6 +1164,18 @@ export function resumeAgentThree(
       snapshot,
       started: false,
       message: NO_SENDING_PROVIDER_MESSAGE,
+    };
+  }
+  const hasReadyItem = operation.queue.some(
+    (item) =>
+      item.campaignId === operation.currentCampaignId &&
+      item.queueStatus === "ready"
+  );
+  if (!hasReadyItem) {
+    return {
+      snapshot,
+      started: false,
+      message: NO_ELIGIBLE_LEADS_MESSAGE,
     };
   }
   const next = withHistory(
@@ -1592,6 +1554,46 @@ export function failAgentThreeItem(
   return updateOperation(snapshot, profileId, next);
 }
 
+/** Terminal authentication failure; reconciliation/reload must not make it ready. */
+export function markAgentThreeItemFailedAuth(
+  snapshot: AgentThreeSnapshot,
+  profileId: CampaignProfileId,
+  itemId: string,
+  errorMessage: string,
+  failedAt: string
+): AgentThreeSnapshot {
+  const operation = snapshot.operations[profileId];
+  const item = operation.queue.find((candidate) => candidate.id === itemId);
+  if (!item || (item.queueStatus === "sent" && item.providerMessageId)) {
+    return snapshot;
+  }
+  const failedItem: AgentThreeQueueItem = {
+    ...item,
+    queueStatus: "failed_auth",
+    failedAt,
+    updatedAt: failedAt,
+    errorMessage,
+    sentAt: undefined,
+    providerMessageId: undefined,
+  };
+  const next = withHistory(
+    {
+      ...operation,
+      status: "paused",
+      currentItemId:
+        operation.currentItemId === itemId ? null : operation.currentItemId,
+      queue: operation.queue.map((candidate) =>
+        candidate.id === itemId ? failedItem : candidate
+      ),
+    },
+    "item_failed",
+    failedAt,
+    errorMessage,
+    itemId
+  );
+  return updateOperation(snapshot, profileId, next);
+}
+
 export function retryAgentThreeItem(
   snapshot: AgentThreeSnapshot,
   profileId: CampaignProfileId,
@@ -1742,10 +1744,15 @@ export function getAgentThreeCampaignDeliverySummary(
     campaignId,
     remaining: queue.filter(
       (item) =>
-        item.queueStatus !== "sent" && item.queueStatus !== "skipped"
+        item.queueStatus !== "sent" &&
+        item.queueStatus !== "failed" &&
+        item.queueStatus !== "failed_auth" &&
+        item.queueStatus !== "skipped"
     ).length,
     sent: queue.filter((item) => item.queueStatus === "sent").length,
-    failed: queue.filter((item) => item.queueStatus === "failed").length,
+    failed: queue.filter(
+      (item) => item.queueStatus === "failed" || item.queueStatus === "failed_auth"
+    ).length,
   };
 }
 
@@ -1804,7 +1811,7 @@ export function getAgentThreeMetrics(
     ready: count("ready"),
     sending: count("sending"),
     unknown: count("unknown"),
-    failed: count("failed"),
+    failed: count("failed") + count("failed_auth"),
     blocked: count("blocked"),
     skipped: count("skipped"),
     numericLimit: operation.numericLimit,
@@ -1888,6 +1895,9 @@ function normalizeQueueItem(
       value.attemptCount >= 0
         ? Math.floor(value.attemptCount)
         : 0,
+    synthetic: value.synthetic === true,
+    emailIsGuessed: value.emailIsGuessed === true,
+    emailSourceUrl: nullableString(value.emailSourceUrl),
     providerMessageId: optionalString(value.providerMessageId),
   };
 }

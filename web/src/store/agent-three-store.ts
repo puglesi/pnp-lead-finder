@@ -1,7 +1,10 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Lead } from "@/types/lead";
-import type { CampaignProfileId } from "@/types/campaign-profile";
+import {
+  CAMPAIGN_PROFILE_IDS,
+  type CampaignProfileId,
+} from "@/types/campaign-profile";
 import {
   claimNextAgentThreeItem,
   blockAgentThreeSendingItem,
@@ -31,6 +34,7 @@ import {
   type AgentThreeStartResult,
 } from "@/lib/agent-three-queue";
 import type { GlobalDeduplicationPreview } from "@/lib/global-email-deduplication";
+import { syncCampaignQueueToAuthoritativePreview } from "@/lib/agent-three-eligibility-sync";
 import {
   applyAgentThreeSmtpResult,
   type AgentThreeDeliveryApplication,
@@ -82,6 +86,11 @@ interface AgentThreeStore extends AgentThreeSnapshot {
   stop: (profileId: CampaignProfileId) => void;
   claimNext: (profileId: CampaignProfileId) => AgentThreeQueueItem | null;
   applyDeduplicationPreview: (
+    profileId: CampaignProfileId,
+    campaignId: string,
+    preview: GlobalDeduplicationPreview
+  ) => void;
+  syncQueueToPreview: (
     profileId: CampaignProfileId,
     campaignId: string,
     preview: GlobalDeduplicationPreview
@@ -314,6 +323,24 @@ export const useAgentThreeStore = create<AgentThreeStore>()(
           };
         }),
 
+      syncQueueToPreview: (profileId, campaignId, preview) =>
+        set((state) => {
+          const operation = state.operations[profileId];
+          const synced = syncCampaignQueueToAuthoritativePreview({
+            queue: operation.queue,
+            campaignId,
+            preview,
+            occurredAt: nowIso(),
+          });
+          return {
+            ...state,
+            operations: {
+              ...state.operations,
+              [profileId]: { ...operation, queue: synced.queue },
+            },
+          };
+        }),
+
       blockClaimed: (profileId, itemId, message, reason) =>
         set((state) =>
           blockAgentThreeSendingItem(
@@ -364,12 +391,25 @@ export const useAgentThreeStore = create<AgentThreeStore>()(
     }),
     {
       name: "pnp-agent-three",
+      skipHydration: true,
       version: 1,
       partialize: (state) => selectPersistedAgentThreeSnapshot(state),
-      merge: (persisted, current) => ({
-        ...current,
-        ...normalizeAgentThreeSnapshot(persisted),
-      }),
+      merge: (persisted, current) => {
+        const incoming = normalizeAgentThreeSnapshot(persisted);
+        const evidence = (snapshot: AgentThreeSnapshot) =>
+          CAMPAIGN_PROFILE_IDS.reduce((sum, profileId) => {
+            const operation = snapshot.operations[profileId];
+            return (
+              sum +
+              (operation?.queue?.length ?? 0) +
+              (operation?.sentIndex?.length ?? 0)
+            );
+          }, 0);
+        if (evidence(current) >= evidence(incoming)) {
+          return { ...incoming, ...current, operations: current.operations };
+        }
+        return { ...current, ...incoming };
+      },
     }
   )
 );

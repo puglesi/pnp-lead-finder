@@ -138,6 +138,8 @@ export function describeAgentThreeExclusionReason(
       return "fora da área";
     case "unknown_location":
       return "Revisar localização";
+    case "validation_pending":
+      return "validação inconclusiva";
     default:
       return reason ?? "excluído";
   }

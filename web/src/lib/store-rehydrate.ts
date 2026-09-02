@@ -34,6 +34,50 @@ export function normalizeLeadPersistSlice(raw: unknown): {
   };
 }
 
+/**
+ * Browser cache is extra only. An empty/stale array never replaces a populated
+ * official list (SQLite hydration in memory, or indexed SQLite rows).
+ */
+export function sqliteWinsArrayMerge<T>(
+  preferred: readonly T[] | null | undefined,
+  extra: readonly T[] | null | undefined,
+  keyOf: (item: T) => string | null | undefined
+): T[] {
+  const official = Array.isArray(preferred) ? [...preferred] : [];
+  const cache = Array.isArray(extra) ? extra : [];
+  if (cache.length === 0) return official;
+  if (official.length === 0) return [...cache];
+  const map = new Map<string, T>();
+  const loose: T[] = [];
+  const add = (item: T, overwrite: boolean) => {
+    if (!item || typeof item !== "object") return;
+    const key = keyOf(item);
+    if (typeof key !== "string" || !key) {
+      loose.push(item);
+      return;
+    }
+    if (overwrite || !map.has(key)) map.set(key, item);
+  };
+  cache.forEach((item) => add(item, false));
+  official.forEach((item) => add(item, true));
+  return [...map.values(), ...loose];
+}
+
+export function sqliteWinsStringMerge(
+  preferred: readonly string[] | null | undefined,
+  extra: readonly string[] | null | undefined
+): string[] {
+  const official = Array.isArray(preferred)
+    ? preferred.filter((item) => typeof item === "string")
+    : [];
+  const cache = Array.isArray(extra)
+    ? extra.filter((item) => typeof item === "string")
+    : [];
+  if (cache.length === 0) return [...official];
+  if (official.length === 0) return [...cache];
+  return [...new Set([...official, ...cache])];
+}
+
 export function normalizeCampaignPersistSlice(raw: unknown): {
   campaigns: Campaign[];
 } {

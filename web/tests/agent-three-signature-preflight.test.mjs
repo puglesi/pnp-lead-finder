@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { buildAgentThreeSendRequest } from "../src/lib/agent-three-send-request.ts";
 import { evaluateAgentThreePreflight } from "../src/lib/agent-three-preflight.ts";
@@ -11,6 +12,7 @@ import {
   createOfficialSignatureRecord,
   resolveOfficialSignaturesFromSources,
 } from "../src/lib/operation-signature-repository.ts";
+import { isOperationSignatureHydrationRequired } from "../src/store/operation-signature-store.ts";
 import { assertNoCommercialDatabaseAccess } from "./helpers/commercial-database-guard.mjs";
 
 assertNoCommercialDatabaseAccess(import.meta.url);
@@ -376,4 +378,172 @@ test("tracking error não é usado quando a assinatura está ausente", () => {
   assert.equal(result.request, null);
   assert.equal(result.errorMessage, OPERATION_SIGNATURE_NOT_CONFIGURED_MESSAGE);
   assert.doesNotMatch(result.errorMessage ?? "", /rastreamento/);
+});
+
+test("Regressão A: SQLite Modeclean válida é reconhecida como configured", () => {
+  const resolved = resolveOfficialSignaturesFromSources({
+    sqlite: [
+      createOfficialSignatureRecord({
+        operationId: "modeclean",
+        enabled: true,
+        html: MODECLEAN_HTML,
+      }),
+    ],
+    indexedDb: [],
+  });
+  const record = resolved.records.find(
+    (item) => item.operationId === "modeclean"
+  );
+
+  assert.ok(record);
+  assert.equal(
+    getOperationSignatureUiStatus({
+      operation: "modeclean",
+      hasHydrated: true,
+      isHydrating: false,
+      signature: official("modeclean", record.html),
+    }),
+    "configured"
+  );
+});
+
+test("Regressão B: cache vazio/stale não vence SQLite Modeclean válido", () => {
+  const sqliteRecord = createOfficialSignatureRecord({
+    operationId: "modeclean",
+    enabled: true,
+    html: MODECLEAN_HTML,
+    updatedAt: "2026-08-27T17:37:20.498Z",
+  });
+  const resolved = resolveOfficialSignaturesFromSources({
+    sqlite: [sqliteRecord],
+    indexedDb: [
+      {
+        operationId: "modeclean",
+        enabled: false,
+        html: "",
+        plainText: "",
+        updatedAt: "2026-08-01T00:00:00.000Z",
+        version: 1,
+      },
+    ],
+  });
+
+  assert.equal(resolved.records.length, 1);
+  assert.equal(resolved.records[0].html, sqliteRecord.html);
+  assert.equal(resolved.records[0].updatedAt, sqliteRecord.updatedAt);
+  assert.equal(resolved.migrateToSqlite.length, 0);
+  assert.equal(
+    isOperationSignatureHydrationRequired(
+      { "panek-puglesi": resolved.records[0] },
+      "modeclean"
+    ),
+    true
+  );
+  assert.equal(
+    isOperationSignatureHydrationRequired(
+      { modeclean: resolved.records[0] },
+      "modeclean"
+    ),
+    false
+  );
+});
+
+test("Regressão C: Modeclean nunca aceita assinatura oficial P&P", () => {
+  const result = buildAgentThreeSendRequest(
+    "modeclean",
+    campaign("modeclean", official("modeclean", MODECLEAN_HTML)),
+    queueItem("modeclean"),
+    lead,
+    { officialSignature: official("panek-puglesi", PNP_HTML) }
+  );
+
+  assert.equal(result.request, null);
+  assert.equal(result.errorMessage, OPERATION_SIGNATURE_NOT_CONFIGURED_MESSAGE);
+});
+
+test("Regressão D: P&P nunca aceita assinatura oficial Modeclean", () => {
+  const result = buildAgentThreeSendRequest(
+    "panek-puglesi",
+    campaign("panek-puglesi", official("panek-puglesi", PNP_HTML)),
+    queueItem("panek-puglesi"),
+    lead,
+    { officialSignature: official("modeclean", MODECLEAN_HTML) }
+  );
+
+  assert.equal(result.request, null);
+  assert.equal(result.errorMessage, OPERATION_SIGNATURE_NOT_CONFIGURED_MESSAGE);
+});
+
+test("Regressão E: snapshot vazio não sobrescreve assinatura oficial Modeclean", () => {
+  const staleCampaign = campaign("modeclean", {
+    enabled: false,
+    body: "",
+    operation: "modeclean",
+  });
+  const result = buildAgentThreeSendRequest(
+    "modeclean",
+    staleCampaign,
+    queueItem("modeclean"),
+    lead,
+    { officialSignature: official("modeclean", MODECLEAN_HTML) }
+  );
+
+  assert.equal(result.errorMessage, null);
+  assert.match(result.request?.html ?? "", /Modeclean official/);
+  assert.doesNotMatch(result.request?.html ?? "", /Panek/);
+});
+
+test("Regressão F: preflight Modeclean válido passa", () => {
+  const result = evaluateAgentThreePreflight({
+    operation: "modeclean",
+    hasHydrated: true,
+    isHydrating: false,
+    officialSignature: official("modeclean", MODECLEAN_HTML),
+    senderFromEmail: "outreach@modeclean.co.uk",
+    campaign: {
+      id: "fixture-modeclean-preflight-campaign",
+      campaignProfileId: "modeclean",
+      subject: "Commercial cleaning",
+      body: "<p>Modeclean fixture</p>",
+    },
+    dbWritable: true,
+    readyCount: 312,
+    confirmedCount: 0,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.signatureStatus, "configured");
+  assert.equal(result.readyCount, 312);
+});
+
+test("Regressão G: preflight Modeclean sem assinatura real bloqueia", () => {
+  const result = evaluateAgentThreePreflight({
+    operation: "modeclean",
+    hasHydrated: true,
+    isHydrating: false,
+    officialSignature: { enabled: false, body: "", operation: "modeclean" },
+    senderFromEmail: "outreach@modeclean.co.uk",
+    campaign: {
+      id: "fixture-modeclean-preflight-campaign",
+      campaignProfileId: "modeclean",
+      subject: "Commercial cleaning",
+      body: "<p>Modeclean fixture</p>",
+    },
+    dbWritable: true,
+    readyCount: 312,
+    confirmedCount: 0,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.signatureStatus, "not_configured");
+  assert.equal(result.errorMessage, OPERATION_SIGNATURE_NOT_CONFIGURED_MESSAGE);
+});
+
+test("Regressão H: preflight Modeclean não possui caminho de envio", () => {
+  const source = readFileSync(
+    new URL("../src/lib/agent-three-preflight.ts", import.meta.url),
+    "utf8"
+  );
+
+  assert.doesNotMatch(source, /sendMail|nodemailer|requestAgentThreeSmtpSend/);
 });

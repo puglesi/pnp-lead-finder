@@ -17,7 +17,7 @@ const DELIVERY_STATUSES = new Set([
  */
 export function isRealDeliveryMessageId(
   messageId?: string | null
-): boolean {
+): messageId is string {
   if (typeof messageId !== "string") return false;
   const id = messageId.trim();
   if (id.length < 6) return false;

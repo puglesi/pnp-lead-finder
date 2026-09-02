@@ -9,7 +9,10 @@ import type { EmailContactKind } from "./global-email-deduplication.ts";
 import {
   auditGlobalEmailRecipients,
   buildGlobalEmailHistory,
+  buildGlobalEmailHistoryFromSendHistory,
   buildPermanentContactBlocks,
+  mergeGlobalEmailHistory,
+  type ConfirmedSendHistoryEvidence,
   type GlobalDeduplicationPreview,
   type GlobalEmailHistoryRecord,
   type PermanentContactBlock,
@@ -32,6 +35,7 @@ export interface CampaignEligibilitySummary {
   invalidEmail: number;
   duplicatesInBatch: number;
   blocked: number;
+  qualityExcluded: number;
   alreadyContactedSameOperation: number;
   otherOperationWarnings: number;
   newRecipients: number;
@@ -53,6 +57,7 @@ export function buildCampaignEligibilitySummary(input: {
   operations?: Record<CampaignProfileId, AgentThreeOperationState>;
   blockedEntries?: readonly EmailBlocklistEntry[] | null;
   history?: readonly GlobalEmailHistoryRecord[];
+  officialSendHistory?: readonly ConfirmedSendHistoryEvidence[];
   permanentBlocks?: readonly PermanentContactBlock[];
 }): CampaignEligibilitySummary {
   const contactKind = input.contactKind ?? "first_contact";
@@ -76,13 +81,18 @@ export function buildCampaignEligibilitySummary(input: {
     AgentThreeOperationState
   >);
 
-  const history =
+  const history = mergeGlobalEmailHistory(
     input.history ??
-    buildGlobalEmailHistory({
-      campaigns: campaigns as Campaign[],
-      leads: known as Lead[],
-      operations,
-    });
+      buildGlobalEmailHistory({
+        campaigns: campaigns as Campaign[],
+        leads: known as Lead[],
+        operations,
+      }),
+    buildGlobalEmailHistoryFromSendHistory(
+      input.officialSendHistory ?? [],
+      campaigns as Campaign[]
+    )
+  );
 
   const systemBlocks =
     input.permanentBlocks ??
@@ -100,6 +110,7 @@ export function buildCampaignEligibilitySummary(input: {
     leadId: lead.id,
     company: lead.company,
     email: lead.normalizedEmail ?? lead.email,
+    lead,
   }));
 
   const preview = auditGlobalEmailRecipients({
@@ -126,6 +137,7 @@ export function buildCampaignEligibilitySummary(input: {
       .length,
     duplicatesInBatch: preview.duplicatesInBatch,
     blocked: preview.blockedContacts,
+    qualityExcluded: preview.qualityExcluded,
     alreadyContactedSameOperation: preview.alreadyContactedSameOperation,
     otherOperationWarnings: preview.otherOperationWarnings,
     newRecipients: preview.newRecipients,

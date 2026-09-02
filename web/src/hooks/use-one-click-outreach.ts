@@ -642,7 +642,7 @@ export function useOneClickOutreach() {
             throw new Error("Template de e-mail inválido.");
           }
 
-          const campaign = useCampaignStore.getState().createCampaign({
+          const campaign = await useCampaignStore.getState().createCampaign({
             campaignProfileId: config.operation,
             emailTemplateId: config.templateId,
             contactKind: template.contactKind,

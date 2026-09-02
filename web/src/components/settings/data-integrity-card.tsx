@@ -49,6 +49,7 @@ export function DataIntegrityCard() {
           campaigns: 0,
           searchHistory: 0,
           confirmedSends: 0,
+          failedSends: 0,
           blocklist: 0,
           templates: 0,
         },

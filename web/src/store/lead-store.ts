@@ -34,7 +34,11 @@ import {
   REAL_SEARCH_UNAVAILABLE_MESSAGE,
 } from "@/lib/search/live-search-result";
 import { selectOperationalSearchLeads } from "@/lib/search/targeted-search";
-import { normalizeLeadPersistSlice } from "@/lib/store-rehydrate";
+import {
+  normalizeLeadPersistSlice,
+  sqliteWinsArrayMerge,
+  sqliteWinsStringMerge,
+} from "@/lib/store-rehydrate";
 import {
   createDurableSearchBatchRepository,
   createInitialPersistedSearchBatch,
@@ -1370,6 +1374,7 @@ export const useLeadStore = create<LeadStore>()(
     }),
     {
       name: "pnp-lead-finder",
+      skipHydration: true,
       version: 5,
       migrate: (persisted, version) => {
         const state = persisted as Partial<LeadStore>;
@@ -1437,6 +1442,30 @@ export const useLeadStore = create<LeadStore>()(
         return {
           ...current,
           ...normalized,
+          recentSearches: sqliteWinsArrayMerge(
+            current.recentSearches,
+            normalized.recentSearches,
+            (record) => record.id
+          ),
+          fullSearchHistory: sqliteWinsArrayMerge(
+            current.fullSearchHistory,
+            normalized.fullSearchHistory,
+            (record) => record.id
+          ),
+          sectorHistory: sqliteWinsStringMerge(
+            current.sectorHistory,
+            normalized.sectorHistory
+          ),
+          savedLeads: sqliteWinsArrayMerge(
+            current.savedLeads,
+            normalized.savedLeads,
+            (lead) => lead.id
+          ),
+          importedLeads: sqliteWinsArrayMerge(
+            current.importedLeads,
+            normalized.importedLeads,
+            (lead) => lead.id
+          ),
         };
       },
     }

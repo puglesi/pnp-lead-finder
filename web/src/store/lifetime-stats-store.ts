@@ -110,13 +110,20 @@ export const useLifetimeStatsStore = create<LifetimeStatsStore>()(
     }),
     {
       name: "pnp-lifetime-stats",
+      skipHydration: true,
       version: 1,
       migrate: (persisted) => normalizeLifetimePersistSlice(persisted),
       merge: (persisted, current) => {
         const normalized = normalizeLifetimePersistSlice(persisted);
         return {
           ...current,
-          ...normalized,
+          companiesFound: Math.max(current.companiesFound, normalized.companiesFound),
+          leadsFound: Math.max(current.leadsFound, normalized.leadsFound),
+          validEmailsFound: Math.max(
+            current.validEmailsFound,
+            normalized.validEmailsFound
+          ),
+          campaignsSent: Math.max(current.campaignsSent, normalized.campaignsSent),
         };
       },
     }

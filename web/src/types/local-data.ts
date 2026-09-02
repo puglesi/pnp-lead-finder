@@ -39,6 +39,39 @@ export interface LocalDataHydration {
   stores: Partial<Record<CommercialStoreKey, unknown>>;
   signatures: OfficialSignatureRecord[];
   searchBatches: LegacySearchBatchSnapshot[];
+  sendHistory: OfficialSendHistoryRecord[];
+  recoveredCampaigns: RecoveredCampaignSummary[];
+}
+
+export interface OfficialSendHistoryRecord {
+  id: string;
+  intentKey: string;
+  campaignId: string | null;
+  campaignName: string | null;
+  leadId: string | null;
+  company: string | null;
+  email: string;
+  operation: string;
+  contactKind: string;
+  queueItemId: string | null;
+  providerMessageId: string | null;
+  confirmedAt: string | null;
+  attemptedAt: string | null;
+  status: string;
+  error: string | null;
+}
+
+/** Read-only recovery view. It never fabricates a campaign body or recipients. */
+export interface RecoveredCampaignSummary {
+  campaignId: string;
+  operation: string;
+  label: "Campanha histórica recuperada";
+  confirmed: number;
+  failed: number;
+  firstActivityAt: string;
+  lastActivityAt: string;
+  uniqueEmails: number;
+  uniqueProviderMessageIds: number;
 }
 
 export interface LocalDataCounts {
@@ -46,6 +79,7 @@ export interface LocalDataCounts {
   campaigns: number;
   searchHistory: number;
   confirmedSends: number;
+  failedSends: number;
   blocklist: number;
   templates: number;
 }

@@ -13,6 +13,7 @@ import {
   blockAgentThreeSendingItem,
   completeAgentThreeItem,
   failAgentThreeItem,
+  markAgentThreeItemFailedAuth,
   markAgentThreeItemUnknown,
   pauseAgentThree,
   releaseAgentThreeSendingItem,
@@ -188,7 +189,16 @@ export function applyAgentThreeSmtpResult(
       );
       return applyBreaker(released, true);
     }
-    case "authentication_error":
+    case "authentication_error": {
+      const failedAuth = markAgentThreeItemFailedAuth(
+        snapshot,
+        profileId,
+        itemId,
+        deliveryResult.message,
+        occurredAt
+      );
+      return applyBreaker(failedAuth, true);
+    }
     case "provider_rate_limit":
     case "provider_account_blocked": {
       const released = releaseAgentThreeSendingItem(
@@ -226,6 +236,8 @@ export function applyAgentThreeSmtpResult(
       );
       return applyBreaker(unknown, false);
     }
+    case "auth_transient":
+    case "connection_error":
     case "transient_error":
     case "permanent_error": {
       const failed = failAgentThreeItem(

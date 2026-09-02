@@ -18,9 +18,14 @@ import {
   useAgentThreeRunner,
 } from "@/hooks/use-agent-three-runner";
 import { useAgentThreeStore } from "@/store/agent-three-store";
-import { getAgentThreeMetrics } from "@/lib/agent-three-queue";
 import { GlobalDeduplicationPreviewPanel } from "@/components/campaigns/global-deduplication-preview";
 import { describeAgentThreeStartBlock } from "@/lib/agent-three-smtp-contract";
+import {
+  fingerprintsMatch,
+  PREVIEW_QUEUE_MISMATCH_MESSAGE,
+  previewEligibleFingerprint,
+  queueReadyFingerprint,
+} from "@/lib/eligibility-fingerprint";
 import { getCampaignProfileName } from "@/types/campaign-profile";
 import type { Campaign } from "@/types/campaign";
 import { getOperationSendAccount } from "@/lib/operation-identity";
@@ -54,12 +59,25 @@ export function CampaignSendNowDialog({
   const [confirmStart, setConfirmStart] = useState(false);
 
   const account = getOperationSendAccount(profileId);
-  const metrics = getAgentThreeMetrics(operation);
   const preparation = runner.preparations[profileId];
   const connectionStatus = runner.statuses[profileId];
   const smtpResult = runner.smtpResults[profileId];
   const isLoading = runner.loadingCampaign[profileId] === true;
-  const readyCount = metrics.ready;
+  const campaignQueue = operation.queue.filter(
+    (item) => item.campaignId === campaign.id
+  );
+  const queueReadyCount = campaignQueue.filter(
+    (item) => item.queueStatus === "ready"
+  ).length;
+  const readyCount =
+    preparation?.deduplicationPreview?.finalSendCount ?? queueReadyCount;
+  const eligibilityMismatch =
+    !isLoading &&
+    Boolean(preparation?.deduplicationPreview) &&
+    !fingerprintsMatch(
+      previewEligibleFingerprint(preparation?.deduplicationPreview),
+      queueReadyFingerprint(campaignQueue)
+    );
   const fullyDelivered = isCampaignFullyDelivered(campaign);
   const smtpReady = connectionStatus === "connected";
 
@@ -88,6 +106,9 @@ export function CampaignSendNowDialog({
     }
     if (!previewConfirmed) {
       return describeAgentThreeStartBlock({ previewRequired: true });
+    }
+    if (eligibilityMismatch) {
+      return PREVIEW_QUEUE_MISMATCH_MESSAGE;
     }
     if (readyCount === 0 && !isLoading) {
       return describeAgentThreeStartBlock({ noEligible: true });
@@ -200,11 +221,15 @@ export function CampaignSendNowDialog({
             <div className="rounded-lg border p-3">
               <p className="text-xs text-muted-foreground">Excluídos</p>
               <p className="text-xl font-semibold tabular-nums">
-                {Math.max(
-                  0,
-                  (preparation?.campaignRecipientCount ??
-                    campaign.leadIds.length) - readyCount
-                )}
+                {preparation?.deduplicationPreview
+                  ? preparation.deduplicationPreview.decisions.filter(
+                      (decision) => !decision.included
+                    ).length
+                  : Math.max(
+                      0,
+                      (preparation?.campaignRecipientCount ??
+                        campaign.leadIds.length) - readyCount
+                    )}
               </p>
             </div>
           </div>

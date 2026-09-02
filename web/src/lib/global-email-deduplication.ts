@@ -11,6 +11,10 @@ import {
 } from "./campaign-delivery-metrics.ts";
 import { normalizeEmail } from "./email-validation.ts";
 import { asArray, safeObjectValues } from "./safe-object.ts";
+import {
+  evaluateLeadQualityEligibility,
+  type LeadQualityExclusionCode,
+} from "./lead-eligibility-quality.ts";
 
 export type EmailContactKind = "first_contact" | "follow_up";
 export type PermanentContactBlockReason =
@@ -27,6 +31,16 @@ export interface GlobalEmailHistoryRecord {
   providerMessageId: string;
 }
 
+export interface ConfirmedSendHistoryEvidence {
+  campaignId: string | null;
+  email: string;
+  operation: string;
+  providerMessageId: string | null;
+  confirmedAt: string | null;
+  attemptedAt?: string | null;
+  status: string;
+}
+
 export interface PermanentContactBlock {
   operation: CampaignProfileId;
   normalizedEmail: string;
@@ -38,6 +52,8 @@ export interface GlobalDeduplicationRecipient {
   leadId: string;
   company: string;
   email: string | null | undefined;
+  /** When present, quality is part of the same authoritative decision. */
+  lead?: Lead;
 }
 
 export type GlobalDeduplicationDecisionCode =
@@ -47,7 +63,8 @@ export type GlobalDeduplicationDecisionCode =
   | "same_operation_contacted"
   | "already_sent_current_campaign"
   | "permanently_blocked"
-  | "invalid_email";
+  | "invalid_email"
+  | LeadQualityExclusionCode;
 
 export interface GlobalDeduplicationDecision {
   leadId: string;
@@ -70,6 +87,7 @@ export interface GlobalDeduplicationPreview {
   duplicatesInBatch: number;
   alreadyContactedSameOperation: number;
   blockedContacts: number;
+  qualityExcluded: number;
   otherOperationWarnings: number;
   newRecipients: number;
   authorizedFollowUps: number;
@@ -103,6 +121,18 @@ function leadEmailById(leads: readonly Lead[] | null | undefined) {
 
 function historyKey(record: GlobalEmailHistoryRecord) {
   return `${record.operation}\u0000${record.normalizedEmail}\u0000${record.providerMessageId}`;
+}
+
+export function mergeGlobalEmailHistory(
+  ...groups: readonly (readonly GlobalEmailHistoryRecord[])[]
+): GlobalEmailHistoryRecord[] {
+  const records = new Map<string, GlobalEmailHistoryRecord>();
+  for (const group of groups) {
+    for (const record of group) {
+      records.set(historyKey(record), record);
+    }
+  }
+  return [...records.values()].sort((a, b) => b.sentAt.localeCompare(a.sentAt));
 }
 
 export function buildGlobalEmailHistory(
@@ -156,6 +186,41 @@ export function buildGlobalEmailHistory(
   }
 
   return [...records.values()].sort((a, b) => b.sentAt.localeCompare(a.sentAt));
+}
+
+/** Converts authoritative SQLite send_history rows into dedupe evidence. */
+export function buildGlobalEmailHistoryFromSendHistory(
+  records: readonly ConfirmedSendHistoryEvidence[],
+  campaigns: readonly Campaign[] = []
+): GlobalEmailHistoryRecord[] {
+  const names = campaignNameById(campaigns);
+  const result = new Map<string, GlobalEmailHistoryRecord>();
+  for (const row of records) {
+    const email = normalizeEmail(row.email);
+    if (
+      row.status !== "confirmed" ||
+      !email ||
+      !row.campaignId ||
+      !isRealDeliveryMessageId(row.providerMessageId) ||
+      !isCampaignProfileIdValue(row.operation)
+    ) {
+      continue;
+    }
+    const item: GlobalEmailHistoryRecord = {
+      operation: row.operation,
+      normalizedEmail: email,
+      campaignId: row.campaignId,
+      campaignName: names.get(row.campaignId) ?? row.campaignId,
+      sentAt: row.confirmedAt ?? row.attemptedAt ?? "",
+      providerMessageId: row.providerMessageId!,
+    };
+    result.set(historyKey(item), item);
+  }
+  return [...result.values()].sort((a, b) => b.sentAt.localeCompare(a.sentAt));
+}
+
+function isCampaignProfileIdValue(value: string): value is CampaignProfileId {
+  return value === "panek-puglesi" || value === "modeclean";
 }
 
 export function classifyPermanentContactBlock(
@@ -331,6 +396,21 @@ export function auditGlobalEmailRecipients(input: {
       continue;
     }
 
+    if (recipient.lead) {
+      const quality = evaluateLeadQualityEligibility(recipient.lead);
+      if (!quality.eligible) {
+        decisions.push({
+          ...base,
+          included: false,
+          code: quality.exclusionCode ?? "validation_pending",
+          reason: quality.reason,
+          previousContact: sameOperation ?? null,
+          otherOperationContact: otherOperation ?? null,
+        });
+        continue;
+      }
+    }
+
     decisions.push({
       ...base,
       included: true,
@@ -355,6 +435,20 @@ export function auditGlobalEmailRecipients(input: {
     alreadyContactedSameOperation:
       count("same_operation_contacted") + count("already_sent_current_campaign"),
     blockedContacts: count("permanently_blocked"),
+    qualityExcluded: decisions.filter((item) =>
+      [
+        "no_email",
+        "invalid_syntax",
+        "domain_not_found",
+        "no_mx_records",
+        "duplicate_validation",
+        "synthetic",
+        "guess_not_verified",
+        "outside_target",
+        "unknown_location",
+        "validation_pending",
+      ].includes(item.code)
+    ).length,
     otherOperationWarnings: decisions.filter((item) => item.otherOperationContact).length,
     newRecipients: count("new_recipient"),
     authorizedFollowUps: count("follow_up_authorized"),

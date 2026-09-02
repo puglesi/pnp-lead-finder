@@ -6,6 +6,7 @@ import {
   OPERATION_SIGNATURE_NOT_CONFIGURED_MESSAGE,
   type OperationSignatureUiStatus,
 } from "./operation-signature.ts";
+import { PREVIEW_QUEUE_MISMATCH_MESSAGE } from "./eligibility-fingerprint.ts";
 
 export interface AgentThreePreflightInput {
   operation: CampaignProfileId;
@@ -22,6 +23,7 @@ export interface AgentThreePreflightInput {
   dbWritable: boolean;
   readyCount: number;
   confirmedCount: number;
+  queueMatchesPreview?: boolean;
 }
 
 export interface AgentThreePreflightResult {
@@ -95,6 +97,13 @@ export function evaluateAgentThreePreflight(
       ...base,
       ok: false,
       errorMessage: LOCAL_DATA_UNAVAILABLE_MESSAGE,
+    };
+  }
+  if (input.queueMatchesPreview === false) {
+    return {
+      ...base,
+      ok: false,
+      errorMessage: PREVIEW_QUEUE_MISMATCH_MESSAGE,
     };
   }
 

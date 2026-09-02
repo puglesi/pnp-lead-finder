@@ -48,6 +48,7 @@ import { useSettingsStore } from "@/store/settings-store";
 import { useOperationSignatureStore } from "@/store/operation-signature-store";
 import { useAgentThreeStore } from "@/store/agent-three-store";
 import { useEmailBlocklistStore } from "@/store/email-blocklist-store";
+import { useOfficialHistoryStore } from "@/store/official-history-store";
 import { EmailPreviewPanel } from "./email-preview-panel";
 import { LeadPicker } from "./lead-picker";
 import { RichEmailEditor } from "./rich-email-editor";
@@ -144,6 +145,7 @@ function CreateCampaignFormContent({
   const campaigns = useCampaignStore((s) => s.campaigns);
   const agentOperations = useAgentThreeStore((s) => s.operations);
   const blockedEntries = useEmailBlocklistStore((s) => s.entries);
+  const officialSendHistory = useOfficialHistoryStore((s) => s.sendHistory);
   const getOpSignature = useOperationSignatureStore((s) => s.getSignature);
   const officialSignatures = useOperationSignatureStore((s) => s.signatures);
   const signaturesHydrated = useOperationSignatureStore(
@@ -286,6 +288,7 @@ function CreateCampaignFormContent({
         campaigns,
         operations: agentOperations,
         blockedEntries,
+        officialSendHistory,
       }),
     [
       campaignProfileId,
@@ -296,6 +299,7 @@ function CreateCampaignFormContent({
       campaigns,
       agentOperations,
       blockedEntries,
+      officialSendHistory,
     ]
   );
   const topCards = eligibilityTopCards(eligibility);
@@ -420,7 +424,7 @@ function CreateCampaignFormContent({
       (template) => template.id === selectedTemplateId
     );
     try {
-      const campaign = createCampaign({
+      const campaign = await createCampaign({
         campaignProfileId,
         emailTemplateId:
           selectedEmailTemplate?.id ?? reuseSource?.emailTemplateId,
@@ -454,7 +458,7 @@ function CreateCampaignFormContent({
         attachCampaign(batchId, campaign.id);
       }
       // Explicit save → status Salva (persiste; limpar UI não apaga).
-      setCampaignStatus(campaign.id, "saved");
+      await setCampaignStatus(campaign.id, "saved");
 
       toast.success(`Campanha "${campaign.name}" salva!`, { icon: "📣" });
       router.push(`/campanhas/${campaign.id}`);

@@ -180,6 +180,7 @@ export const useBatchPipelineStore = create<BatchPipelineStore>()(
     }),
     {
       name: "pnp-batch-pipeline",
+      skipHydration: true,
       version: 1,
       // Batches are durable; activeBatchId is session UI (cleared on new session).
       partialize: (state) => ({
@@ -193,10 +194,16 @@ export const useBatchPipelineStore = create<BatchPipelineStore>()(
           const batch = normalizeBatch(value);
           if (batch) batches[key] = batch;
         }
+        if (
+          Object.keys(batches).length === 0 &&
+          Object.keys(current.batches).length > 0
+        ) {
+          return { ...current, activeBatchId: null };
+        }
         return {
           ...current,
           activeBatchId: null,
-          batches,
+          batches: { ...batches, ...current.batches },
         };
       },
     }

@@ -5,6 +5,8 @@ import {
   type LocalDataBridgeSnapshot,
 } from "@/types/local-data";
 import { getLocalDatabase, unavailableLocalDataHealth } from "@/lib/server/local-database";
+import type { Campaign } from "@/types/campaign";
+import type { EmailBlocklistEntry } from "@/lib/email-blocklist";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,7 +37,8 @@ export async function POST(request: Request) {
     const snapshot = await request.json() as LocalDataBridgeSnapshot;
     if (!snapshot || typeof snapshot !== "object") throw new Error("Snapshot inválido.");
     const database = getLocalDatabase();
-    await database.createBackup();
+    // Recovery-only merge: browser caches may add records missing from SQLite,
+    // but can never replace or delete an official record.
     const result = database.mergeLegacySnapshot({
       migrationVersion: Math.max(LOCAL_DATA_MIGRATION_VERSION, Number(snapshot.migrationVersion) || 0),
       stores: snapshot.stores && typeof snapshot.stores === "object" ? snapshot.stores : {},
@@ -51,6 +54,53 @@ export async function POST(request: Request) {
   } catch (error) {
     return Response.json(
       { ok: false, error: error instanceof Error ? error.message : "Falha na migração." },
+      noStore(503)
+    );
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const body = await request.json() as {
+      entity?: "campaign" | "blocklist";
+      campaign?: Campaign;
+      entries?: EmailBlocklistEntry[];
+    };
+    const database = getLocalDatabase();
+    if (body.entity === "campaign" && body.campaign?.id) {
+      database.putCampaign(body.campaign);
+      return Response.json({ ok: true }, noStore());
+    }
+    if (body.entity === "blocklist" && Array.isArray(body.entries)) {
+      database.putBlocklistEntries(body.entries);
+      return Response.json({ ok: true }, noStore());
+    }
+    return Response.json({ ok: false, error: "Entidade inválida." }, noStore(400));
+  } catch (error) {
+    return Response.json(
+      { ok: false, error: error instanceof Error ? error.message : "Banco local indisponível." },
+      noStore(503)
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const body = await request.json() as {
+      entity?: "campaign" | "blocklist";
+      id?: string;
+    };
+    if (!body.id) {
+      return Response.json({ ok: false, error: "ID obrigatório." }, noStore(400));
+    }
+    const database = getLocalDatabase();
+    if (body.entity === "campaign") database.deleteCampaign(body.id);
+    else if (body.entity === "blocklist") database.deleteBlocklistEntry(body.id);
+    else return Response.json({ ok: false, error: "Entidade inválida." }, noStore(400));
+    return Response.json({ ok: true }, noStore());
+  } catch (error) {
+    return Response.json(
+      { ok: false, error: error instanceof Error ? error.message : "Banco local indisponível." },
       noStore(503)
     );
   }

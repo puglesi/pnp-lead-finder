@@ -85,8 +85,14 @@ export function getOperationSignatureUiStatus(input: {
  */
 export function resolveOfficialSendSignature(
   operation: CampaignProfileId,
-  official: Pick<CampaignSignature, "enabled" | "body"> | null | undefined
+  official:
+    | Pick<CampaignSignature, "enabled" | "body" | "operation">
+    | null
+    | undefined
 ): OperationBoundSignature {
+  if (official?.operation && official.operation !== operation) {
+    return bindSignatureToOperation(operation, { enabled: false, body: "" });
+  }
   return bindSignatureToOperation(operation, official ?? { enabled: false, body: "" });
 }
 

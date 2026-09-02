@@ -153,6 +153,7 @@ function CampaignDetailContent({
   );
   const {
     deleteCampaign,
+    saveCampaign,
     updateCampaign,
     syncCampaignTracking,
   } = useCampaignStore();
@@ -260,7 +261,7 @@ function CampaignDetailContent({
         toast.error(LOCAL_DATA_UNAVAILABLE_MESSAGE);
         return false;
       }
-      updateCampaign(campaign.id, {
+      await saveCampaign(campaign.id, {
         subject: draft.subject,
         body: draft.body,
         fromName: draft.fromName,

@@ -40,7 +40,7 @@ interface OperationSignatureStore {
   persistenceError: string | null;
   migratedOperations: CampaignProfileId[];
   getSignature: (operation: CampaignProfileId) => CampaignSignature;
-  hydrate: () => Promise<void>;
+  hydrate: (force?: boolean) => Promise<void>;
   saveOfficial: (
     operation: CampaignProfileId,
     signature: CampaignSignature
@@ -106,6 +106,14 @@ export function selectOperationSignature(
   return signatures[operation] ?? EMPTY_OPERATION_SIGNATURE;
 }
 
+export function isOperationSignatureHydrationRequired(
+  records: SignatureRecordsMap,
+  operation: CampaignProfileId
+): boolean {
+  const record = records[operation];
+  return !record || isSignatureHtmlEmpty(record.html);
+}
+
 let hydrationPromise: Promise<void> | null = null;
 
 export const useOperationSignatureStore = create<OperationSignatureStore>()(
@@ -120,12 +128,9 @@ export const useOperationSignatureStore = create<OperationSignatureStore>()(
     getSignature: (operation) =>
       selectOperationSignature(get().signatures, operation),
 
-    hydrate: async () => {
+    hydrate: async (force = false) => {
       if (hydrationPromise) return hydrationPromise;
-      const configured = Object.values(get().records).some(
-        (record) => record && !isSignatureHtmlEmpty(record.html)
-      );
-      if (get().hasHydrated && configured) return;
+      if (get().hasHydrated && !force) return;
       hydrationPromise = (async () => {
         set({ isHydrating: true, persistenceError: null });
         try {
@@ -233,6 +238,12 @@ export const useOperationSignatureStore = create<OperationSignatureStore>()(
   })
 );
 
-export async function ensureOperationSignaturesHydrated(): Promise<void> {
-  await useOperationSignatureStore.getState().hydrate();
+export async function ensureOperationSignaturesHydrated(
+  operation?: CampaignProfileId
+): Promise<void> {
+  const state = useOperationSignatureStore.getState();
+  const operationMissing = operation
+    ? isOperationSignatureHydrationRequired(state.records, operation)
+    : false;
+  await state.hydrate(operationMissing);
 }

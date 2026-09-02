@@ -8,6 +8,8 @@ export type AgentThreeSmtpStatus =
   | "suppressed"
   | "sent"
   | "authentication_error"
+  | "auth_transient"
+  | "connection_error"
   | "provider_rate_limit"
   | "provider_account_blocked"
   | "transient_error"
@@ -41,11 +43,21 @@ export interface AgentThreeSmtpDiagnostics {
   verifiedLive?: boolean;
 }
 
+/** Sanitized SMTP transport fields — never passwords or raw credentials. */
+export interface AgentThreeSmtpErrorDetails {
+  code?: string | null;
+  responseCode?: number | null;
+  response?: string | null;
+  command?: string | null;
+  classification: AgentThreeSmtpStatus;
+}
+
 export interface AgentThreeSmtpResult {
   status: AgentThreeSmtpStatus;
   message: string;
   messageId?: string;
   diagnostics?: AgentThreeSmtpDiagnostics;
+  smtp?: AgentThreeSmtpErrorDetails;
 }
 
 export const AGENT_THREE_SMTP_MESSAGES: Record<
@@ -60,7 +72,12 @@ export const AGENT_THREE_SMTP_MESSAGES: Record<
   invalid_request: "Dados de envio inválidos.",
   suppressed: "Destinatário removido da lista de envio.",
   sent: "E-mail enviado.",
-  authentication_error: "SMTP não autenticado — verifique usuário e senha de app no servidor.",
+  authentication_error:
+    "SMTP rejeitou a autenticação de forma permanente (535/5.7.x). Verifique usuário e senha de app.",
+  auth_transient:
+    "SMTP recusou o login temporariamente (454/4xx). Não é senha errada — o provedor limitou autenticações repetidas.",
+  connection_error:
+    "Falha de conexão SMTP (timeout/rede). O envio não foi confirmado.",
   provider_rate_limit: "Conta limitada pelo provedor.",
   provider_account_blocked: "Conta bloqueada pelo provedor.",
   transient_error: "Falha temporária no envio.",

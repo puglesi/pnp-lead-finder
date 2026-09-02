@@ -29,6 +29,7 @@ import {
 import {
   applyAgentThreeSmtpResult,
 } from "../src/lib/agent-three-delivery.ts";
+import { shouldSkipSmtpForItem } from "../src/lib/agent-three-reconciliation.ts";
 import {
   claimNextAgentThreeItem,
   createInitialAgentThreeSnapshot,
@@ -259,11 +260,128 @@ test("one-click 6. verify SMTP falha de auth sem enviar mensagem", async () => {
   assert.equal(mailCalls, 0);
 });
 
-test("one-click 7. ECONNREFUSED é falha de provedor (transient)", () => {
+test("one-click 7. ECONNREFUSED é falha de conexão", () => {
   assert.equal(
     classifyAgentThreeSmtpError({ code: "ECONNREFUSED" }),
-    "transient_error"
+    "connection_error"
   );
+});
+
+test("SMTP 535/5.7.x é AUTH permanente", () => {
+  assert.equal(
+    classifyAgentThreeSmtpError({
+      code: "EAUTH",
+      responseCode: 535,
+      command: "AUTH PLAIN",
+      response: "535 5.7.8 Username and Password not accepted",
+    }),
+    "authentication_error"
+  );
+});
+
+test("SMTP 454/4xx EAUTH é AUTH transitório, não senha errada", () => {
+  assert.equal(
+    classifyAgentThreeSmtpError({
+      code: "EAUTH",
+      responseCode: 454,
+      command: "AUTH PLAIN",
+      response: "454 4.7.0 Too many login attempts, please try again later",
+    }),
+    "auth_transient"
+  );
+});
+
+test("SMTP timeout é CONNECTION_ERROR", () => {
+  const timeout = new Error("Timeout de sendMail após 45000ms.");
+  timeout.name = "AgentThreeTimeoutError";
+  assert.equal(classifyAgentThreeSmtpError(timeout), "connection_error");
+  assert.equal(
+    classifyAgentThreeSmtpError({ code: "ETIMEDOUT" }),
+    "connection_error"
+  );
+});
+
+test("SMTP sent sem providerMessageId não confirma", async () => {
+  const result = await sendAgentThreeSmtp(
+    {
+      operation: "panek-puglesi",
+      recipient: "info@londonmediclab.com",
+      subject: "S",
+      html: "<p>x</p>",
+    },
+    {
+      environment: smtpEnvironment(),
+      createTransport() {
+        return {
+          async sendMail() {
+            return {};
+          },
+        };
+      },
+    }
+  );
+  assert.equal(result.status, "reconciliation_required");
+  assert.equal(result.messageId, undefined);
+});
+
+test("SMTP falha devolve code/responseCode/response/command/classification", async () => {
+  const result = await sendAgentThreeSmtp(
+    {
+      operation: "panek-puglesi",
+      recipient: "info@londonmediclab.com",
+      subject: "S",
+      html: "<p>x</p>",
+    },
+    {
+      environment: smtpEnvironment(),
+      createTransport() {
+        return {
+          async sendMail() {
+            const err = new Error("Invalid login");
+            err.code = "EAUTH";
+            err.responseCode = 454;
+            err.command = "AUTH PLAIN";
+            err.response =
+              "454 4.7.0 Too many login attempts, please try again later";
+            throw err;
+          },
+        };
+      },
+    }
+  );
+  assert.equal(result.status, "auth_transient");
+  assert.equal(result.smtp?.code, "EAUTH");
+  assert.equal(result.smtp?.responseCode, 454);
+  assert.equal(result.smtp?.command, "AUTH PLAIN");
+  assert.match(result.smtp?.response ?? "", /454 4\.7\.0 Too many login attempts/);
+  assert.equal(result.smtp?.classification, "auth_transient");
+});
+
+test("confirmed providerMessageId nunca é reenviado", () => {
+  const item = {
+    id: "queue-confirmed",
+    leadId: "serp-ChIJzyT0IhMPdkgRy3KZOrzKBrI",
+    campaignId: "camp-1788363227529",
+    campaignProfileId: "panek-puglesi",
+    normalizedEmail: "clinic@lindafiumara.com",
+    originalEmail: "clinic@lindafiumara.com",
+    queueStatus: "sent",
+    providerMessageId: "<1d4490fc-7b02-5d47-34da-a32abd4b0e74@gmail.com>",
+  };
+  const skip = shouldSkipSmtpForItem(item, [
+    {
+      campaignId: "camp-1788363227529",
+      leadId: item.leadId,
+      email: item.normalizedEmail,
+      operation: "panek-puglesi",
+      queueItemId: item.id,
+      providerMessageId: item.providerMessageId,
+      confirmedAt: "2026-09-02T17:53:53.474Z",
+      status: "confirmed",
+    },
+  ]);
+  assert.ok(skip?.providerMessageId);
+  assert.equal(shouldSkipResendForConfirmedDelivery(item.providerMessageId), true);
 });
 
 test("one-click 8. primeiro envio com provedor indisponível pausa imediatamente", () => {

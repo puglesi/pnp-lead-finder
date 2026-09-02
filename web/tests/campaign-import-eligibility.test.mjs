@@ -134,6 +134,12 @@ test("canonical eligibility: top cards === preview finalSendCount", () => {
       address: "—",
       category: "X",
       aiScore: 80,
+      emailValidationStatus: "unknown",
+      emailValidationReason: "mailbox_not_verified",
+      hasMxRecords: true,
+      emailSourceUrl: "import://test/1",
+      emailDiscoveryMethod: "external_provider",
+      emailIsGuessed: false,
     },
     {
       id: "2",
@@ -144,6 +150,12 @@ test("canonical eligibility: top cards === preview finalSendCount", () => {
       address: "—",
       category: "X",
       aiScore: 80,
+      emailValidationStatus: "unknown",
+      emailValidationReason: "mailbox_not_verified",
+      hasMxRecords: true,
+      emailSourceUrl: "import://test/2",
+      emailDiscoveryMethod: "external_provider",
+      emailIsGuessed: false,
     },
     {
       id: "3",
@@ -154,6 +166,12 @@ test("canonical eligibility: top cards === preview finalSendCount", () => {
       address: "—",
       category: "X",
       aiScore: 80,
+      emailValidationStatus: "unknown",
+      emailValidationReason: "mailbox_not_verified",
+      hasMxRecords: true,
+      emailSourceUrl: "import://test/3",
+      emailDiscoveryMethod: "external_provider",
+      emailIsGuessed: false,
     },
   ];
   const summary = buildCampaignEligibilitySummary({
@@ -185,6 +203,12 @@ test("cross-operation is warning (included), not exclusion", () => {
       address: "—",
       category: "X",
       aiScore: 80,
+      emailValidationStatus: "unknown",
+      emailValidationReason: "mailbox_not_verified",
+      hasMxRecords: true,
+      emailSourceUrl: "import://test/shared",
+      emailDiscoveryMethod: "external_provider",
+      emailIsGuessed: false,
     },
   ];
   const history = [

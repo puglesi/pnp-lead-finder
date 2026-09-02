@@ -6,6 +6,7 @@ import {
   sendAgentThreeSmtp,
   validateAgentThreeSendRequest,
   verifyAgentThreeSmtpConnection,
+  type AgentThreeSmtpTransport,
   type AgentThreeSmtpTransportFactory,
 } from "./agent-three-smtp-core";
 import {
@@ -15,17 +16,61 @@ import {
 import type { AgentThreeSmtpResult } from "../agent-three-smtp-contract";
 import { resolveAgentThreeSmtpTimeouts } from "../agent-three-timeouts";
 
+const pooledTransports = new Map<string, AgentThreeSmtpTransport>();
+
+function transportPoolKey(
+  options: Parameters<AgentThreeSmtpTransportFactory>[0]
+): string {
+  return [options.host, String(options.port), options.secure ? "s" : "p", options.auth.user].join("|");
+}
+
 const createTransport: AgentThreeSmtpTransportFactory = (options) => {
+  const key = transportPoolKey(options);
+  const existing = pooledTransports.get(key);
+  if (existing) return existing;
   const timeouts = resolveAgentThreeSmtpTimeouts(process.env);
-  return nodemailer.createTransport({
+  const raw = nodemailer.createTransport({
     host: options.host,
     port: options.port,
     secure: options.secure,
     auth: options.auth,
+    pool: true,
+    maxConnections: 1,
+    maxMessages: Infinity,
     connectionTimeout: options.connectionTimeout ?? timeouts.connectionTimeout,
     greetingTimeout: options.greetingTimeout ?? timeouts.greetingTimeout,
     socketTimeout: options.socketTimeout ?? timeouts.socketTimeout,
   });
+  const wrapped: AgentThreeSmtpTransport = {
+    async sendMail(mail) {
+      try {
+        return await raw.sendMail(mail);
+      } catch (error) {
+        pooledTransports.delete(key);
+        try {
+          raw.close();
+        } catch {
+          // Keep the original SMTP error.
+        }
+        throw error;
+      }
+    },
+    async verify() {
+      try {
+        return await raw.verify();
+      } catch (error) {
+        pooledTransports.delete(key);
+        try {
+          raw.close();
+        } catch {
+          // Keep the original SMTP error.
+        }
+        throw error;
+      }
+    },
+  };
+  pooledTransports.set(key, wrapped);
+  return wrapped;
 };
 
 export function getServerAgentThreeSmtpAvailability(operation: unknown) {
@@ -76,9 +121,6 @@ export async function sendServerAgentThreeSmtp(
     isSuppressed: (operation, email) =>
       database.isSuppressed(operation, email),
   });
-  if (result.status === "reconciliation_required") {
-    return result;
-  }
   try {
     database.finishSendIntent(intent, result);
   } catch (error) {

@@ -127,7 +127,7 @@ export function AgentThreeImportList() {
     if (importedRaw.length > 0) rebuildPreview(importedRaw, value);
   }
 
-  function handlePrepareCampaign() {
+  async function handlePrepareCampaign() {
     if (!preview || eligibleLeads.length === 0) {
       toast.error(
         "Nenhum destinatário elegível. Histórico, blocklist e dedupe bloquearam a lista."
@@ -142,7 +142,7 @@ export function AgentThreeImportList() {
     const signature = getSignature(operation);
     const template = getDefaultEmailTemplate(templates, operation);
 
-    const campaign = createCampaign({
+    const campaign = await createCampaign({
       campaignProfileId: operation,
       contactKind: template?.contactKind ?? "first_contact",
       emailTemplateId: template?.id,

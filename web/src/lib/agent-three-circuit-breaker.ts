@@ -11,7 +11,7 @@ export const AGENT_THREE_SYSTEMIC_SMTP_STATUSES = new Set<AgentThreeSmtpStatus>(
 
 /** Connection/provider availability failures (classified as transient by SMTP core). */
 export const AGENT_THREE_PROVIDER_UNAVAILABLE_STATUSES =
-  new Set<AgentThreeSmtpStatus>(["transient_error"]);
+  new Set<AgentThreeSmtpStatus>(["transient_error", "connection_error"]);
 
 export const AGENT_THREE_CONSECUTIVE_FAILURE_LIMIT = 3;
 

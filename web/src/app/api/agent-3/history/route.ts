@@ -10,8 +10,9 @@ export async function GET(request: Request) {
   try {
     const database = getLocalDatabase();
     const sends = database.listSendHistory({ operation, campaignId });
+    const recoveredCampaigns = database.listRecoveredCampaigns();
     return Response.json(
-      { ok: true, sends },
+      { ok: true, sends, recoveredCampaigns },
       { headers: { "Cache-Control": "no-store" } }
     );
   } catch (error) {
