@@ -8,14 +8,9 @@ import type { ProviderStatusResponse } from "@/types/search";
 let cachedStatus: ProviderStatusResponse | null = null;
 let inflight: Promise<ProviderStatusResponse> | null = null;
 
-export function fetchSerpApiStatus(
-  serpApiKey?: string
-): Promise<ProviderStatusResponse> {
-  const qs = serpApiKey?.trim()
-    ? `?serpApiKey=${encodeURIComponent(serpApiKey.trim())}`
-    : "";
+export function fetchSerpApiStatus(): Promise<ProviderStatusResponse> {
   if (!inflight) {
-    inflight = fetch(`/api/search/status${qs}`)
+    inflight = fetch(`/api/search/status`)
       .then((r) => r.json())
       .then((data: ProviderStatusResponse) => {
         cachedStatus = data;
@@ -30,7 +25,6 @@ export function fetchSerpApiStatus(
 
 export function useSerpApiStatus() {
   const profile = useSettingsStore((s) => s.searchProfile);
-  const serpApiKey = useSettingsStore((s) => s.serpApiKey);
   const remaining = useUsageStore((s) => s.getRemainingSerpApi());
   const creditExhausted = useUsageStore((s) => s.creditExhausted);
   const ensureCurrentMonth = useUsageStore((s) => s.ensureCurrentMonth);
@@ -40,15 +34,15 @@ export function useSerpApiStatus() {
 
   const refresh = useCallback(async () => {
     ensureCurrentMonth();
-    const data = await fetchSerpApiStatus(serpApiKey);
+    const data = await fetchSerpApiStatus();
     setStatus(data);
     return data;
-  }, [serpApiKey, ensureCurrentMonth]);
+  }, [ensureCurrentMonth]);
 
   useEffect(() => {
     let active = true;
     ensureCurrentMonth();
-    void fetchSerpApiStatus(serpApiKey)
+    void fetchSerpApiStatus()
       .then((data) => {
         if (active) setStatus(data);
       })
@@ -58,7 +52,7 @@ export function useSerpApiStatus() {
     return () => {
       active = false;
     };
-  }, [ensureCurrentMonth, serpApiKey]);
+  }, [ensureCurrentMonth]);
 
   const configured = Boolean(status?.serpapiConfigured);
   const isSerpActive =

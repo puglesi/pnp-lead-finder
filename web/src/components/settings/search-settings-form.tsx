@@ -1,25 +1,20 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import Link from "next/link";
 import {
   AlertCircle,
   ArrowRight,
-  Eye,
-  EyeOff,
   Gauge,
   Key,
   Wifi,
 } from "lucide-react";
-import toast from "react-hot-toast";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
 import {
   CollapsibleCard,
   CollapsibleCardContent,
   CollapsibleCardHeader,
 } from "@/components/ui/collapsible-card";
-import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { SerpApiActiveStatus } from "@/components/dashboard/serpapi-active-status";
@@ -27,7 +22,6 @@ import { AutonomousOptions } from "@/components/settings/autonomous-options";
 import { SearchProfileSelector } from "@/components/settings/search-profile-selector";
 import { useSerpApiStatus } from "@/hooks/use-serpapi-status";
 import { useSettingsStore } from "@/store/settings-store";
-import { useUsageStore } from "@/store/usage-store";
 import {
   AUTONOMOUS_VOLUME_MAX,
   DEFAULT_LEADS_PER_SECTOR,
@@ -58,23 +52,8 @@ export function SearchSettingsForm() {
   );
 
   const settings = useSettingsStore();
-  const { configured, envKeyConfigured, isSerpActive, remaining, refresh } =
+  const { configured, envKeyConfigured, isSerpActive, remaining } =
     useSerpApiStatus();
-  const [showSerpKey, setShowSerpKey] = useState(false);
-  const [serpKeyDraft, setSerpKeyDraft] = useState(() => ({
-    source: "",
-    value: "",
-  }));
-
-  // Store-backed fields: SSR / pre-hydrate use empty defaults for controlled inputs.
-  const storeSerpKey = hydrated ? settings.serpApiKey : "";
-  const storeGoogleKey = hydrated ? settings.googleApiKey : "";
-  const storeGoogleCse = hydrated ? settings.googleCseId : "";
-
-  const localSerpKey =
-    hydrated && serpKeyDraft.source === settings.serpApiKey
-      ? serpKeyDraft.value
-      : storeSerpKey;
 
   const volume = getSettingsVolumeDisplay({
     hydrated,
@@ -84,15 +63,6 @@ export function SearchSettingsForm() {
     searchProfile: settings.searchProfile,
     useMaxLeads: settings.useMaxLeads,
   });
-
-  const handleSave = () => {
-    settings.setSerpApiKey(localSerpKey.trim());
-    if (localSerpKey.trim()) {
-      useUsageStore.getState().clearCreditExhausted();
-    }
-    toast.success("Configurações de busca salvas!", { icon: "⚙️" });
-    refresh();
-  };
 
   const isAutonomous = volume.isAutonomous;
   // Before hydrate, don't flash SerpAPI remaining from client-only fetches.
@@ -126,7 +96,7 @@ export function SearchSettingsForm() {
         <CollapsibleCardHeader>
           <CardTitle className="flex items-center gap-2 text-lg">
             <Key className="size-5 text-emerald-400" />
-            Chave SerpAPI
+            SerpAPI — servidor
             {isAutonomous && (
               <Badge variant="outline" className="text-xs font-normal">
                 Premium · opcional
@@ -134,46 +104,15 @@ export function SearchSettingsForm() {
             )}
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Troque de conta facilmente — a chave fica salva localmente no
-            navegador. Também aceita{" "}
-            <code className="text-primary">SERPAPI_KEY</code> no{" "}
-            <code className="text-primary">.env.local</code>.
+            A chave não é pedida nem guardada no browser. Use{" "}
+            <code className="text-primary">SERPAPI_KEY</code> em{" "}
+            <code className="text-primary">web/.env.local</code>.
           </p>
         </CollapsibleCardHeader>
         <CollapsibleCardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="serp-key">API Key SerpAPI</Label>
-            <div className="relative">
-              <Input
-                id="serp-key"
-                type={showSerpKey ? "text" : "password"}
-                value={localSerpKey}
-                onChange={(e) =>
-                  setSerpKeyDraft({
-                    source: storeSerpKey,
-                    value: e.target.value,
-                  })
-                }
-                placeholder="Cole sua chave SerpAPI aqui..."
-                className="bg-background/50 pr-10 font-mono text-sm"
-              />
-              <button
-                type="button"
-                onClick={() => setShowSerpKey(!showSerpKey)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
-                {showSerpKey ? (
-                  <EyeOff className="size-4" />
-                ) : (
-                  <Eye className="size-4" />
-                )}
-              </button>
-            </div>
-          </div>
-
           <div className="flex flex-wrap gap-2">
             <Badge variant={hasSerpKey ? "success" : "outline"}>
-              {hasSerpKey ? "Chave configurada" : "Aguardando chave"}
+              {hasSerpKey ? "Chave no servidor" : "Aguardando SERPAPI_KEY"}
             </Badge>
             {serpLive && (
               <Badge variant="success">
@@ -186,11 +125,6 @@ export function SearchSettingsForm() {
               </Badge>
             )}
           </div>
-
-          <p className="text-xs text-muted-foreground">
-            Se o crédito acabar, fallback automático discreto — a fila continua
-            sem interrupção.
-          </p>
         </CollapsibleCardContent>
       </CollapsibleCard>
 
@@ -200,26 +134,9 @@ export function SearchSettingsForm() {
             Google Custom Search (opcional)
           </CardTitle>
         </CollapsibleCardHeader>
-        <CollapsibleCardContent className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label>API Key Google</Label>
-            <Input
-              type="password"
-              value={storeGoogleKey}
-              onChange={(e) => settings.setGoogleApiKey(e.target.value)}
-              placeholder="GOOGLE_CSE_API_KEY"
-              className="bg-background/50 font-mono text-sm"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>Search Engine ID</Label>
-            <Input
-              value={storeGoogleCse}
-              onChange={(e) => settings.setGoogleCseId(e.target.value)}
-              placeholder="GOOGLE_CSE_ID"
-              className="bg-background/50 font-mono text-sm"
-            />
-          </div>
+        <CollapsibleCardContent className="text-sm text-muted-foreground">
+          Configure <code>GOOGLE_CSE_API_KEY</code> e <code>GOOGLE_CSE_ID</code>{" "}
+          no ambiente do servidor. O browser não envia essas chaves.
         </CollapsibleCardContent>
       </CollapsibleCard>
 
@@ -311,19 +228,12 @@ export function SearchSettingsForm() {
               ? `Modo SerpAPI Ativo · ~${displayRemaining} buscas`
               : hasSerpKey
                 ? "SerpAPI configurada — ative o perfil Premium"
-                : "SerpAPI — configure chave"}
+                : "SerpAPI — defina SERPAPI_KEY no servidor"}
           </Badge>
         ) : (
           <Badge variant="secondary">Google CSE</Badge>
         )}
       </div>
-
-      <Button
-        onClick={handleSave}
-        className="bg-emerald-600 text-white hover:bg-emerald-500"
-      >
-        Salvar Configurações
-      </Button>
     </div>
   );
 }

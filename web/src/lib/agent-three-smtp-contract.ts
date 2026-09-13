@@ -14,7 +14,9 @@ export type AgentThreeSmtpStatus =
   | "provider_account_blocked"
   | "transient_error"
   | "permanent_error"
-  | "reconciliation_required";
+  | "reconciliation_required"
+  | "already_claimed"
+  | "runner_already_active";
 
 export interface AgentThreeAttachmentPayload {
   filename: string;
@@ -31,6 +33,8 @@ export interface AgentThreeSendRequest {
   campaignId?: string;
   leadId?: string;
   queueItemId?: string;
+  ownerId?: string;
+  contactKind?: "first_contact" | "follow_up";
   attachment?: AgentThreeAttachmentPayload;
 }
 
@@ -84,6 +88,10 @@ export const AGENT_THREE_SMTP_MESSAGES: Record<
   permanent_error: "Falha permanente no envio.",
   reconciliation_required:
     "UNKNOWN_RECONCILIATION_REQUIRED — o SMTP não confirmou o resultado a tempo. Sem retry automático.",
+  already_claimed:
+    "ALREADY_CLAIMED — outro worker já possui o lease deste destinatário. SMTP não foi chamado.",
+  runner_already_active:
+    "RUNNER_ALREADY_ACTIVE — outro Agente 3 já está em execução nesta operação.",
 };
 
 /** Human reasons for Start blocking (client-side preconditions). */
@@ -96,9 +104,16 @@ export function describeAgentThreeStartBlock(reason: {
   previewRequired?: boolean;
   noEligible?: boolean;
   campaignCompleted?: boolean;
+  runnerAlreadyActive?: boolean;
   smtpMessage?: string | null;
   missingEnvVars?: string[];
 }): string {
+  if (reason.runnerAlreadyActive) {
+    return (
+      reason.smtpMessage ||
+      AGENT_THREE_SMTP_MESSAGES.runner_already_active
+    );
+  }
   if (reason.campaignCompleted) {
     return "Campanha concluída: todos os destinatários já foram enviados.";
   }

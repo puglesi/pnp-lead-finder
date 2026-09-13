@@ -1,106 +1,45 @@
-import { sendEmailServer } from "@/lib/email-providers/server-send";
-import type {
-  EmailProviderCredentials,
-  EmailProviderId,
-  EmailSendPayload,
-} from "@/types/email-provider";
 import { NextResponse } from "next/server";
-import { getLocalDatabase, type SendIntent } from "@/lib/server/local-database";
-import type { AgentThreeSendRequest } from "@/lib/agent-three-smtp-contract";
+import { payloadContainsClientSecrets } from "@/lib/client-secret-policy";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const REAL_PROVIDERS = new Set<EmailProviderId>([
-  "mailgun",
-  "resend",
-  "ses",
-  "sendgrid",
-  "brevo",
-  "smtp-gmail",
-  "smtp-outlook",
-]);
+const CLIENT_SEND_DISABLED_MESSAGE =
+  "Envio real apenas pelo Agente 3 com credenciais do servidor. O browser não envia senhas nem API keys.";
 
+/**
+ * Parallel client-credential send path is disabled.
+ * Never accepts client secrets from the browser and never calls SMTP.
+ */
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as {
-      providerId?: EmailProviderId;
-      credentials?: EmailProviderCredentials;
-      payload?: EmailSendPayload;
-    };
-
-    const { providerId, credentials, payload } = body;
-
-    if (!providerId || !credentials || !payload) {
-      return NextResponse.json(
-        { success: false, errorCode: "BAD_REQUEST", errorMessage: "Payload incompleto" },
-        { status: 400 }
-      );
-    }
-
-    if (!REAL_PROVIDERS.has(providerId)) {
+    const body = (await request.json().catch(() => null)) as unknown;
+    if (payloadContainsClientSecrets(body)) {
       return NextResponse.json(
         {
           success: false,
-          provider: providerId,
-          errorCode: "UNSUPPORTED",
-          errorMessage: "Provedor não suportado para envio real",
+          errorCode: "CLIENT_SECRETS_REJECTED",
+          errorMessage: CLIENT_SEND_DISABLED_MESSAGE,
         },
-        { status: 400 }
+        { status: 403 }
       );
     }
-
-    const operation = payload.from.toLowerCase().includes("modeclean")
-      ? "modeclean"
-      : "panek-puglesi";
-    const auditRequest: AgentThreeSendRequest = {
-      operation,
-      recipient: payload.to,
-      subject: payload.subject,
-      html: payload.html,
-      text: payload.text,
-      campaignId: payload.campaignId,
-      leadId: payload.leadId,
-      queueItemId: payload.tags?.join("|"),
-    };
-    let database: ReturnType<typeof getLocalDatabase>;
-    let intent: SendIntent;
-    try {
-      database = getLocalDatabase();
-      intent = database.createSendIntent(auditRequest);
-      if (intent.existingMessageId) {
-        return NextResponse.json({
-          success: true,
-          provider: providerId,
-          messageId: intent.existingMessageId,
-          deduplicated: true,
-        });
-      }
-    } catch (error) {
-      return NextResponse.json(
-        {
-          success: false,
-          provider: providerId,
-          errorCode: "LOCAL_DATABASE_UNAVAILABLE",
-          errorMessage:
-            "Banco local indisponível — envio real bloqueado antes do provedor. " +
-            (error instanceof Error ? error.message : ""),
-        },
-        { status: 503 }
-      );
-    }
-    const result = await sendEmailServer(providerId, credentials, payload);
-    database.finishSendIntent(intent, {
-      status: result.success && result.messageId ? "sent" : "permanent_error",
-      message: result.errorMessage ?? (result.success ? "E-mail enviado." : "Falha no envio."),
-      messageId: result.messageId,
-    });
-    return NextResponse.json(result, { status: result.success ? 200 : 422 });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Erro interno";
     return NextResponse.json(
-      { success: false, errorCode: "SERVER_ERROR", errorMessage: message },
-      { status: 500 }
+      {
+        success: false,
+        errorCode: "CLIENT_SEND_DISABLED",
+        errorMessage: CLIENT_SEND_DISABLED_MESSAGE,
+      },
+      { status: 409 }
+    );
+  } catch {
+    return NextResponse.json(
+      {
+        success: false,
+        errorCode: "CLIENT_SEND_DISABLED",
+        errorMessage: CLIENT_SEND_DISABLED_MESSAGE,
+      },
+      { status: 409 }
     );
   }
 }

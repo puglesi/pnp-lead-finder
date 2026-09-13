@@ -119,36 +119,14 @@ export async function sendViaProvider(
     return provider.send(payload);
   }
 
-  if (!provider.isConfigured(credentials)) {
-    return {
-      success: false,
-      provider: providerId,
-      errorCode: "NOT_CONFIGURED",
-      errorMessage: `Provedor ${provider.name} não configurado`,
-    };
-  }
-
-  const res = await fetch("/api/email/send", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ providerId, credentials, payload }),
-  });
-
-  const data = (await res.json().catch(() => ({}))) as EmailSendResult & {
-    errorMessage?: string;
-    errorCode?: string;
+  void credentials;
+  return {
+    success: false,
+    provider: providerId,
+    errorCode: "CLIENT_SEND_DISABLED",
+    errorMessage:
+      "Envio real apenas pelo Agente 3 com credenciais do servidor.",
   };
-
-  if (!res.ok && !data.provider) {
-    return {
-      success: false,
-      provider: providerId,
-      errorCode: data.errorCode ?? `HTTP_${res.status}`,
-      errorMessage: data.errorMessage ?? "Falha na API de envio",
-    };
-  }
-
-  return data;
 }
 
 export {

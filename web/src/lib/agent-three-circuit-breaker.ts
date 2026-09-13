@@ -56,10 +56,21 @@ export function evaluateAgentThreeCircuitBreaker(
   }
 
   // Non-failure control statuses that already pause the queue item without counting.
+  if (input.smtpStatus === "runner_already_active") {
+    return {
+      consecutiveFailureStatus: input.smtpStatus,
+      consecutiveFailureCount: input.consecutiveFailureCount,
+      shouldPause: true,
+      stopReason: "RUNNER_ALREADY_ACTIVE",
+      isSystemic: true,
+    };
+  }
+
   if (
     input.smtpStatus === "suppressed" ||
     input.smtpStatus === "invalid_request" ||
-    input.smtpStatus === "reconciliation_required"
+    input.smtpStatus === "reconciliation_required" ||
+    input.smtpStatus === "already_claimed"
   ) {
     return {
       consecutiveFailureStatus: input.consecutiveFailureStatus,

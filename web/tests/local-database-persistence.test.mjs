@@ -243,9 +243,10 @@ test("M-O: backup íntegro, restore recupera dados e cria PRE-RESTORE", async ()
 test("Q/S/T: envio real exige intent gravável e suíte não chama SMTP/SerpAPI", () => {
   const smtpSource = readFileSync(new URL("../src/lib/server/agent-three-smtp.ts", import.meta.url), "utf8");
   const routeSource = readFileSync(new URL("../src/app/api/email/send/route.ts", import.meta.url), "utf8");
-  assert.match(smtpSource, /createSendIntent\(input\)/);
+  assert.match(smtpSource, /executeAgentThreeSendWithLease/);
   assert.match(smtpSource, /envio real bloqueado antes do SMTP/i);
-  assert.match(routeSource, /LOCAL_DATABASE_UNAVAILABLE/);
+  assert.match(routeSource, /CLIENT_SEND_DISABLED|CLIENT_SECRETS_REJECTED/);
+  assert.doesNotMatch(routeSource, /sendMail|sendEmailServer/);
 });
 
 test("R: assinaturas P&P e Modeclean permanecem isoladas", () => {

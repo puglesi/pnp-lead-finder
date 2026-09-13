@@ -33,6 +33,7 @@ export interface AgentThreeSendRequestBuilderDependencies {
   ) => string;
   /** Official current operation signature. Wins over campaign.signature. */
   officialSignature?: CampaignSignature | null;
+  ownerId?: string;
 }
 
 function templateLead(
@@ -129,6 +130,8 @@ export function buildAgentThreeSendRequest(
         campaignId: campaign.id,
         leadId: item.leadId,
         queueItemId: item.id,
+        ownerId: dependencies.ownerId,
+        contactKind: campaign.contactKind === "follow_up" ? "follow_up" : "first_contact",
         attachment: attachmentPayload(campaign),
       },
       errorMessage: null,

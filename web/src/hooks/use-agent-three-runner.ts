@@ -3,7 +3,10 @@
 import { useRef, useState } from "react";
 import {
   checkAgentThreeSmtpAvailability,
+  claimAgentThreeRunnerLease,
   fetchAgentThreeSendHistory,
+  heartbeatAgentThreeRunnerLease,
+  releaseAgentThreeRunnerLease,
   requestAgentThreeSmtpSend,
 } from "@/lib/agent-three-api";
 import {
@@ -80,6 +83,12 @@ import {
   shouldSkipSmtpForItem,
 } from "@/lib/agent-three-reconciliation";
 import { isAgentThreeHeartbeatStale } from "@/lib/agent-three-timeouts";
+import {
+  acquireAgentThreeWebLock,
+  getOrCreateAgentThreeOwnerId,
+  RUNNER_ALREADY_ACTIVE_MESSAGE,
+  type AgentThreeWebLock,
+} from "@/lib/runner-lease";
 
 export type AgentThreeUiConnectionStatus =
   | AgentThreeSmtpStatus
@@ -566,6 +575,43 @@ export function useAgentThreeRunner() {
   );
   const activeLoops = useRef(new Set<CampaignProfileId>());
   const startRequests = useRef(new Set<CampaignProfileId>());
+  const runnerLocks = useRef(new Map<CampaignProfileId, AgentThreeWebLock>());
+  const runnerOwners = useRef(new Map<CampaignProfileId, string>());
+
+  function runnerOwnerId(): string {
+    return getOrCreateAgentThreeOwnerId();
+  }
+
+  async function acquireExclusiveRunner(
+    profileId: CampaignProfileId
+  ): Promise<{ ok: boolean; message: string | null; ownerId: string }> {
+    const ownerId = runnerOwnerId();
+    const webLock = await acquireAgentThreeWebLock(profileId);
+    if (!webLock.acquired) {
+      return { ok: false, message: RUNNER_ALREADY_ACTIVE_MESSAGE, ownerId };
+    }
+    const server = await claimAgentThreeRunnerLease(profileId, ownerId);
+    if (!server.ok) {
+      webLock.release();
+      return {
+        ok: false,
+        message: server.message || RUNNER_ALREADY_ACTIVE_MESSAGE,
+        ownerId,
+      };
+    }
+    runnerLocks.current.get(profileId)?.release();
+    runnerLocks.current.set(profileId, webLock);
+    runnerOwners.current.set(profileId, ownerId);
+    return { ok: true, message: null, ownerId };
+  }
+
+  function releaseExclusiveRunner(profileId: CampaignProfileId): void {
+    runnerLocks.current.get(profileId)?.release();
+    runnerLocks.current.delete(profileId);
+    const ownerId = runnerOwners.current.get(profileId);
+    runnerOwners.current.delete(profileId);
+    if (ownerId) void releaseAgentThreeRunnerLease(profileId, ownerId);
+  }
   const loadPromises = useRef(
     new Map<string, Promise<AgentThreeCampaignPreparation>>()
   );
@@ -856,6 +902,16 @@ export function useAgentThreeRunner() {
         const store = useAgentThreeStore.getState();
         const operation = store.operations[profileId];
         if (operation.status !== "running") break;
+        const ownerId = runnerOwners.current.get(profileId) ?? runnerOwnerId();
+        const leaseFresh = await heartbeatAgentThreeRunnerLease(
+          profileId,
+          ownerId
+        );
+        if (!leaseFresh) {
+          useAgentThreeStore.getState().pause(profileId);
+          setStatus(profileId, "paused");
+          break;
+        }
         store.touchHeartbeat(profileId);
 
         setProfileNextSendAt(profileId, null);
@@ -948,7 +1004,10 @@ export function useAgentThreeRunner() {
               campaign,
               item,
               findLead(item.leadId),
-              { officialSignature }
+              {
+                officialSignature,
+                ownerId: runnerOwners.current.get(profileId) ?? runnerOwnerId(),
+              }
             )
           : {
               request: null,
@@ -1106,6 +1165,7 @@ export function useAgentThreeRunner() {
       if (leftover.status === "running" && !activeLoops.current.has(profileId)) {
         useAgentThreeStore.getState().pause(profileId);
       }
+      releaseExclusiveRunner(profileId);
     }
   }
 
@@ -1160,8 +1220,16 @@ export function useAgentThreeRunner() {
             "SMTP indisponível ou mal configurado. Corrija a configuração antes de enviar.",
         };
       }
+      const exclusive = await acquireExclusiveRunner(profileId);
+      if (!exclusive.ok) {
+        return {
+          started: false,
+          message: exclusive.message,
+        };
+      }
       const result = useAgentThreeStore.getState().start(profileId, true);
       if (result.started) void run(profileId);
+      else releaseExclusiveRunner(profileId);
       return { started: result.started, message: result.message };
     } finally {
       startRequests.current.delete(profileId);
@@ -1173,6 +1241,7 @@ export function useAgentThreeRunner() {
     setProfileNextSendAt(profileId, null);
     useAgentThreeStore.getState().pause(profileId);
     setStatus(profileId, "paused");
+    releaseExclusiveRunner(profileId);
   }
 
   async function resume(
@@ -1192,8 +1261,13 @@ export function useAgentThreeRunner() {
           "SMTP indisponível ou mal configurado. Corrija a configuração antes de retomar.",
       };
     }
+    const exclusive = await acquireExclusiveRunner(profileId);
+    if (!exclusive.ok) {
+      return { started: false, message: exclusive.message };
+    }
     const result = useAgentThreeStore.getState().resume(profileId, true);
     if (result.started) void run(profileId);
+    else releaseExclusiveRunner(profileId);
     return { started: result.started, message: result.message };
   }
 
@@ -1202,6 +1276,7 @@ export function useAgentThreeRunner() {
     setProfileNextSendAt(profileId, null);
     useAgentThreeStore.getState().stop(profileId);
     setStatus(profileId, "paused");
+    releaseExclusiveRunner(profileId);
   }
 
   return {

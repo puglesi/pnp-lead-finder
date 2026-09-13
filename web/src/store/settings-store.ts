@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { createQuotaSafeStateStorage } from "@/lib/quota-safe-storage";
+import { stripClientSecrets } from "@/lib/client-secret-policy";
 import {
   AUTONOMOUS_MIN_LEADS,
   AUTONOMOUS_STANDARD_MAX,
@@ -528,7 +529,34 @@ export const useSettingsStore = create<SettingsStore>()(
       storage: createJSONStorage(() =>
         createQuotaSafeStateStorage(window.localStorage)
       ),
-      version: 13,
+      version: 14,
+      partialize: (state) =>
+        stripClientSecrets({
+          workers: state.workers,
+          delayMs: state.delayMs,
+          maxResults: state.maxResults,
+          useMaxLeads: state.useMaxLeads,
+          queueMode: state.queueMode,
+          provider: state.provider,
+          searchProfile: state.searchProfile,
+          mode24h: state.mode24h,
+          autoSaveLeads: state.autoSaveLeads,
+          serpapiDeepPagination: state.serpapiDeepPagination,
+          autonomousSources: state.autonomousSources,
+          autonomousSourceStrategy: state.autonomousSourceStrategy,
+          autonomousSingleSource: state.autonomousSingleSource,
+          autonomousEnrichWebsites: state.autonomousEnrichWebsites,
+          hardwareProfile: state.hardwareProfile,
+          profileUserOverride: state.profileUserOverride,
+          emailProvider: state.emailProvider,
+          autonomousDailySentDate: state.autonomousDailySentDate,
+          autonomousDailySentCount: state.autonomousDailySentCount,
+          localProductionEnabled: state.localProductionEnabled,
+          nightModeAuto: state.nightModeAuto,
+          nightModeActive: state.nightModeActive,
+          nightScheduleStart: state.nightScheduleStart,
+          nightScheduleEnd: state.nightScheduleEnd,
+        }),
       migrate: (persisted, version) => {
         const state = persisted as Partial<SettingsStore> & {
           continuousLoop?: boolean;
@@ -654,12 +682,26 @@ export const useSettingsStore = create<SettingsStore>()(
             next.nightScheduleEnd ?? DEFAULT_NIGHT_SCHEDULE.endHour;
         }
 
+        if (version < 14) {
+          next.serpApiKey = "";
+          next.googleApiKey = "";
+          next.googleCseId = "";
+          next.mailgunApiKey = "";
+          next.resendApiKey = "";
+          next.sesAccessKey = "";
+          next.sesSecretKey = "";
+          next.sendgridApiKey = "";
+          next.brevoApiKey = "";
+          next.smtpPassword = "";
+          next.smtpEmail = "";
+        }
+
         // Always repair array fields (not only on version bumps).
         next.autonomousSources = Array.isArray(next.autonomousSources)
           ? sanitizeAutonomousSources(next.autonomousSources)
           : [...DEFAULT_AUTONOMOUS_SOURCES];
 
-        return next;
+        return stripClientSecrets(next as Record<string, unknown>) as typeof next;
       },
       onRehydrateStorage: () => (state) => {
         state?.resetAutonomousDailyCountIfNeeded();
@@ -675,7 +717,18 @@ export const useSettingsStore = create<SettingsStore>()(
           : current.autonomousSources;
         return {
           ...current,
-          ...state,
+          ...stripClientSecrets(state as Record<string, unknown>),
+          serpApiKey: "",
+          googleApiKey: "",
+          googleCseId: "",
+          mailgunApiKey: "",
+          resendApiKey: "",
+          sesAccessKey: "",
+          sesSecretKey: "",
+          sendgridApiKey: "",
+          brevoApiKey: "",
+          smtpPassword: "",
+          smtpEmail: "",
           autonomousSources,
           autonomousSourceStrategy:
             state.autonomousSourceStrategy === "parallel" ||

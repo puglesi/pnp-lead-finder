@@ -89,6 +89,64 @@ export async function checkAgentThreeSmtpAvailability(
   }
 }
 
+export async function claimAgentThreeRunnerLease(
+  operation: CampaignProfileId,
+  ownerId: string
+): Promise<AgentThreeSmtpResult & { ok: boolean }> {
+  try {
+    const response = await fetch("/api/agent-3/runner", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "claim", operation, ownerId }),
+      cache: "no-store",
+    });
+    const parsed = await readResult(response);
+    return {
+      ...parsed,
+      ok: parsed.status !== "runner_already_active" && response.ok,
+    };
+  } catch {
+    return {
+      status: "transient_error",
+      message: AGENT_THREE_SMTP_MESSAGES.transient_error,
+      ok: false,
+    };
+  }
+}
+
+export async function heartbeatAgentThreeRunnerLease(
+  operation: CampaignProfileId,
+  ownerId: string
+): Promise<boolean> {
+  try {
+    const response = await fetch("/api/agent-3/runner", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "heartbeat", operation, ownerId }),
+      cache: "no-store",
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function releaseAgentThreeRunnerLease(
+  operation: CampaignProfileId,
+  ownerId: string
+): Promise<void> {
+  try {
+    await fetch("/api/agent-3/runner", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "release", operation, ownerId }),
+      cache: "no-store",
+    });
+  } catch {
+    // Best-effort release; lease expires.
+  }
+}
+
 export async function requestAgentThreeSmtpSend(
   request: AgentThreeSendRequest
 ): Promise<AgentThreeSmtpResult> {

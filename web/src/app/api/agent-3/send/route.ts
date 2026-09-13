@@ -16,6 +16,9 @@ function responseStatus(status: string): number {
       return 200;
     case "invalid_request":
       return 400;
+    case "already_claimed":
+    case "runner_already_active":
+      return 409;
     case "suppressed":
       return 403;
     case "real_send_disabled":

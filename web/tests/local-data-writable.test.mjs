@@ -108,10 +108,11 @@ test("E: DB indisponível bloqueia envio", async () => {
     /startBatchSend: async \(id, leadContexts\) => \{\s*await ensureLocalDataWritable\(\);/
   );
   const sendRoute = readSrc("src/app/api/email/send/route.ts");
-  assert.match(sendRoute, /LOCAL_DATABASE_UNAVAILABLE/);
-  assert.match(sendRoute, /createSendIntent/);
+  assert.match(sendRoute, /CLIENT_SECRETS_REJECTED|CLIENT_SEND_DISABLED/);
+  assert.match(sendRoute, /payloadContainsClientSecrets/);
+  assert.doesNotMatch(sendRoute, /sendMail|createTransport|sendEmailServer/);
   const smtp = readSrc("src/lib/server/agent-three-smtp.ts");
-  assert.match(smtp, /createSendIntent\(input\)/);
+  assert.match(smtp, /executeAgentThreeSendWithLease/);
   assert.match(smtp, /envio real bloqueado antes do SMTP/);
   const detail = readSrc("src/components/campaigns/campaign-detail.tsx");
   assert.match(detail, /handleSendNow/);

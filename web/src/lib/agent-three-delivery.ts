@@ -215,16 +215,33 @@ export function applyAgentThreeSmtpResult(
       return applyBreaker(released, true);
     }
     case "invalid_request":
-    case "suppressed": {
+    case "suppressed":
+    case "already_claimed": {
       const blocked = blockAgentThreeSendingItem(
         snapshot,
         profileId,
         itemId,
         deliveryResult.message,
         occurredAt,
-        deliveryResult.status
+        deliveryResult.status === "already_claimed"
+          ? "send_locked"
+          : deliveryResult.status
       );
       return applyBreaker(blocked, false);
+    }
+    case "runner_already_active": {
+      const released = releaseAgentThreeSendingItem(
+        snapshot,
+        profileId,
+        itemId,
+        occurredAt,
+        {
+          pause: true,
+          consumeAttempt: false,
+          message: deliveryResult.message,
+        }
+      );
+      return applyBreaker(released, true);
     }
     case "reconciliation_required": {
       const unknown = markAgentThreeItemUnknown(

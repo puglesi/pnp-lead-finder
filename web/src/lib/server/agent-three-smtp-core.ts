@@ -286,8 +286,22 @@ export function validateAgentThreeSendRequest(
   ) {
     return false;
   }
-  for (const key of ["campaignId", "leadId", "queueItemId"] as const) {
+  for (const key of ["campaignId", "leadId", "queueItemId", "ownerId"] as const) {
     if (value[key] !== undefined && typeof value[key] !== "string") return false;
+  }
+  if (
+    !hasSafeIdentifier(
+      typeof value.ownerId === "string" ? value.ownerId : undefined
+    )
+  ) {
+    return false;
+  }
+  if (
+    value.contactKind !== undefined &&
+    value.contactKind !== "first_contact" &&
+    value.contactKind !== "follow_up"
+  ) {
+    return false;
   }
 
   if (value.attachment !== undefined) {

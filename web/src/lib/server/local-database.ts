@@ -12,6 +12,19 @@ import {
 } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import type { AgentThreeSendRequest, AgentThreeSmtpResult } from "../agent-three-smtp-contract.ts";
+import {
+  SEND_LEASE_TTL_MS,
+  buildSendLeaseKey,
+  decideSendLeaseClaim,
+  normalizeLeaseEmail,
+  normalizeSendContactKind,
+  type SendLeaseDecision,
+  type SendLeaseStatus,
+} from "../send-lease.ts";
+import {
+  RUNNER_LEASE_TTL_MS,
+  decideRunnerLeaseClaim,
+} from "../runner-lease.ts";
 import { isRealDeliveryMessageId } from "../campaign-delivery-metrics.ts";
 import {
   COMMERCIAL_STORE_KEYS,
@@ -56,6 +69,9 @@ export interface LocalDatabaseOptions {
 export interface SendIntent {
   id: string;
   intentKey: string;
+  leaseKey?: string;
+  ownerId?: string;
+  decision?: SendLeaseDecision;
   existingMessageId?: string;
 }
 
@@ -295,6 +311,9 @@ export class LocalDatabaseAdapter {
       "CREATE TABLE IF NOT EXISTS dedupe_history (dedupe_key TEXT PRIMARY KEY, email TEXT NOT NULL, operation TEXT NOT NULL, campaign_id TEXT, provider_message_id TEXT, confirmed_at TEXT NOT NULL)",
       "CREATE TABLE IF NOT EXISTS tracking_events (event_id TEXT PRIMARY KEY, campaign_id TEXT NOT NULL, lead_id TEXT NOT NULL, email TEXT NOT NULL, event_type TEXT NOT NULL, occurred_at TEXT NOT NULL, payload_json TEXT NOT NULL)",
       "CREATE TABLE IF NOT EXISTS non_secret_settings (setting_key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL)",
+      "CREATE TABLE IF NOT EXISTS send_leases (lease_key TEXT PRIMARY KEY, operation TEXT NOT NULL, email TEXT NOT NULL, contact_kind TEXT NOT NULL DEFAULT 'first_contact', owner_id TEXT NOT NULL, claimed_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL, expires_at TEXT NOT NULL, status TEXT NOT NULL, intent_id TEXT, campaign_id TEXT, lead_id TEXT, queue_item_id TEXT, provider_message_id TEXT, CHECK(status IN ('claimed','confirmed','failed','unknown')))",
+      "CREATE UNIQUE INDEX IF NOT EXISTS send_leases_op_email_kind ON send_leases(operation, email, contact_kind)",
+      "CREATE TABLE IF NOT EXISTS runner_leases (operation_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, claimed_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL, expires_at TEXT NOT NULL)",
     ].join(";") + ";");
     this.setMetadata("schemaVersion", "1", false);
     if (!this.getMetadata("migrationVersion")) {
@@ -784,37 +803,269 @@ export class LocalDatabaseAdapter {
   }
 
   createSendIntent(input: AgentThreeSendRequest): SendIntent {
+    return this.claimSendLease(input);
+  }
+
+  claimSendLease(input: AgentThreeSendRequest): SendIntent {
     this.assertWritable();
-    const recipient = input.recipient.trim().toLowerCase();
-    const intentKey = [input.operation, input.campaignId ?? "", input.leadId ?? "", input.queueItemId ?? "", recipient].join("|");
-    const confirmed = this.database.prepare(
-      "SELECT id,provider_message_id FROM send_history WHERE operation=? AND lower(trim(email))=? AND status='confirmed' AND provider_message_id IS NOT NULL AND trim(provider_message_id)<>'' ORDER BY confirmed_at DESC LIMIT 1"
-    ).get(input.operation, recipient) as Record<string, unknown> | undefined;
-    if (
-      typeof confirmed?.provider_message_id === "string" &&
-      isRealDeliveryMessageId(confirmed.provider_message_id)
-    ) {
+    const ownerId = typeof input.ownerId === "string" ? input.ownerId.trim() : "";
+    if (!ownerId) {
+      throw new Error("ownerId obrigatório para claim de envio.");
+    }
+    const email = normalizeLeaseEmail(input.recipient);
+    const contactKind = normalizeSendContactKind(input.contactKind);
+    const leaseKey = buildSendLeaseKey(input.operation, email, contactKind);
+    const now = this.now();
+    const nowIso = now.toISOString();
+    const expiresAt = new Date(now.getTime() + SEND_LEASE_TTL_MS).toISOString();
+    return this.transaction(() => {
+      const confirmed = this.database.prepare(
+        "SELECT id,provider_message_id FROM send_history WHERE operation=? AND lower(trim(email))=? AND status='confirmed' AND provider_message_id IS NOT NULL AND trim(provider_message_id)<>'' ORDER BY confirmed_at DESC LIMIT 1"
+      ).get(input.operation, email) as Record<string, unknown> | undefined;
+      const confirmedId =
+        typeof confirmed?.provider_message_id === "string" &&
+        isRealDeliveryMessageId(confirmed.provider_message_id)
+          ? String(confirmed.provider_message_id)
+          : null;
+      const lease = this.database.prepare(
+        "SELECT lease_key,owner_id,expires_at,status,intent_id,provider_message_id FROM send_leases WHERE lease_key=?"
+      ).get(leaseKey) as Record<string, unknown> | undefined;
+      const leaseStatus = (
+        typeof lease?.status === "string" ? lease.status : null
+      ) as SendLeaseStatus | null;
+      const decision = decideSendLeaseClaim({
+        confirmedMessageId: confirmedId,
+        leaseStatus,
+        leaseOwnerId:
+          typeof lease?.owner_id === "string" ? lease.owner_id : null,
+        leaseExpiresAt:
+          typeof lease?.expires_at === "string" ? lease.expires_at : null,
+        requesterOwnerId: ownerId,
+        nowIso,
+      });
+      const existingIntentId =
+        typeof lease?.intent_id === "string" && lease.intent_id
+          ? String(lease.intent_id)
+          : typeof confirmed?.id === "string"
+            ? String(confirmed.id)
+            : "intent-" + crypto.randomUUID();
+      if (decision === "already_sent") {
+        this.upsertSendLeaseRow({
+          leaseKey,
+          operation: input.operation,
+          email,
+          contactKind,
+          ownerId,
+          nowIso,
+          expiresAt,
+          status: "confirmed",
+          intentId: existingIntentId,
+          campaignId: input.campaignId ?? null,
+          leadId: input.leadId ?? null,
+          queueItemId: input.queueItemId ?? null,
+          providerMessageId: confirmedId,
+        });
+        return {
+          id: existingIntentId,
+          intentKey: leaseKey,
+          leaseKey,
+          ownerId,
+          decision,
+          existingMessageId: confirmedId ?? undefined,
+        };
+      }
+      if (decision === "already_claimed" || decision === "reconciliation_required") {
+        return {
+          id: existingIntentId,
+          intentKey: leaseKey,
+          leaseKey,
+          ownerId,
+          decision,
+        };
+      }
+      this.database.prepare(
+        "INSERT INTO send_history(id,intent_key,campaign_id,lead_id,email,operation,contact_kind,attempted_at,status,payload_json) VALUES(?,?,?,?,?,?,?,?, 'intent',?) ON CONFLICT(intent_key) DO UPDATE SET attempted_at=excluded.attempted_at,status='intent',error=NULL,payload_json=excluded.payload_json,campaign_id=excluded.campaign_id,lead_id=excluded.lead_id"
+      ).run(
+        existingIntentId,
+        leaseKey,
+        input.campaignId ?? null,
+        input.leadId ?? null,
+        email,
+        input.operation,
+        contactKind,
+        nowIso,
+        json({ queueItemId: input.queueItemId ?? null, ownerId })
+      );
+      this.upsertSendLeaseRow({
+        leaseKey,
+        operation: input.operation,
+        email,
+        contactKind,
+        ownerId,
+        nowIso,
+        expiresAt,
+        status: "claimed",
+        intentId: existingIntentId,
+        campaignId: input.campaignId ?? null,
+        leadId: input.leadId ?? null,
+        queueItemId: input.queueItemId ?? null,
+        providerMessageId: null,
+      });
+      this.setMetadata("lastWriteAt", nowIso);
       return {
-        id: String(confirmed.id),
-        intentKey,
-        existingMessageId: confirmed.provider_message_id,
+        id: existingIntentId,
+        intentKey: leaseKey,
+        leaseKey,
+        ownerId,
+        decision: "claimed",
       };
-    }
-    const existing = this.database.prepare("SELECT id,status,provider_message_id FROM send_history WHERE intent_key=?").get(intentKey) as Record<string, unknown> | undefined;
-    if (
-      existing?.status === "confirmed" &&
-      typeof existing.provider_message_id === "string" &&
-      isRealDeliveryMessageId(existing.provider_message_id)
-    ) {
-      return { id: String(existing.id), intentKey, existingMessageId: existing.provider_message_id };
-    }
+    });
+  }
+
+  private upsertSendLeaseRow(input: {
+    leaseKey: string;
+    operation: string;
+    email: string;
+    contactKind: string;
+    ownerId: string;
+    nowIso: string;
+    expiresAt: string;
+    status: SendLeaseStatus;
+    intentId: string;
+    campaignId: string | null;
+    leadId: string | null;
+    queueItemId: string | null;
+    providerMessageId: string | null;
+  }): void {
+    this.database.prepare(
+      "INSERT INTO send_leases(lease_key,operation,email,contact_kind,owner_id,claimed_at,heartbeat_at,expires_at,status,intent_id,campaign_id,lead_id,queue_item_id,provider_message_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(lease_key) DO UPDATE SET owner_id=excluded.owner_id,heartbeat_at=excluded.heartbeat_at,expires_at=excluded.expires_at,status=excluded.status,intent_id=excluded.intent_id,campaign_id=excluded.campaign_id,lead_id=excluded.lead_id,queue_item_id=excluded.queue_item_id,provider_message_id=COALESCE(excluded.provider_message_id,send_leases.provider_message_id)"
+    ).run(
+      input.leaseKey,
+      input.operation,
+      input.email,
+      input.contactKind,
+      input.ownerId,
+      input.nowIso,
+      input.nowIso,
+      input.expiresAt,
+      input.status,
+      input.intentId,
+      input.campaignId,
+      input.leadId,
+      input.queueItemId,
+      input.providerMessageId
+    );
+  }
+
+  markSendLeaseUnknown(intent: SendIntent, message?: string): void {
+    if (!intent.leaseKey && !intent.id) return;
     const now = this.now().toISOString();
-    const id = existing ? String(existing.id) : "intent-" + crypto.randomUUID();
     this.transaction(() => {
-      this.database.prepare("INSERT INTO send_history(id,intent_key,campaign_id,lead_id,email,operation,attempted_at,status,payload_json) VALUES(?,?,?,?,?,?,?,'intent',?) ON CONFLICT(intent_key) DO UPDATE SET attempted_at=excluded.attempted_at,status='intent',error=NULL,payload_json=excluded.payload_json").run(id, intentKey, input.campaignId ?? null, input.leadId ?? null, input.recipient.trim().toLowerCase(), input.operation, now, json({ queueItemId: input.queueItemId ?? null }));
+      if (intent.leaseKey) {
+        this.database.prepare(
+          "UPDATE send_leases SET status='unknown',heartbeat_at=? WHERE lease_key=? AND status='claimed'"
+        ).run(now, intent.leaseKey);
+      }
+      this.database.prepare(
+        "UPDATE send_history SET status='intent',error=? WHERE id=?"
+      ).run(message ?? "UNKNOWN_RECONCILIATION_REQUIRED", intent.id);
       this.setMetadata("lastWriteAt", now);
     });
-    return { id, intentKey };
+  }
+
+  reconcileExpiredSendLease(leaseKey: string): SendLeaseDecision {
+    this.assertWritable();
+    const nowIso = this.now().toISOString();
+    return this.transaction(() => {
+      const lease = this.database.prepare(
+        "SELECT lease_key,operation,email,contact_kind,owner_id,expires_at,status,intent_id,provider_message_id FROM send_leases WHERE lease_key=?"
+      ).get(leaseKey) as Record<string, unknown> | undefined;
+      if (!lease) return "claimed";
+      const operation = String(lease.operation);
+      const email = String(lease.email);
+      const confirmed = this.database.prepare(
+        "SELECT id,provider_message_id FROM send_history WHERE operation=? AND lower(trim(email))=? AND status='confirmed' AND provider_message_id IS NOT NULL AND trim(provider_message_id)<>'' ORDER BY confirmed_at DESC LIMIT 1"
+      ).get(operation, email) as Record<string, unknown> | undefined;
+      if (
+        typeof confirmed?.provider_message_id === "string" &&
+        isRealDeliveryMessageId(confirmed.provider_message_id)
+      ) {
+        this.database.prepare(
+          "UPDATE send_leases SET status='confirmed',provider_message_id=?,heartbeat_at=? WHERE lease_key=?"
+        ).run(confirmed.provider_message_id, nowIso, leaseKey);
+        return "already_sent";
+      }
+      const status = String(lease.status ?? "");
+      const expired =
+        typeof lease.expires_at === "string" && lease.expires_at <= nowIso;
+      if (status === "claimed" && !expired) return "already_claimed";
+      if (status === "unknown" || (status === "claimed" && expired)) {
+        this.database.prepare(
+          "UPDATE send_leases SET status='failed',heartbeat_at=? WHERE lease_key=?"
+        ).run(nowIso, leaseKey);
+        if (typeof lease.intent_id === "string" && lease.intent_id) {
+          this.database.prepare(
+            "UPDATE send_history SET status='failed',error=? WHERE id=? AND status='intent'"
+          ).run("Lease expirado reconciliado sem confirmação SMTP.", lease.intent_id);
+        }
+        this.setMetadata("lastWriteAt", nowIso);
+        return "claimed";
+      }
+      return "claimed";
+    });
+  }
+
+  claimRunnerLease(
+    operation: string,
+    ownerId: string,
+    ttlMs = RUNNER_LEASE_TTL_MS
+  ): { decision: "claimed" | "already_active"; ownerId: string } {
+    this.assertWritable();
+    const now = this.now();
+    const nowIso = now.toISOString();
+    const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
+    return this.transaction(() => {
+      const existing = this.database.prepare(
+        "SELECT owner_id,expires_at FROM runner_leases WHERE operation_id=?"
+      ).get(operation) as Record<string, unknown> | undefined;
+      const decision = decideRunnerLeaseClaim({
+        existingOwnerId:
+          typeof existing?.owner_id === "string" ? existing.owner_id : null,
+        expiresAt:
+          typeof existing?.expires_at === "string" ? existing.expires_at : null,
+        requesterOwnerId: ownerId,
+        nowIso,
+      });
+      if (decision === "already_active") {
+        return { decision, ownerId: String(existing?.owner_id ?? ownerId) };
+      }
+      this.database.prepare(
+        "INSERT INTO runner_leases(operation_id,owner_id,claimed_at,heartbeat_at,expires_at) VALUES(?,?,?,?,?) ON CONFLICT(operation_id) DO UPDATE SET owner_id=excluded.owner_id,heartbeat_at=excluded.heartbeat_at,expires_at=excluded.expires_at,claimed_at=CASE WHEN runner_leases.owner_id=excluded.owner_id THEN runner_leases.claimed_at ELSE excluded.claimed_at END"
+      ).run(operation, ownerId, nowIso, nowIso, expiresAt);
+      this.setMetadata("lastWriteAt", nowIso);
+      return { decision: "claimed" as const, ownerId };
+    });
+  }
+
+  heartbeatRunnerLease(
+    operation: string,
+    ownerId: string,
+    ttlMs = RUNNER_LEASE_TTL_MS
+  ): { ok: boolean; decision: "claimed" | "already_active" } {
+    const claimed = this.claimRunnerLease(operation, ownerId, ttlMs);
+    return {
+      ok: claimed.decision === "claimed",
+      decision: claimed.decision,
+    };
+  }
+
+  releaseRunnerLease(operation: string, ownerId: string): void {
+    this.assertWritable();
+    this.transaction(() => {
+      this.database.prepare(
+        "DELETE FROM runner_leases WHERE operation_id=? AND owner_id=?"
+      ).run(operation, ownerId);
+    });
   }
 
   listSendHistory(filters: {
@@ -910,6 +1161,11 @@ export class LocalDatabaseAdapter {
           messageId,
           now
         );
+        if (intent.leaseKey) {
+          this.database.prepare(
+            "UPDATE send_leases SET status='confirmed',provider_message_id=?,heartbeat_at=? WHERE lease_key=?"
+          ).run(messageId, now, intent.leaseKey);
+        }
       } else {
         const current = this.database.prepare("SELECT payload_json FROM send_history WHERE id=?").get(intent.id) as { payload_json?: unknown } | undefined;
         const payload = parseJson<JsonRecord>(current?.payload_json, {});
@@ -922,7 +1178,10 @@ export class LocalDatabaseAdapter {
               classification: result.smtp.classification ?? result.status,
             }
           : { classification: result.status };
-        const keepUnknown = result.status === "reconciliation_required";
+        const keepUnknown =
+          result.status === "reconciliation_required" ||
+          result.status === "already_claimed" ||
+          result.status === "runner_already_active";
         this.database.prepare(
           "UPDATE send_history SET status=?,error=?,payload_json=? WHERE id=?"
         ).run(
@@ -931,6 +1190,11 @@ export class LocalDatabaseAdapter {
           json({ ...payload, smtp }),
           intent.id
         );
+        if (intent.leaseKey) {
+          this.database.prepare(
+            "UPDATE send_leases SET status=?,heartbeat_at=? WHERE lease_key=?"
+          ).run(keepUnknown ? "unknown" : "failed", now, intent.leaseKey);
+        }
       }
       this.setMetadata("lastWriteAt", now);
     });
