@@ -265,6 +265,7 @@ export class LocalDatabaseAdapter {
   readonly backupDirectory: string;
   private database: DatabaseSync;
   private readonly now: () => Date;
+  private inTransaction = false;
 
   constructor(options: LocalDatabaseOptions = {}) {
     if (process.env.VERCEL === "1" && !options.allowVercel) {
@@ -314,6 +315,10 @@ export class LocalDatabaseAdapter {
       "CREATE TABLE IF NOT EXISTS send_leases (lease_key TEXT PRIMARY KEY, operation TEXT NOT NULL, email TEXT NOT NULL, contact_kind TEXT NOT NULL DEFAULT 'first_contact', owner_id TEXT NOT NULL, claimed_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL, expires_at TEXT NOT NULL, status TEXT NOT NULL, intent_id TEXT, campaign_id TEXT, lead_id TEXT, queue_item_id TEXT, provider_message_id TEXT, CHECK(status IN ('claimed','confirmed','failed','unknown')))",
       "CREATE UNIQUE INDEX IF NOT EXISTS send_leases_op_email_kind ON send_leases(operation, email, contact_kind)",
       "CREATE TABLE IF NOT EXISTS runner_leases (operation_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, claimed_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL, expires_at TEXT NOT NULL)",
+      "CREATE TABLE IF NOT EXISTS smtp_cooldowns (sender_key TEXT PRIMARY KEY, operation TEXT NOT NULL, failure_count INTEGER NOT NULL, until_at TEXT, paused INTEGER NOT NULL DEFAULT 0, classification TEXT NOT NULL)",
+      "CREATE TABLE IF NOT EXISTS worker_status (worker_id TEXT PRIMARY KEY, heartbeat_at TEXT NOT NULL, state TEXT NOT NULL, last_error TEXT)",
+      "CREATE TABLE IF NOT EXISTS agent_three_archive (operation TEXT NOT NULL, item_id TEXT NOT NULL, payload_json TEXT NOT NULL, archived_at TEXT NOT NULL, PRIMARY KEY(operation,item_id))",
+      "CREATE TABLE IF NOT EXISTS worker_controls (operation TEXT PRIMARY KEY, desired_state TEXT NOT NULL)",
     ].join(";") + ";");
     this.setMetadata("schemaVersion", "1", false);
     if (!this.getMetadata("migrationVersion")) {
@@ -326,6 +331,7 @@ export class LocalDatabaseAdapter {
 
   private transaction<T>(work: () => T): T {
     this.database.exec("BEGIN IMMEDIATE");
+    this.inTransaction = true;
     try {
       const result = work();
       this.database.exec("COMMIT");
@@ -337,7 +343,132 @@ export class LocalDatabaseAdapter {
         // Preserve original failure.
       }
       throw error;
+    } finally {
+      this.inTransaction = false;
     }
+  }
+
+  readCommercialStore(key: CommercialStoreKey): JsonRecord {
+    return this.readStore(key);
+  }
+
+  /** Exact queue update guarded by the same lease used by the browser. */
+  updateRunnerStore(key: CommercialStoreKey, operation: string, ownerId: string,
+    update: (state: JsonRecord) => JsonRecord): boolean {
+    return this.transaction(() => {
+      const lease = this.database.prepare("SELECT owner_id,expires_at FROM runner_leases WHERE operation_id=?").get(operation);
+      if (lease?.owner_id !== ownerId || String(lease.expires_at) <= this.now().toISOString()) return false;
+      const state = sanitizeSecrets(update(this.readStore(key))) as JsonRecord;
+      this.database.prepare("INSERT INTO commercial_state(store_key,data_json,updated_at) VALUES(?,?,?) ON CONFLICT(store_key) DO UPDATE SET data_json=excluded.data_json,updated_at=excluded.updated_at")
+        .run(key, json(state), this.now().toISOString());
+      this.indexStore(key, state, this.now().toISOString());
+      this.setMetadata("lastWriteAt", this.now().toISOString());
+      return true;
+    });
+  }
+
+  workerHeartbeat(workerId: string, state: string, lastError: string | null = null): void {
+    this.database.prepare("INSERT INTO worker_status VALUES(?,?,?,?) ON CONFLICT(worker_id) DO UPDATE SET heartbeat_at=excluded.heartbeat_at,state=excluded.state,last_error=COALESCE(excluded.last_error,worker_status.last_error)")
+      .run(workerId, this.now().toISOString(), state, lastError);
+  }
+  workerControl(operation: string): string | null {
+    const row = this.database.prepare("SELECT desired_state FROM worker_controls WHERE operation=?").get(operation);
+    return typeof row?.desired_state === "string" ? row.desired_state : null;
+  }
+  setWorkerControl(operation: string, desiredState: "running" | "paused"): void {
+    this.database.prepare("INSERT INTO worker_controls VALUES(?,?) ON CONFLICT(operation) DO UPDATE SET desired_state=excluded.desired_state").run(operation, desiredState);
+  }
+  clearWorkerControl(operation: string): void {
+    this.database.prepare("DELETE FROM worker_controls WHERE operation=? AND desired_state='running'").run(operation);
+  }
+
+  getSmtpCooldown(senderKey: string) {
+    return this.database.prepare("SELECT failure_count,until_at,paused,classification FROM smtp_cooldowns WHERE sender_key=?").get(senderKey) ?? null;
+  }
+  operationCooldowns(operation: string) {
+    return this.database.prepare("SELECT until_at,paused,classification FROM smtp_cooldowns WHERE operation=?").all(operation);
+  }
+
+  recordSmtpCooldown(senderKey: string, operation: string, failureCount: number,
+    untilAt: string | null, paused: boolean, classification: string): void {
+    this.database.prepare("INSERT INTO smtp_cooldowns VALUES(?,?,?,?,?,?) ON CONFLICT(sender_key) DO UPDATE SET failure_count=excluded.failure_count,until_at=excluded.until_at,paused=excluded.paused,classification=excluded.classification")
+      .run(senderKey, operation, failureCount, untilAt, paused ? 1 : 0, classification);
+  }
+
+  operationalHealth() {
+    const size = (path: string) => existsSync(path) ? statSync(path).size : 0;
+    const now = this.now().toISOString();
+    const runners = this.database.prepare("SELECT operation_id,heartbeat_at,expires_at FROM runner_leases WHERE expires_at>?").all(now);
+    const workers = this.database.prepare("SELECT heartbeat_at,state,last_error FROM worker_status ORDER BY heartbeat_at DESC").all();
+    const snapshot = this.readStore("pnp-agent-three");
+    const operations = isRecord(snapshot.operations) ? snapshot.operations : {};
+    const queues = Object.entries(operations).map(([operation, value]) => {
+      const state = isRecord(value) ? value : {};
+      const queue = asArray<JsonRecord>(state.queue);
+      return { operation, campaign: state.currentCampaignId ?? null,
+        counts: Object.fromEntries(["ready", "sent", "failed", "unknown", "blocked", "sending"].map(status => [status, queue.filter(item => item.queueStatus === status || (status === "failed" && item.queueStatus === "failed_auth")).length])) };
+    });
+    return { sqliteOk: this.database.prepare("PRAGMA quick_check(1)").get()?.quick_check === "ok",
+      dbBytes: size(this.databasePath), walBytes: size(this.databasePath + "-wal"), shmBytes: size(this.databasePath + "-shm"),
+      lastBackup: this.getMetadata("lastBackupAt"), activeRunners: runners, workers,
+      workerOnline: workers.some(row => ["online", "monitor"].includes(String(row.state)) && Date.parse(String(row.heartbeat_at)) > this.now().getTime() - 45_000),
+      workerMode: workers[0]?.state === "monitor" ? "monitor" : "execute",
+      queues, smtpCooldowns: this.database.prepare("SELECT operation,until_at,paused,classification FROM smtp_cooldowns").all(),
+      commercialState: this.database.prepare("SELECT store_key,length(CAST(data_json AS BLOB)) AS bytes FROM commercial_state").all() };
+  }
+
+  /** PASSIVE does not wait for readers/writers. Busy maintenance is skipped. */
+  maintainPassive() {
+    if (this.inTransaction) return { skipped: true };
+    try {
+      this.database.exec("PRAGMA busy_timeout=0");
+      return { skipped: false, checkpoint: this.database.prepare("PRAGMA wal_checkpoint(PASSIVE)").get() };
+    } catch { return { skipped: true }; }
+    finally { this.database.exec("PRAGMA busy_timeout=5000"); }
+  }
+  compactAgentThreeSnapshots(olderThanDays = 90): { archived: number; skipped: boolean } {
+    if (this.inTransaction) return { archived: 0, skipped: true };
+    this.database.exec("PRAGMA busy_timeout=0");
+    try {
+      return this.transaction(() => {
+        const now = this.now().toISOString();
+        if (this.database.prepare("SELECT 1 FROM runner_leases WHERE operation_id<>'worker' AND expires_at>? LIMIT 1").get(now)) return { archived: 0, skipped: true };
+        const state = this.readStore("pnp-agent-three");
+        const operations = isRecord(state.operations) ? state.operations : {};
+        if (Object.values(operations).some(value => isRecord(value) && value.status === "running")) return { archived: 0, skipped: true };
+        let archived = 0;
+        let changed = false;
+        const cutoff = new Date(this.now().getTime() - Math.max(1, olderThanDays) * 86_400_000).toISOString();
+        for (const [operation, value] of Object.entries(operations)) {
+          if (!isRecord(value)) continue;
+          value.queue = asArray<JsonRecord>(value.queue).filter(item => {
+            if (item.campaignId === value.currentCampaignId || typeof item.updatedAt !== "string" || item.updatedAt >= cutoff) return true;
+            const confirmed = item.queueStatus === "sent" && this.database.prepare("SELECT 1 FROM send_history WHERE operation=? AND lower(trim(email))=? AND status='confirmed' AND provider_message_id=?").get(operation, String(item.normalizedEmail ?? ""), String(item.providerMessageId ?? ""));
+            if (!confirmed || typeof item.id !== "string") return true;
+            this.database.prepare("INSERT INTO agent_three_archive VALUES(?,?,?,?) ON CONFLICT(operation,item_id) DO UPDATE SET payload_json=excluded.payload_json")
+              .run(operation, item.id, json(item), now);
+            archived++;
+            changed = true;
+            return false;
+          });
+          const archivedIds = new Set(this.database.prepare("SELECT item_id FROM agent_three_archive WHERE operation=?").all(operation).map(row => String(row.item_id)));
+          value.sentIndex = asArray<JsonRecord>(value.sentIndex).filter(item => {
+            if (!archivedIds.has(String(item.queueItemId))) return true;
+            changed = true; return false;
+          });
+          // Identical history entries are redundant. Distinct events are retained.
+          const seen = new Set<string>();
+          value.history = asArray<JsonRecord>(value.history).filter(item => {
+            const fingerprint = json(item);
+            if (seen.has(fingerprint)) { changed = true; return false; }
+            seen.add(fingerprint); return true;
+          });
+        }
+        if (changed) this.database.prepare("UPDATE commercial_state SET data_json=?,updated_at=? WHERE store_key='pnp-agent-three'").run(json(state), now);
+        return { archived, skipped: false };
+      });
+    } catch { return { archived: 0, skipped: true }; }
+    finally { this.database.exec("PRAGMA busy_timeout=5000"); }
   }
 
   private getMetadata(key: string): string | null {
@@ -389,6 +520,19 @@ export class LocalDatabaseAdapter {
     const state = (mode === "merge"
       ? safeMerge(existing, incoming)
       : recoveryMerge(existing, incoming)) as JsonRecord;
+    if (key === "pnp-agent-three" && isRecord(state.operations)) {
+      for (const [operation, value] of Object.entries(state.operations)) {
+        if (!isRecord(value)) continue;
+        const archives = new Map(this.database.prepare("SELECT item_id,payload_json FROM agent_three_archive WHERE operation=?").all(operation)
+          .map(row => [String(row.item_id), parseJson<JsonRecord>(row.payload_json, {})]));
+        value.queue = asArray<JsonRecord>(value.queue).filter(item => {
+          const archived = archives.get(String(item.id));
+          return !archived || item.queueStatus !== "sent" || item.providerMessageId !== archived.providerMessageId
+            || String(item.updatedAt) > String(archived.updatedAt);
+        });
+        value.sentIndex = asArray<JsonRecord>(value.sentIndex).filter(item => !archives.has(String(item.queueItemId)));
+      }
+    }
     const now = this.now().toISOString();
     this.database.prepare("INSERT INTO commercial_state(store_key,data_json,updated_at) VALUES(?,?,?) ON CONFLICT(store_key) DO UPDATE SET data_json=excluded.data_json, updated_at=excluded.updated_at").run(key, json(state), now);
     this.indexStore(key, state, now);
@@ -1001,15 +1145,15 @@ export class LocalDatabaseAdapter {
       if (status === "claimed" && !expired) return "already_claimed";
       if (status === "unknown" || (status === "claimed" && expired)) {
         this.database.prepare(
-          "UPDATE send_leases SET status='failed',heartbeat_at=? WHERE lease_key=?"
+          "UPDATE send_leases SET status='unknown',heartbeat_at=? WHERE lease_key=?"
         ).run(nowIso, leaseKey);
         if (typeof lease.intent_id === "string" && lease.intent_id) {
           this.database.prepare(
-            "UPDATE send_history SET status='failed',error=? WHERE id=? AND status='intent'"
-          ).run("Lease expirado reconciliado sem confirmação SMTP.", lease.intent_id);
+            "UPDATE send_history SET error=? WHERE id=? AND status='intent'"
+          ).run("UNKNOWN_RECONCILIATION_REQUIRED", lease.intent_id);
         }
         this.setMetadata("lastWriteAt", nowIso);
-        return "claimed";
+        return "reconciliation_required";
       }
       return "claimed";
     });
@@ -1102,6 +1246,8 @@ export class LocalDatabaseAdapter {
             typeof row.attempted_at === "string" ? row.attempted_at : null,
           status: String(row.status ?? ""),
           error: typeof row.error === "string" ? row.error : null,
+          ...(isRecord(payload.smtp) && typeof payload.smtp.classification === "string"
+            ? { smtpClassification: payload.smtp.classification } : {}),
         };
         if (filters.operation && record.operation !== filters.operation) {
           return null;
@@ -1251,7 +1397,7 @@ export class LocalDatabaseAdapter {
       .filter(Boolean);
   }
 
-  async createBackup(): Promise<string> {
+  async createBackup(preserveExisting = false): Promise<string> {
     this.assertWritable();
     mkdirSync(this.backupDirectory, { recursive: true });
     const actualNow = this.now();
@@ -1276,15 +1422,15 @@ export class LocalDatabaseAdapter {
     this.validateDatabaseFile(destination);
     this.setMetadata("lastBackupAt", actualNow.toISOString(), false);
     this.setMetadata("lastBackupCounter", this.getMetadata("changeCounter") ?? "0", false);
-    this.applyRetention();
+    if (!preserveExisting) this.applyRetention();
     return destination;
   }
 
-  async ensureDailyBackup(): Promise<string | null> {
+  async ensureDailyBackup(preserveExisting = false): Promise<string | null> {
     const last = this.getMetadata("lastBackupAt");
     const changed = this.getMetadata("lastBackupCounter") !== this.getMetadata("changeCounter");
     const today = this.now().toISOString().slice(0, 10);
-    if (!last || last.slice(0, 10) !== today || changed) return this.createBackup();
+    if (!last || last.slice(0, 10) !== today || (!preserveExisting && changed)) return this.createBackup(preserveExisting);
     return null;
   }
 

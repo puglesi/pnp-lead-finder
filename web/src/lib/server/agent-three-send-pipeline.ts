@@ -1,4 +1,6 @@
 import { isRealDeliveryMessageId } from "../campaign-delivery-metrics.ts";
+import { createHash } from "node:crypto";
+import { smtpBackoff } from "../smtp-backoff.ts";
 import {
   AGENT_THREE_SMTP_MESSAGES,
   type AgentThreeSendRequest,
@@ -16,6 +18,9 @@ export interface AgentThreeLeaseDatabase {
   finishSendIntent(intent: SendIntent, result: AgentThreeSmtpResult): void;
   markSendLeaseUnknown(intent: SendIntent, message?: string): void;
   isSuppressed(operation: string, email: string): boolean;
+  getSmtpCooldown?(senderKey: string): Record<string, unknown> | null;
+  recordSmtpCooldown?(senderKey: string, operation: string, failureCount: number,
+    untilAt: string | null, paused: boolean, classification: string): void;
 }
 
 function result(
@@ -47,6 +52,10 @@ export async function executeAgentThreeSendWithLease(
   if (typeof input.ownerId !== "string" || !input.ownerId.trim()) {
     return result("invalid_request", "ownerId obrigatório para envio.");
   }
+  const prefix = input.operation === "modeclean" ? "MODECLEAN" : "PNP";
+  const sender = String(dependencies.environment[`${prefix}_SMTP_USER`] ?? "");
+  const senderKey = createHash("sha256").update(input.operation + "|" + sender.trim().toLowerCase()).digest("hex");
+  const cooldown = dependencies.database.getSmtpCooldown?.(senderKey);
 
   let intent: SendIntent;
   try {
@@ -72,6 +81,12 @@ export async function executeAgentThreeSendWithLease(
   if (intent.decision === "reconciliation_required") {
     return result("reconciliation_required");
   }
+  if (cooldown?.paused || (cooldown?.until_at && String(cooldown.until_at) > new Date().toISOString())) {
+    const blocked = result(cooldown.paused ? "authentication_error" : "provider_rate_limit",
+      cooldown.paused ? "SMTP pausado para revisão manual." : "SMTP em cooldown; aguarde o backoff.");
+    dependencies.database.finishSendIntent(intent, blocked);
+    return blocked;
+  }
 
   let smtpResult: AgentThreeSmtpResult;
   try {
@@ -94,6 +109,12 @@ export async function executeAgentThreeSendWithLease(
   }
 
   try {
+    if (smtpResult.status === "connection_error") {
+      smtpResult = { ...smtpResult, status: "reconciliation_required", message: AGENT_THREE_SMTP_MESSAGES.reconciliation_required };
+    }
+    const policy = smtpBackoff(smtpResult, Number(cooldown?.failure_count ?? 0), Date.now(),
+      Number(dependencies.environment.SMTP_BACKOFF_MAX_MS ?? 300_000));
+    dependencies.database.recordSmtpCooldown?.(senderKey, input.operation, policy.failures, policy.untilAt, policy.paused, policy.classification);
     dependencies.database.finishSendIntent(intent, smtpResult);
   } catch (error) {
     try {

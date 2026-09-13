@@ -389,7 +389,8 @@ export function getAgentOneFoundLeadTotal(
 }
 
 export function normalizeAgentOneSnapshot(
-  persisted: unknown
+  persisted: unknown,
+  preserveRunning = false
 ): AgentOneSnapshot {
   if (!isRecord(persisted)) return INITIAL_AGENT_ONE_SNAPSHOT;
 
@@ -399,7 +400,7 @@ export function normalizeAgentOneSnapshot(
   const persistedStatus = isAgentOneStatus(persisted.status)
     ? persisted.status
     : "idle";
-  const interrupted = persistedStatus === "running";
+  const interrupted = !preserveRunning && persistedStatus === "running";
   const normalizedQueue = queue.map((item) => {
     const normalizedItem: AgentOneSectorItem = {
       ...item,

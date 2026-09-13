@@ -9,6 +9,7 @@ import {
 } from "@/lib/agent-one-leads";
 import { useAgentOneStore } from "@/store/agent-one-store";
 import { useLeadStore } from "@/store/lead-store";
+import { claimAgentThreeRunnerLease, heartbeatAgentThreeRunnerLease, releaseAgentThreeRunnerLease } from "@/lib/agent-three-api";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Erro inesperado na busca";
@@ -20,9 +21,21 @@ export function useAgentOneRunner() {
   const runQueue = useCallback(async () => {
     if (executionActiveRef.current) return;
     executionActiveRef.current = true;
+    const ownerId = "browser-agent1-" + crypto.randomUUID();
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
 
     try {
+      if (!(await claimAgentThreeRunnerLease("agent-1", ownerId)).ok) {
+        toast.error("Outro runner já processa o Agente 1.");
+        return;
+      }
+      heartbeat = setInterval(() => {
+        void heartbeatAgentThreeRunnerLease("agent-1", ownerId).then(ok => {
+          if (!ok) useAgentOneStore.getState().pause();
+        });
+      }, 10_000);
       while (useAgentOneStore.getState().status === "running") {
+        if (!(await heartbeatAgentThreeRunnerLease("agent-1", ownerId))) break;
         const sector = useAgentOneStore.getState().claimNextSector();
 
         if (!sector) {
@@ -103,6 +116,8 @@ export function useAgentOneRunner() {
       useAgentOneStore.getState().fail(message);
       toast.error("Agente 1: " + message);
     } finally {
+      if (heartbeat) clearInterval(heartbeat);
+      await releaseAgentThreeRunnerLease("agent-1", ownerId);
       executionActiveRef.current = false;
     }
   }, []);

@@ -25,6 +25,7 @@ web/.vercel/
 # Banco comercial local e backups (nunca versionar dados reais)
 /data/
 /backups/
+/worker-runtime/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm

@@ -178,9 +178,9 @@ test("E: lease stale exige reconciliação antes de novo claim", () => {
     assert.equal(stale.decision, "reconciliation_required");
     const key = buildSendLeaseKey("panek-puglesi", "clinic@example.test");
     const recon = fx.b.reconcileExpiredSendLease(key);
-    assert.equal(recon, "claimed");
+    assert.equal(recon, "reconciliation_required");
     const after = fx.b.claimSendLease(request({ ownerId: "proc-2" }));
-    assert.equal(after.decision, "claimed");
+    assert.equal(after.decision, "reconciliation_required");
   } finally {
     fx.close();
   }

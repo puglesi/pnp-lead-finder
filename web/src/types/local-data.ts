@@ -59,6 +59,7 @@ export interface OfficialSendHistoryRecord {
   attemptedAt: string | null;
   status: string;
   error: string | null;
+  smtpClassification?: string;
 }
 
 /** Read-only recovery view. It never fabricates a campaign body or recipients. */

@@ -10,6 +10,7 @@ import {
 } from "@/lib/agent-two-queue";
 import { useAgentTwoStore } from "@/store/agent-two-store";
 import { useLeadStore } from "@/store/lead-store";
+import { claimAgentThreeRunnerLease, heartbeatAgentThreeRunnerLease, releaseAgentThreeRunnerLease } from "@/lib/agent-three-api";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error
@@ -31,9 +32,21 @@ export function useAgentTwoRunner() {
 
   const runQueue = useCallback(async () => {
     if (!executionGuardRef.current.begin()) return;
+    const ownerId = "browser-agent2-" + crypto.randomUUID();
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
 
     try {
+      if (!(await claimAgentThreeRunnerLease("agent-2", ownerId)).ok) {
+        toast.error("Outro runner já processa o Agente 2.");
+        return;
+      }
+      heartbeat = setInterval(() => {
+        void heartbeatAgentThreeRunnerLease("agent-2", ownerId).then(ok => {
+          if (!ok) useAgentTwoStore.getState().pause();
+        });
+      }, 10_000);
       while (useAgentTwoStore.getState().status === "running") {
+        if (!(await heartbeatAgentThreeRunnerLease("agent-2", ownerId))) break;
         const item = useAgentTwoStore.getState().claimNextItem();
         if (!item) {
           useAgentTwoStore.getState().finish();
@@ -74,6 +87,8 @@ export function useAgentTwoRunner() {
       useAgentTwoStore.getState().fail(message);
       toast.error("Agente 2: " + message);
     } finally {
+      if (heartbeat) clearInterval(heartbeat);
+      await releaseAgentThreeRunnerLease("agent-2", ownerId);
       executionGuardRef.current.end();
     }
   }, []);

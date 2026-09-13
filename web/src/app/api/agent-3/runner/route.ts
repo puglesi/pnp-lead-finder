@@ -27,7 +27,7 @@ export async function POST(request: Request) {
   const operation = body.operation;
   const ownerId = typeof body.ownerId === "string" ? body.ownerId.trim() : "";
   const action = body.action;
-  if (!isCampaignProfileId(operation) || !ownerId) {
+  if ((!isCampaignProfileId(operation) && operation !== "agent-1" && operation !== "agent-2") || !ownerId) {
     return Response.json(
       { ok: false, status: "invalid_request", message: "operation e ownerId obrigatórios." },
       noStore(400)

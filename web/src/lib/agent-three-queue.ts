@@ -1241,6 +1241,7 @@ export function releaseAgentThreeSendingItem(
   options: {
     pause: boolean;
     consumeAttempt: boolean;
+    consumeCapacity?: boolean;
     message: string;
   }
 ): AgentThreeSnapshot {
@@ -1266,7 +1267,7 @@ export function releaseAgentThreeSendingItem(
       status: options.pause ? "paused" : operation.status,
       currentItemId:
         operation.currentItemId === itemId ? null : operation.currentItemId,
-      processedCount: options.consumeAttempt
+      processedCount: (options.consumeCapacity ?? options.consumeAttempt)
         ? operation.processedCount
         : Math.max(0, operation.processedCount - 1),
       queue: operation.queue.map((candidate) =>
@@ -1948,7 +1949,8 @@ function normalizeSentRecord(
 
 function normalizeOperation(
   value: unknown,
-  profileId: CampaignProfileId
+  profileId: CampaignProfileId,
+  preserveRunning = false
 ): AgentThreeOperationState {
   const initial = createInitialOperation(profileId);
   if (!isRecord(value)) return initial;
@@ -1960,11 +1962,11 @@ function normalizeOperation(
         .map((item) => normalizeQueueItem(item, profileId))
         .filter((item): item is AgentThreeQueueItem => item !== null)
     : [];
-  const interrupted =
+  const interrupted = !preserveRunning && (
     value.status === "running" ||
-    queue.some((item) => item.queueStatus === "sending");
+    queue.some((item) => item.queueStatus === "sending"));
   const normalizedQueue = queue.map((item) =>
-    item.queueStatus === "sending"
+    !preserveRunning && item.queueStatus === "sending"
       ? {
           ...item,
           queueStatus: "unknown" as const,
@@ -2084,7 +2086,8 @@ function normalizeOperation(
 }
 
 export function normalizeAgentThreeSnapshot(
-  persisted: unknown
+  persisted: unknown,
+  preserveRunning = false
 ): AgentThreeSnapshot {
   if (!isRecord(persisted)) return createInitialAgentThreeSnapshot();
   const operations = isRecord(persisted.operations)
@@ -2104,9 +2107,10 @@ export function normalizeAgentThreeSnapshot(
     operations: {
       "panek-puglesi": normalizeOperation(
         operations["panek-puglesi"],
-        "panek-puglesi"
+        "panek-puglesi",
+        preserveRunning
       ),
-      modeclean: normalizeOperation(operations.modeclean, "modeclean"),
+      modeclean: normalizeOperation(operations.modeclean, "modeclean", preserveRunning),
     },
   };
 }

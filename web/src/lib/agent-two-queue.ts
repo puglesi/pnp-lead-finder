@@ -708,7 +708,7 @@ export function retryAgentTwoDnsErrors(snapshot: AgentTwoSnapshot): {
   };
 }
 
-export function normalizeAgentTwoSnapshot(persisted: unknown): AgentTwoSnapshot {
+export function normalizeAgentTwoSnapshot(persisted: unknown, preserveRunning = false): AgentTwoSnapshot {
   if (!isRecord(persisted)) return INITIAL_AGENT_TWO_SNAPSHOT;
   const queue = Array.isArray(persisted.queue)
     ? persisted.queue.filter(isQueueItem)
@@ -730,9 +730,9 @@ export function normalizeAgentTwoSnapshot(persisted: unknown): AgentTwoSnapshot 
         ? persisted.errorMessage
         : null,
   });
-  const interrupted =
+  const interrupted = !preserveRunning && (
     migrated.status === "running" ||
-    migrated.queue.some((item) => item.status === "validating");
+    migrated.queue.some((item) => item.status === "validating"));
   const normalizedQueue = migrated.queue.map((item) =>
     interrupted && item.status === "validating"
       ? { ...item, status: "pending" as const, reason: "pending" }
@@ -745,7 +745,7 @@ export function normalizeAgentTwoSnapshot(persisted: unknown): AgentTwoSnapshot 
       ? migrated.currentItemId
       : null;
   return {
-    status: migrated.status === "running" ? "paused" : migrated.status,
+    status: !preserveRunning && migrated.status === "running" ? "paused" : migrated.status,
     queue: normalizedQueue,
     currentItemId,
     errorMessage: migrated.errorMessage,

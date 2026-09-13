@@ -27,6 +27,7 @@ export interface AgentThreePersistedSendRecord {
   attemptedAt?: string | null;
   status: "confirmed" | "failed" | "intent" | string;
   error?: string | null;
+  smtpClassification?: string;
 }
 
 export interface AgentThreeReconciliationResult {
@@ -52,6 +53,9 @@ function isAuthenticationFailureRecord(
   if (!record || record.status !== "failed" || record.providerMessageId) {
     return false;
   }
+  if (record.smtpClassification) return record.smtpClassification === "authentication_error";
+  const message = record.error ?? "";
+  if (/\b454\b|\b4xx\b|\b4\.7\.\d|temporar/i.test(message) && !/\b53[45]\b|\b5\.7\.\d/.test(message)) return false;
   return /authentication|autentic|eauth|app password|senha de app|\b53[45]\b/i.test(
     record.error ?? ""
   );

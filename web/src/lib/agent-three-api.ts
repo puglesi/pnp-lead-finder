@@ -90,7 +90,7 @@ export async function checkAgentThreeSmtpAvailability(
 }
 
 export async function claimAgentThreeRunnerLease(
-  operation: CampaignProfileId,
+  operation: CampaignProfileId | "agent-1" | "agent-2",
   ownerId: string
 ): Promise<AgentThreeSmtpResult & { ok: boolean }> {
   try {
@@ -115,7 +115,7 @@ export async function claimAgentThreeRunnerLease(
 }
 
 export async function heartbeatAgentThreeRunnerLease(
-  operation: CampaignProfileId,
+  operation: CampaignProfileId | "agent-1" | "agent-2",
   ownerId: string
 ): Promise<boolean> {
   try {
@@ -132,7 +132,7 @@ export async function heartbeatAgentThreeRunnerLease(
 }
 
 export async function releaseAgentThreeRunnerLease(
-  operation: CampaignProfileId,
+  operation: CampaignProfileId | "agent-1" | "agent-2",
   ownerId: string
 ): Promise<void> {
   try {
