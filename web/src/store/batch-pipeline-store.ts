@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { createQuotaSafeStateStorage } from "@/lib/quota-safe-storage";
 import type { LeadBatch, PipelineStage } from "@/types/batch";
 import { advancePipelineStage, createLeadBatch } from "@/lib/lead-batch";
 import { createDurableSearchBatchRepository } from "@/lib/search/batch-repository";
@@ -180,6 +181,9 @@ export const useBatchPipelineStore = create<BatchPipelineStore>()(
     }),
     {
       name: "pnp-batch-pipeline",
+      storage: createJSONStorage(() =>
+        createQuotaSafeStateStorage(window.localStorage)
+      ),
       skipHydration: true,
       version: 1,
       // Batches are durable; activeBatchId is session UI (cleared on new session).

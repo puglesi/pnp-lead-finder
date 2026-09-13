@@ -14,7 +14,7 @@ restaurada ou descartada.
 | pnp-lifetime-stats | A/B derivado, browser cache | Totais derivados; snapshot SQLite sem substituir entidades |
 | pnp-agent-one | B/E operacional, browser cache | Fila/checkpoint de enriquecimento; SQLite oficial |
 | pnp-agent-two | B/E operacional, browser cache | Fila/checkpoint de validação; SQLite oficial |
-| pnp-agent-three | B/E operacional, browser cache | Filas, envios e IDs do provedor; SQLite oficial |
+| pnp-agent-three | A no browser; B/E operacional no SQLite | localStorage guarda somente operação/lista selecionada, intervalos e limite. Filas, destinatários, envios, histórico e IDs do provedor ficam somente no SQLite oficial |
 | pnp-batch-pipeline | B, browser cache | Batches e estágios; SQLite oficial |
 | pnp-settings | A/B/C misto | Apenas preferências não secretas no SQLite; API/SMTP secrets são excluídos |
 | pnp-usage | A/B derivado, browser cache | Quota/uso de UI; snapshot não secreto no SQLite |

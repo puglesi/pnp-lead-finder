@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { createQuotaSafeStateStorage } from "@/lib/quota-safe-storage";
 import { SERPAPI_FREE_MONTHLY_LIMIT } from "@/lib/search/volume";
 import type { SearchSummary } from "@/types/search";
 
@@ -70,6 +71,11 @@ export const useUsageStore = create<UsageStore>()(
           creditExhausted: false,
         }),
     }),
-    { name: "pnp-usage" }
+    {
+      name: "pnp-usage",
+      storage: createJSONStorage(() =>
+        createQuotaSafeStateStorage(window.localStorage)
+      ),
+    }
   )
 );

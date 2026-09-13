@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { createQuotaSafeStateStorage } from "@/lib/quota-safe-storage";
 import {
   AUTONOMOUS_MIN_LEADS,
   AUTONOMOUS_STANDARD_MAX,
@@ -524,6 +525,9 @@ export const useSettingsStore = create<SettingsStore>()(
     }),
     {
       name: "pnp-settings",
+      storage: createJSONStorage(() =>
+        createQuotaSafeStateStorage(window.localStorage)
+      ),
       version: 13,
       migrate: (persisted, version) => {
         const state = persisted as Partial<SettingsStore> & {

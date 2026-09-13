@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { createQuotaSafeStateStorage } from "@/lib/quota-safe-storage";
 import {
   computeLifetimeStats,
   raiseLifetimeFloors,
@@ -110,6 +111,9 @@ export const useLifetimeStatsStore = create<LifetimeStatsStore>()(
     }),
     {
       name: "pnp-lifetime-stats",
+      storage: createJSONStorage(() =>
+        createQuotaSafeStateStorage(window.localStorage)
+      ),
       skipHydration: true,
       version: 1,
       migrate: (persisted) => normalizeLifetimePersistSlice(persisted),

@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { createQuotaSafeStateStorage } from "@/lib/quota-safe-storage";
 import {
   recentSearches as initialSearches,
 } from "@/lib/mock-data";
@@ -1374,6 +1375,9 @@ export const useLeadStore = create<LeadStore>()(
     }),
     {
       name: "pnp-lead-finder",
+      storage: createJSONStorage(() =>
+        createQuotaSafeStateStorage(window.localStorage)
+      ),
       skipHydration: true,
       version: 5,
       migrate: (persisted, version) => {

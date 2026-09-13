@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { createQuotaSafeStateStorage } from "@/lib/quota-safe-storage";
 import type { Lead } from "@/types/lead";
 import type { EmailValidationResult } from "@/types/email-validation";
 import { useLeadStore } from "@/store/lead-store";
@@ -176,6 +177,9 @@ export const useAgentTwoStore = create<AgentTwoStore>()(
     }),
     {
       name: "pnp-agent-two",
+      storage: createJSONStorage(() =>
+        createQuotaSafeStateStorage(window.localStorage)
+      ),
       version: 1,
       partialize: (state) => selectPersistedAgentTwoSnapshot(state),
       merge: (persisted, current) => ({

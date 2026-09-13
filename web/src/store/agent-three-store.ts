@@ -1,8 +1,7 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
 import type { Lead } from "@/types/lead";
 import {
-  CAMPAIGN_PROFILE_IDS,
   type CampaignProfileId,
 } from "@/types/campaign-profile";
 import {
@@ -13,13 +12,11 @@ import {
   configureAgentThreeLimit,
   createInitialAgentThreeSnapshot,
   loadAgentThreeLeads,
-  normalizeAgentThreeSnapshot,
   pauseAgentThree,
   prepareAgentThreeCampaign,
   resumeAgentThree,
   selectAgentThreeCampaign,
   selectAgentThreeProfile,
-  selectPersistedAgentThreeSnapshot,
   setAgentThreeImportTemplateId,
   setAgentThreeRecipientSourceMode,
   startAgentThree,
@@ -33,6 +30,11 @@ import {
   type AgentThreeSnapshot,
   type AgentThreeStartResult,
 } from "@/lib/agent-three-queue";
+import {
+  mergeAgentThreeBrowserPreferences,
+  selectAgentThreeBrowserPreferences,
+} from "@/lib/agent-three-browser-persistence";
+import { createQuotaSafeStateStorage } from "@/lib/quota-safe-storage";
 import type { GlobalDeduplicationPreview } from "@/lib/global-email-deduplication";
 import { syncCampaignQueueToAuthoritativePreview } from "@/lib/agent-three-eligibility-sync";
 import {
@@ -392,24 +394,22 @@ export const useAgentThreeStore = create<AgentThreeStore>()(
     {
       name: "pnp-agent-three",
       skipHydration: true,
-      version: 1,
-      partialize: (state) => selectPersistedAgentThreeSnapshot(state),
-      merge: (persisted, current) => {
-        const incoming = normalizeAgentThreeSnapshot(persisted);
-        const evidence = (snapshot: AgentThreeSnapshot) =>
-          CAMPAIGN_PROFILE_IDS.reduce((sum, profileId) => {
-            const operation = snapshot.operations[profileId];
-            return (
-              sum +
-              (operation?.queue?.length ?? 0) +
-              (operation?.sentIndex?.length ?? 0)
-            );
-          }, 0);
-        if (evidence(current) >= evidence(incoming)) {
-          return { ...incoming, ...current, operations: current.operations };
-        }
-        return { ...current, ...incoming };
-      },
+      version: 2,
+      storage: createJSONStorage(() =>
+        createQuotaSafeStateStorage(window.localStorage)
+      ),
+      partialize: (state) => selectAgentThreeBrowserPreferences(state),
+      migrate: (persisted) =>
+        selectAgentThreeBrowserPreferences(
+          mergeAgentThreeBrowserPreferences(
+            createInitialAgentThreeSnapshot(),
+            persisted
+          )
+        ),
+      merge: (persisted, current) => ({
+        ...current,
+        ...mergeAgentThreeBrowserPreferences(current, persisted),
+      }),
     }
   )
 );

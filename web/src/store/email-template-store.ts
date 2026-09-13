@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { createQuotaSafeStateStorage } from "@/lib/quota-safe-storage";
 import {
   configureExistingEmailTemplates,
   createInitialEmailTemplates,
@@ -181,6 +182,9 @@ export const useEmailTemplateStore = create<EmailTemplateStore>()(
     }),
     {
       name: "pnp-email-templates",
+      storage: createJSONStorage(() =>
+        createQuotaSafeStateStorage(window.localStorage)
+      ),
       skipHydration: true,
       version: 5,
       partialize: (state) => ({ templates: state.templates }),

@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { createQuotaSafeStateStorage } from "../lib/quota-safe-storage.ts";
 import { normalizeThemePersistSlice } from "../lib/store-rehydrate.ts";
 
 export type ThemePreference = "light" | "dark" | "system";
@@ -21,6 +22,9 @@ export const useThemeStore = create<ThemeStore>()(
     }),
     {
       name: "pnp-theme",
+      storage: createJSONStorage(() =>
+        createQuotaSafeStateStorage(window.localStorage)
+      ),
       version: 1,
       migrate: (persisted) => normalizeThemePersistSlice(persisted),
       merge: (persisted, current) => {

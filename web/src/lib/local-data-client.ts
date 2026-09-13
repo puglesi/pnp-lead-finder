@@ -15,6 +15,7 @@ import {
   getLocalDataAvailability,
   subscribeLocalDataAvailability,
 } from "@/lib/local-data-availability";
+import { setStorageItemWithoutQuotaFailure } from "@/lib/quota-safe-storage";
 
 export const LOCAL_DATA_MIGRATION_MARKER =
   "pnp-local-database-migration-v1";
@@ -139,7 +140,8 @@ export async function migrateLegacyBrowserData(): Promise<Record<string, number>
   if (!response.ok) {
     throw new Error(body?.error ?? "Falha ao migrar dados para o banco local.");
   }
-  window.localStorage.setItem(
+  setStorageItemWithoutQuotaFailure(
+    window.localStorage,
     LOCAL_DATA_MIGRATION_MARKER,
     String(LOCAL_DATA_MIGRATION_VERSION)
   );

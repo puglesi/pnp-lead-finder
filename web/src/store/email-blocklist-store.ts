@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { createQuotaSafeStateStorage } from "@/lib/quota-safe-storage";
 import {
   createEmailBlocklistEntry,
   findEmailBlock,
@@ -153,6 +154,9 @@ export const useEmailBlocklistStore = create<EmailBlocklistStore>()(
     }),
     {
       name: "pnp-email-blocklist",
+      storage: createJSONStorage(() =>
+        createQuotaSafeStateStorage(window.localStorage)
+      ),
       skipHydration: true,
       version: 2,
       migrate: (persisted) => {

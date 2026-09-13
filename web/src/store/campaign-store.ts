@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { createQuotaSafeStateStorage } from "@/lib/quota-safe-storage";
 import {
   runBatchEmailSend,
   runEngagementSimulation,
@@ -595,6 +596,9 @@ export const useCampaignStore = create<CampaignStore>()(
     }),
     {
       name: "pnp-campaigns",
+      storage: createJSONStorage(() =>
+        createQuotaSafeStateStorage(window.localStorage)
+      ),
       // SQLite hydrates first. localStorage is a cache merged afterwards.
       skipHydration: true,
       // v14: safe arrays + new statuses (saved/archived) without wiping data.

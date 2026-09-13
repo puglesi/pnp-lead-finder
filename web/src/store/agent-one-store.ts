@@ -1,5 +1,6 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
+import { createJSONStorage, persist } from "zustand/middleware";
+import { createQuotaSafeStateStorage } from "@/lib/quota-safe-storage";
 import {
   INITIAL_AGENT_ONE_SNAPSHOT,
   addAgentOneSector,
@@ -105,6 +106,9 @@ export const useAgentOneStore = create<AgentOneStore>()(
     }),
     {
       name: "pnp-agent-one",
+      storage: createJSONStorage(() =>
+        createQuotaSafeStateStorage(window.localStorage)
+      ),
       version: 1,
       partialize: (state) => selectPersistedAgentOneSnapshot(state),
       merge: (persisted, current) => ({
